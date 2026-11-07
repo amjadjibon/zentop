@@ -7,7 +7,8 @@
 #
 # cargo-packager builds Zentop.app from the [package.metadata.packager] config.
 # With APPLE_SIGNING_IDENTITY and the other APPLE_* signing credentials
-# exported, it signs and notarizes the app; otherwise the app is ad-hoc signed, which runs on this Mac and opens elsewhere after right-click → Open.
+# exported, it signs and notarizes the app; otherwise the app is ad-hoc signed,
+# which runs on this Mac and opens elsewhere after right-click → Open.
 # The DMG is made with hdiutil, so no Finder automation permission is needed,
 # and lands in artifacts/ under its release name.
 set -euo pipefail
