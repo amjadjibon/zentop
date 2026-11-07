@@ -20,7 +20,7 @@ fn os_string_vec_to_string_vec(v: &[OsString]) -> Vec<String> {
 #[derive(Debug)]
 pub struct ProcessMonitor {
     /// Cache for static process information to avoid redundant allocations
-    process_cache: HashMap<u32, ProcessStaticInfo>,
+    process_cache: HashMap<(u32, u64), ProcessStaticInfo>,
 }
 
 impl ProcessMonitor {
@@ -41,6 +41,12 @@ impl ProcessMonitor {
     ///
     /// A vector of process information, or an error string if collection failed
     pub fn collect_processes(&mut self, sys: &sysinfo::System) -> Result<Vec<ProcessInfo>, String> {
+        // Keep only the identities in this capture. PIDs may be reused, and
+        // retaining exited processes makes the cache grow for the app's lifetime.
+        self.process_cache.retain(|&(pid, start_time), _| {
+            sys.process(sysinfo::Pid::from_u32(pid))
+                .is_some_and(|process| process.start_time() == start_time)
+        });
         let current_time = Self::get_current_time()?;
         let processes_data = self.collect_process_data(sys, current_time);
         Ok(self.build_process_info(processes_data))
@@ -110,14 +116,14 @@ impl ProcessMonitor {
         processes
             .into_iter()
             .map(|data| {
-                let cached_info =
-                    self.process_cache
-                        .entry(data.pid)
-                        .or_insert_with(|| ProcessStaticInfo {
-                            name: data.name.clone(),
-                            command: data.cmd.join(" "),
-                            user: data.user_id.unwrap_or_else(|| "-".to_string()),
-                        });
+                let cached_info = self
+                    .process_cache
+                    .entry((data.pid, data.start_time))
+                    .or_insert_with(|| ProcessStaticInfo {
+                        name: data.name.clone(),
+                        command: data.cmd.join(" "),
+                        user: data.user_id.unwrap_or_else(|| "-".to_string()),
+                    });
 
                 ProcessInfo {
                     gpu_usage: None,
@@ -176,5 +182,41 @@ mod tests {
 
         let result = monitor.collect_processes(&sys);
         assert!(result.is_ok());
+    }
+    #[test]
+    fn cache_discards_exited_and_reused_process_identities() {
+        let mut sys = System::new();
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        sys.refresh_processes(sysinfo::ProcessesToUpdate::Some(&[pid]), true);
+        let start_time = sys.process(pid).unwrap().start_time();
+        let mut monitor = ProcessMonitor::new();
+        monitor.collect_processes(&sys).unwrap();
+        assert_eq!(monitor.process_cache.len(), 1);
+        let stale = ProcessStaticInfo {
+            name: "stale".into(),
+            command: "stale command".into(),
+            user: "stale user".into(),
+        };
+        // A reused PID must not inherit the previous process's static metadata.
+        monitor.process_cache.clear();
+        monitor
+            .process_cache
+            .insert((pid.as_u32(), start_time.wrapping_add(1)), stale.clone());
+        let processes = monitor.collect_processes(&sys).unwrap();
+        assert_ne!(processes[0].name, "stale");
+        assert_eq!(monitor.process_cache.len(), 1);
+        assert!(monitor
+            .process_cache
+            .contains_key(&(pid.as_u32(), start_time)));
+
+        // Simulate churn; retention must depend on live processes, not how
+        // many process identities have ever passed through the monitor.
+        for id in 1..=10000 {
+            monitor.process_cache.insert((id, u64::MAX), stale.clone());
+        }
+        monitor.collect_processes(&sys).unwrap();
+        assert_eq!(monitor.process_cache.len(), 1);
+        monitor.collect_processes(&System::new()).unwrap();
+        assert!(monitor.process_cache.is_empty());
     }
 }
