@@ -1,23 +1,30 @@
-//! The process table: a virtualized `DataTable` over the latest frame.
+//! The process list. Data columns fill the window and scroll sideways when
+//! they do not fit; the Actions column stays pinned to the right edge, as in
+//! earlier releases. (gpui-component tables can only pin columns to the left.)
 use super::process_view::{self, identity, Column, Filters, Identity, Query, Sort, TreeRow};
 use super::{details, theme, Zentop};
+use crate::monitoring::ProcessInfo;
 use crate::native_icons::{Icon, IconRequest, MAX_BATCH};
 use crate::sampling::Frame;
 use crate::state::AppState;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::table::{Column as TableColumn, ColumnSort, TableDelegate, TableState};
-use gpui_kit::component::{h_flex, ActiveTheme, Disableable, Icon as UiIcon, Sizable};
+use gpui_kit::component::scroll::ScrollableElement;
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon as UiIcon, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, img, px, App, Context, InteractiveElement, IntoElement, ParentElement, SharedString,
-    Styled, WeakEntity, Window,
+    div, img, px, AnyElement, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, ScrollHandle, SharedString, StatefulInteractiveElement, Styled,
 };
 use std::collections::{HashMap, HashSet};
-use std::ops::Range;
 use std::sync::Arc;
 
 const ACTIONS_WIDTH: f32 = 104.;
+
+type HoverHandler = Box<dyn Fn(&bool, &mut gpui_kit::Window, &mut gpui_kit::App)>;
+type ClickHandler = Box<dyn Fn(&ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App)>;
+const ROW_HEIGHT: f32 = 36.;
+const HEADER_HEIGHT: f32 = 36.;
 
 enum Row {
     Flat(usize),
@@ -39,9 +46,8 @@ impl Row {
     }
 }
 
-pub struct ProcessTable {
+pub struct ProcessList {
     state: Arc<AppState>,
-    root: WeakEntity<Zentop>,
     frame: Option<Arc<Frame>>,
     search: String,
     filters: Filters,
@@ -58,21 +64,19 @@ pub struct ProcessTable {
     /// Zero-based page, and rows (or families in tree view) per page.
     pub page: usize,
     pub per_page: usize,
-    /// Width the table has to fill; spare room goes to the text columns.
+    /// Width the list has to fill; spare room goes to the text columns.
     available_width: f32,
     icons: HashMap<Identity, Option<Icon>>,
+    /// Shared by the header and the rows so they scroll sideways together.
+    horizontal: ScrollHandle,
+    vertical: ScrollHandle,
+    hovered: Option<usize>,
 }
 
-impl ProcessTable {
-    pub fn new(
-        state: Arc<AppState>,
-        root: WeakEntity<Zentop>,
-        columns: Vec<Column>,
-        tree: bool,
-    ) -> Self {
+impl ProcessList {
+    pub fn new(state: Arc<AppState>, columns: Vec<Column>, tree: bool) -> Self {
         Self {
             state,
-            root,
             frame: None,
             search: String::new(),
             filters: Filters::default(),
@@ -88,6 +92,9 @@ impl ProcessTable {
             per_page: 15,
             available_width: 0.,
             icons: HashMap::new(),
+            horizontal: ScrollHandle::new(),
+            vertical: ScrollHandle::new(),
+            hovered: None,
         }
     }
 
@@ -134,22 +141,48 @@ impl ProcessTable {
         self.rebuild();
     }
 
-    pub fn toggle_expanded(&mut self, id: Identity) {
+    pub fn collapse_all(&mut self) {
+        self.expanded.clear();
+        self.rebuild();
+    }
+
+    fn toggle_expanded(&mut self, id: Identity) {
         if !self.expanded.remove(&id) {
             self.expanded.insert(id);
         }
         self.rebuild();
     }
 
-    pub fn collapse_all(&mut self) {
-        self.expanded.clear();
-        self.rebuild();
-    }
-
-    pub fn toggle_pin(&mut self, command: &str) {
+    fn toggle_pin(&mut self, command: &str) {
         if !self.pinned.remove(command) {
             self.pinned.insert(command.to_owned());
         }
+        self.rebuild();
+    }
+
+    /// Clicking the sorted column flips its direction; another column starts
+    /// with the largest values first (or A–Z for text).
+    fn toggle_sort(&mut self, column: Column) {
+        self.sort = if self.sort.column == column {
+            Sort {
+                column,
+                ascending: !self.sort.ascending,
+            }
+        } else {
+            let text = matches!(
+                column,
+                Column::Name
+                    | Column::Status
+                    | Column::User
+                    | Column::Root
+                    | Column::Command
+                    | Column::Environ
+            );
+            Sort {
+                column,
+                ascending: text,
+            }
+        };
         self.rebuild();
     }
 
@@ -199,33 +232,23 @@ impl ProcessTable {
         }
     }
 
-    /// Resizes columns to fill `width`. Returns whether anything changed.
-    pub fn fit_width(&mut self, width: f32) -> bool {
-        let changed = (self.available_width - width).abs() >= 1.;
+    /// Records the width the list has to fill.
+    pub fn fit_width(&mut self, width: f32) {
         self.available_width = width;
-        changed
     }
 
-    fn column_width(&self, column: Column) -> f32 {
-        // Room for the actions column and the vertical scrollbar.
-        let used: f32 = self.columns.iter().map(|c| c.width()).sum::<f32>() + ACTIONS_WIDTH + 16.;
-        let spare = (self.available_width - used).max(0.);
-        let growing: Vec<Column> = self
-            .columns
+    /// Column widths: each column's natural width, plus any spare room shared
+    /// by the text columns. When the columns do not fit they keep their natural
+    /// widths and scroll sideways under the pinned Actions column.
+    fn widths(&self) -> Vec<f32> {
+        let natural: f32 = self.columns.iter().map(|c| c.width()).sum();
+        let room = self.available_width - ACTIONS_WIDTH;
+        let spare = (room - natural).max(0.);
+        let growing = self.columns.iter().filter(|c| c.grows()).count().max(1) as f32;
+        self.columns
             .iter()
-            .copied()
-            .filter(|c| {
-                matches!(
-                    c,
-                    Column::Name | Column::Command | Column::Root | Column::Environ
-                )
-            })
-            .collect();
-        if growing.contains(&column) {
-            column.width() + spare / growing.len() as f32
-        } else {
-            column.width()
-        }
+            .map(|c| c.width() + if c.grows() { spare / growing } else { 0. })
+            .collect()
     }
 
     /// Processes, or process families in tree view, across all pages.
@@ -244,6 +267,7 @@ impl ProcessTable {
     pub fn set_page(&mut self, page: usize) {
         self.page = page.min(self.page_count() - 1);
         self.rebuild();
+        self.vertical.set_offset(Default::default());
     }
 
     pub fn set_per_page(&mut self, per_page: usize) {
@@ -254,25 +278,334 @@ impl ProcessTable {
         }
     }
 
-    fn process(&self, row_ix: usize) -> Option<&crate::monitoring::ProcessInfo> {
+    fn process(&self, row_ix: usize) -> Option<&ProcessInfo> {
         let frame = self.frame.as_ref()?;
         frame.processes.get(self.rows.get(row_ix)?.index())
     }
 
-    pub fn identity_at(&self, row_ix: usize) -> Option<Identity> {
-        self.process(row_ix).map(identity)
+    /// Resolves native icons for the rows on this page that do not have one yet.
+    pub fn load_icons(&mut self, cx: &mut Context<Zentop>) {
+        let requests: Vec<IconRequest> = (0..self.rows.len())
+            .filter_map(|row| self.process(row).map(identity))
+            .filter(|id| !self.icons.contains_key(id))
+            .map(|(pid, start_time)| IconRequest { pid, start_time })
+            .collect();
+        if requests.is_empty() {
+            return;
+        }
+        for request in &requests {
+            self.icons.insert((request.pid, request.start_time), None);
+        }
+        let state = self.state.clone();
+        cx.spawn(async move |this, cx| {
+            for batch in requests.chunks(MAX_BATCH) {
+                let (state, batch) = (state.clone(), batch.to_vec());
+                let resolved = cx
+                    .background_executor()
+                    .spawn(async move { crate::native_icons::resolve_batch(&state, batch) })
+                    .await;
+                let updated = this.update(cx, |this, cx| {
+                    this.list
+                        .icons
+                        .extend(resolved.into_iter().filter(|(_, icon)| icon.is_some()));
+                    cx.notify();
+                });
+                if updated.is_err() {
+                    break;
+                }
+            }
+        })
+        .detach();
     }
 
-    fn render_name(
+    pub fn render(&self, cx: &mut Context<Zentop>) -> AnyElement {
+        let widths = self.widths();
+        let content_width: f32 = widths.iter().sum();
+        let border = cx.theme().border;
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .child(
+                h_flex()
+                    .h(px(HEADER_HEIGHT))
+                    .flex_shrink_0()
+                    .bg(theme::palette(cx).card)
+                    .border_b_1()
+                    .border_color(border)
+                    .child(
+                        div()
+                            .id("list-header")
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .overflow_x_scroll()
+                            .track_scroll(&self.horizontal)
+                            .child(h_flex().w(px(content_width)).h_full().children(
+                                self.columns.iter().zip(&widths).enumerate().map(
+                                    |(i, (&column, &width))| self.header_cell(i, column, width, cx),
+                                ),
+                            )),
+                    )
+                    .child(
+                        h_flex()
+                            .w(px(ACTIONS_WIDTH))
+                            .h_full()
+                            .flex_shrink_0()
+                            .justify_center()
+                            .border_l_1()
+                            .border_color(border)
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Actions"),
+                    ),
+            )
+            .child(if self.rows.is_empty() {
+                self.render_empty(cx)
+            } else {
+                div()
+                    .id("list-body")
+                    .relative()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
+                    .track_scroll(&self.vertical)
+                    .child(
+                        h_flex()
+                            .items_start()
+                            .child(
+                                div()
+                                    .id("list-cells")
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_x_scroll()
+                                    .track_scroll(&self.horizontal)
+                                    .child(
+                                        v_flex().w(px(content_width)).children(
+                                            (0..self.rows.len())
+                                                .map(|row| self.data_row(row, &widths, cx)),
+                                        ),
+                                    ),
+                            )
+                            .child(
+                                v_flex()
+                                    .w(px(ACTIONS_WIDTH))
+                                    .flex_shrink_0()
+                                    .border_l_1()
+                                    .border_color(border)
+                                    .bg(cx.theme().background)
+                                    .children(
+                                        (0..self.rows.len()).map(|row| self.actions_row(row, cx)),
+                                    ),
+                            ),
+                    )
+                    .vertical_scrollbar(&self.vertical)
+                    // Sideways scrolling for columns that do not fit beside Actions.
+                    .horizontal_scrollbar(&self.horizontal)
+                    .into_any_element()
+            })
+            .into_any_element()
+    }
+
+    fn header_cell(
         &self,
-        row_ix: usize,
-        cx: &mut Context<TableState<Self>>,
-    ) -> gpui_kit::AnyElement {
-        let Some(p) = self.process(row_ix) else {
+        i: usize,
+        column: Column,
+        width: f32,
+        cx: &mut Context<Zentop>,
+    ) -> impl IntoElement {
+        // The sorted column is highlighted, as in earlier releases.
+        let sorted = self.sort.column == column;
+        let icon = match (sorted, self.sort.ascending) {
+            (true, true) => IconName::ArrowUp,
+            (true, false) => IconName::ArrowDown,
+            (false, _) => IconName::ChevronsUpDown,
+        };
+        h_flex()
+            .id(("sort", i))
+            .w(px(width))
+            .h_full()
+            .flex_shrink_0()
+            .px_3()
+            .gap_1()
+            .cursor_pointer()
+            .text_sm()
+            .when(column.numeric(), |this| this.justify_end())
+            .text_color(if sorted {
+                cx.theme().primary
+            } else {
+                cx.theme().muted_foreground
+            })
+            .when(sorted, |this| this.font_weight(FontWeight::MEDIUM))
+            .hover(|this| this.text_color(cx.theme().foreground))
+            .child(div().truncate().child(column.label()))
+            .child(
+                UiIcon::new(icon)
+                    .xsmall()
+                    .when(!sorted, |icon| icon.opacity(0.5)),
+            )
+            .on_click(cx.listener(move |this, _, _, cx| {
+                this.list.toggle_sort(column);
+                cx.notify();
+            }))
+    }
+
+    fn row_style<E: Styled + InteractiveElement>(
+        &self,
+        element: E,
+        row: usize,
+        cx: &Context<Zentop>,
+    ) -> E {
+        let pinned = self
+            .process(row)
+            .is_some_and(|p| self.pinned.contains(&p.command));
+        let background = if self.hovered == Some(row) {
+            Some(cx.theme().accent)
+        } else if pinned {
+            Some(cx.theme().primary.opacity(0.06))
+        } else {
+            None
+        };
+        let element = element
+            .h(px(ROW_HEIGHT))
+            .border_b_1()
+            .border_color(cx.theme().border.opacity(0.5));
+        match background {
+            Some(color) => element.bg(color),
+            None => element,
+        }
+    }
+
+    /// Hovering either half of a row highlights both; a double click opens details.
+    fn hover_and_open(
+        row: usize,
+        id: Option<Identity>,
+        cx: &mut Context<Zentop>,
+    ) -> (HoverHandler, ClickHandler) {
+        let hover: HoverHandler = Box::new(cx.listener(move |this, hovered: &bool, _, cx| {
+            let next = if *hovered {
+                Some(row)
+            } else {
+                this.list.hovered.filter(|r| *r != row)
+            };
+            if this.list.hovered != next {
+                this.list.hovered = next;
+                cx.notify();
+            }
+        }));
+        let open: ClickHandler = Box::new(
+            move |event: &ClickEvent, window: &mut gpui_kit::Window, cx: &mut gpui_kit::App| {
+                if event.click_count() >= 2 {
+                    if let Some(id) = id {
+                        details::open(id, window, cx);
+                    }
+                }
+            },
+        );
+        (hover, open)
+    }
+
+    fn data_row(&self, row: usize, widths: &[f32], cx: &mut Context<Zentop>) -> AnyElement {
+        let id = self.process(row).map(identity);
+        let (hover, open) = Self::hover_and_open(row, id, cx);
+        let mut cells = h_flex();
+        for (&column, &width) in self.columns.iter().zip(widths) {
+            cells = cells.child(
+                h_flex()
+                    .w(px(width))
+                    .h_full()
+                    .flex_shrink_0()
+                    .min_w_0()
+                    .px_3()
+                    .when(column.numeric(), |this| this.justify_end())
+                    .child(self.cell(row, column, cx)),
+            );
+        }
+        self.row_style(cells.id(("row", row)), row, cx)
+            .on_hover(hover)
+            .on_click(open)
+            .into_any_element()
+    }
+
+    fn actions_row(&self, row: usize, cx: &mut Context<Zentop>) -> AnyElement {
+        let Some(p) = self.process(row) else {
             return div().into_any_element();
         };
         let id = identity(p);
-        let tree = self.rows[row_ix].tree();
+        let (hover, _) = Self::hover_and_open(row, Some(id), cx);
+        let command = p.command.clone();
+        let pinned = self.pinned.contains(&command);
+        let name = p.name.clone();
+        self.row_style(h_flex().id(("actions", row)), row, cx)
+            .justify_center()
+            .gap_0p5()
+            .on_hover(hover)
+            .child(
+                Button::new(("pin", row))
+                    .ghost()
+                    .xsmall()
+                    .icon(if pinned {
+                        IconName::PinOff
+                    } else {
+                        IconName::Pin
+                    })
+                    .tooltip(if pinned { "Unpin" } else { "Pin to top" })
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.list.toggle_pin(&command);
+                        cx.notify();
+                    })),
+            )
+            .child(
+                Button::new(("info", row))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::Info)
+                    .tooltip("Details")
+                    .on_click(move |_, window, cx| details::open(id, window, cx)),
+            )
+            .child(
+                Button::new(("kill", row))
+                    .ghost()
+                    .xsmall()
+                    .icon(IconName::X)
+                    .tooltip("End process")
+                    .on_click(move |_, window, cx| {
+                        details::confirm_kill(id, name.clone(), window, cx)
+                    }),
+            )
+            .into_any_element()
+    }
+
+    fn render_empty(&self, cx: &mut Context<Zentop>) -> AnyElement {
+        let searching = self.searching();
+        h_flex()
+            .flex_1()
+            .justify_center()
+            .gap_3()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(if self.frame.is_none() {
+                "Reading processes…"
+            } else if searching {
+                "No processes match the current search and filters."
+            } else {
+                "No processes."
+            })
+            .when(searching, |this| {
+                this.child(
+                    Button::new("clear-empty")
+                        .small()
+                        .label("Clear filters")
+                        .on_click(cx.listener(|this, _, window, cx| {
+                            this.clear_search_and_filters(window, cx)
+                        })),
+                )
+            })
+            .into_any_element()
+    }
+
+    fn render_name(&self, row: usize, p: &ProcessInfo, cx: &mut Context<Zentop>) -> AnyElement {
+        let id = identity(p);
+        let tree = self.rows[row].tree();
         let pinned = self.pinned.contains(&p.command);
         let searching = self.searching();
         let icon = self.icons.get(&id).cloned().flatten();
@@ -282,7 +615,7 @@ impl ProcessTable {
             .when_some(tree, |this, tree| {
                 this.pl(px(tree.depth.min(10) as f32 * 16.))
                     .child(if tree.child_count > 0 {
-                        Button::new(("expand", row_ix))
+                        Button::new(("expand", row))
                             .ghost()
                             .xsmall()
                             .icon(if tree.expanded {
@@ -299,8 +632,8 @@ impl ProcessTable {
                             .when(searching, |b| {
                                 b.tooltip("Clear search and filters to collapse this branch")
                             })
-                            .on_click(cx.listener(move |table, _, _, cx| {
-                                table.delegate_mut().toggle_expanded(id);
+                            .on_click(cx.listener(move |this, _, _, cx| {
+                                this.list.toggle_expanded(id);
                                 cx.notify();
                             }))
                             .into_any_element()
@@ -317,7 +650,7 @@ impl ProcessTable {
                     .text_color(cx.theme().muted_foreground)
                     .into_any_element(),
             })
-            .child(div().truncate().child(p.name.clone()))
+            .child(div().min_w_0().truncate().text_sm().child(p.name.clone()))
             .when_some(tree.filter(|t| t.family_count > 1), |this, tree| {
                 this.child(
                     div()
@@ -339,294 +672,17 @@ impl ProcessTable {
             .into_any_element()
     }
 
-    fn render_actions(
-        &self,
-        row_ix: usize,
-        window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> gpui_kit::AnyElement {
-        let _ = window;
-        let Some(p) = self.process(row_ix) else {
+    fn cell(&self, row: usize, column: Column, cx: &mut Context<Zentop>) -> AnyElement {
+        let Some(p) = self.process(row) else {
             return div().into_any_element();
         };
-        let id = identity(p);
-        let command = p.command.clone();
-        let pinned = self.pinned.contains(&command);
-        let name = p.name.clone();
-        h_flex()
-            .gap_0p5()
-            .child(
-                Button::new(("pin", row_ix))
-                    .ghost()
-                    .xsmall()
-                    .icon(if pinned {
-                        IconName::PinOff
-                    } else {
-                        IconName::Pin
-                    })
-                    .tooltip(if pinned { "Unpin" } else { "Pin to top" })
-                    .on_click(cx.listener(move |table, _, _, cx| {
-                        table.delegate_mut().toggle_pin(&command);
-                        cx.notify();
-                    })),
-            )
-            .child(
-                Button::new(("info", row_ix))
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::Info)
-                    .tooltip("Details")
-                    .on_click(move |_, window, cx| {
-                        details::open(id, window, cx);
-                    }),
-            )
-            .child(
-                Button::new(("kill", row_ix))
-                    .ghost()
-                    .xsmall()
-                    .icon(IconName::X)
-                    .tooltip("End process")
-                    .on_click(move |_, window, cx| {
-                        details::confirm_kill(id, name.clone(), window, cx);
-                    }),
-            )
-            .into_any_element()
-    }
-
-    pub fn load_icons(&mut self, range: Range<usize>, cx: &mut Context<TableState<Self>>) {
-        let requests: Vec<IconRequest> = range
-            .filter_map(|row| self.identity_at(row))
-            .filter(|id| !self.icons.contains_key(id))
-            .take(MAX_BATCH)
-            .map(|(pid, start_time)| IconRequest { pid, start_time })
-            .collect();
-        if requests.is_empty() {
-            return;
-        }
-        for request in &requests {
-            self.icons.insert((request.pid, request.start_time), None);
-        }
-        let state = self.state.clone();
-        cx.spawn(async move |table, cx| {
-            let resolved = cx
-                .background_executor()
-                .spawn(async move { crate::native_icons::resolve_batch(&state, requests) })
-                .await;
-            let _ = table.update(cx, |table, cx| {
-                for (id, icon) in resolved {
-                    if icon.is_some() {
-                        table.delegate_mut().icons.insert(id, icon);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-}
-
-impl TableDelegate for ProcessTable {
-    fn columns_count(&self, _: &App) -> usize {
-        self.columns.len() + 1
-    }
-
-    fn rows_count(&self, _: &App) -> usize {
-        self.rows.len()
-    }
-
-    fn column(&self, col_ix: usize, _: &App) -> TableColumn {
-        let Some(&column) = self.columns.get(col_ix) else {
-            return TableColumn::new("actions", "")
-                .width(px(ACTIONS_WIDTH))
-                .resizable(false)
-                .movable(false);
-        };
-        let sort = if self.sort.column == column {
-            if self.sort.ascending {
-                ColumnSort::Ascending
-            } else {
-                ColumnSort::Descending
-            }
-        } else {
-            ColumnSort::Default
-        };
-        let mut c = TableColumn::new(column.key(), column.label())
-            .width(px(self.column_width(column)))
-            .sort(sort)
-            .movable(false);
-        if column.numeric() {
-            c = c.text_right();
-        }
         if column == Column::Name {
-            c = c.fixed_left();
+            return self.render_name(row, p, cx);
         }
-        c
-    }
-
-    fn perform_sort(
-        &mut self,
-        col_ix: usize,
-        sort: ColumnSort,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) {
-        let Some(&column) = self.columns.get(col_ix) else {
-            return;
-        };
-        self.sort = match sort {
-            ColumnSort::Default => Sort::default(),
-            ColumnSort::Ascending => Sort {
-                column,
-                ascending: true,
-            },
-            ColumnSort::Descending => Sort {
-                column,
-                ascending: false,
-            },
-        };
-        self.rebuild();
-        // Re-read headers so the default sort's indicator is shown again.
-        if sort == ColumnSort::Default {
-            let table = cx.entity();
-            cx.defer(move |cx| table.update(cx, |table, cx| table.refresh(cx)));
-        }
-    }
-
-    fn render_td(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
-        window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let numeric = self.columns.get(col_ix).is_some_and(|c| c.numeric());
-        let actions = col_ix >= self.columns.len();
-        h_flex()
-            .size_full()
-            .min_w_0()
-            .items_center()
-            .when(numeric, |this| this.justify_end())
-            .when(actions, |this| this.justify_end().pr_2())
-            .child(self.cell(row_ix, col_ix, window, cx))
-    }
-
-    fn render_th(
-        &mut self,
-        col_ix: usize,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let Some(&column) = self.columns.get(col_ix) else {
-            return h_flex()
-                .size_full()
-                .justify_end()
-                .pr_2()
-                .text_color(cx.theme().foreground)
-                .child("Actions");
-        };
-        // The sorted column is highlighted, as in earlier releases.
-        let sorted = self.sort.column == column;
-        h_flex()
-            .size_full()
-            .when(column.numeric(), |this| this.justify_end())
-            .text_color(if sorted {
-                cx.theme().primary
-            } else {
-                cx.theme().muted_foreground
-            })
-            .when(sorted, |this| {
-                this.font_weight(gpui_kit::FontWeight::MEDIUM)
-            })
-            .child(column.label())
-    }
-
-    fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {
-        match (self.process(row_ix), self.columns.get(col_ix)) {
-            (Some(p), Some(column)) => column.text(p),
-            _ => String::new(),
-        }
-    }
-
-    fn render_tr(
-        &mut self,
-        row_ix: usize,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> gpui_kit::Stateful<gpui_kit::Div> {
-        let pinned = self
-            .process(row_ix)
-            .is_some_and(|p| self.pinned.contains(&p.command));
-        div()
-            .id(("row", row_ix))
-            .when(pinned, |d| d.bg(cx.theme().primary.opacity(0.06)))
-    }
-
-    fn render_empty(
-        &mut self,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let searching = self.searching();
-        let root = self.root.clone();
-        h_flex()
-            .size_full()
-            .justify_center()
-            .gap_3()
-            .text_sm()
-            .text_color(cx.theme().muted_foreground)
-            .child(if self.frame.is_none() {
-                "Reading processes…"
-            } else if searching {
-                "No processes match the current search and filters."
-            } else {
-                "No processes."
-            })
-            .when(searching, |this| {
-                this.child(
-                    Button::new("clear-empty")
-                        .small()
-                        .label("Clear filters")
-                        .on_click(move |_, window, cx| {
-                            if let Some(root) = root.upgrade() {
-                                root.update(cx, |root, cx| {
-                                    root.clear_search_and_filters(window, cx)
-                                });
-                            }
-                        }),
-                )
-            })
-    }
-
-    fn visible_rows_changed(
-        &mut self,
-        range: Range<usize>,
-        _: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) {
-        self.load_icons(range, cx);
-    }
-}
-
-impl ProcessTable {
-    fn cell(
-        &mut self,
-        row_ix: usize,
-        col_ix: usize,
-        window: &mut Window,
-        cx: &mut Context<TableState<Self>>,
-    ) -> impl IntoElement {
-        let Some(&column) = self.columns.get(col_ix) else {
-            return self.render_actions(row_ix, window, cx);
-        };
-        if column == Column::Name {
-            return self.render_name(row_ix, cx);
-        }
-        let Some(p) = self.process(row_ix) else {
-            return div().into_any_element();
-        };
-        let tree = self.rows[row_ix].tree();
+        let tree = self.rows[row].tree();
         let palette = theme::palette(cx);
         let muted = cx.theme().muted_foreground;
+        let mono = cx.theme().mono_font_family.clone();
         match column {
             Column::Cpu => {
                 let cpu = tree.map_or(p.cpu_usage as f64, |t| t.family_cpu);
@@ -637,13 +693,13 @@ impl ProcessTable {
                             .bg(palette.danger.opacity(0.12))
                             .text_color(palette.danger)
                     })
-                    .font_family(cx.theme().mono_font_family.clone())
+                    .font_family(mono)
                     .text_xs()
                     .child(format!("{cpu:.1}%"))
                     .into_any_element()
             }
             Column::Memory if tree.is_some() => div()
-                .font_family(cx.theme().mono_font_family.clone())
+                .font_family(mono)
                 .text_xs()
                 .child(process_view::format_mb(tree.map_or(0, |t| t.family_memory)))
                 .into_any_element(),
@@ -663,22 +719,16 @@ impl ProcessTable {
             }
             _ => {
                 let text: SharedString = column.text(p).into();
+                let dim = matches!(
+                    column,
+                    Column::Pid | Column::Ppid | Column::User | Column::Session
+                );
                 div()
+                    .min_w_0()
                     .truncate()
-                    .when(column.numeric(), |d| {
-                        d.font_family(cx.theme().mono_font_family.clone()).text_xs()
-                    })
-                    .when(
-                        matches!(
-                            column,
-                            Column::Pid | Column::Ppid | Column::User | Column::Session
-                        ),
-                        |d| {
-                            d.font_family(cx.theme().mono_font_family.clone())
-                                .text_xs()
-                                .text_color(muted)
-                        },
-                    )
+                    .when(column.numeric() || dim, |d| d.font_family(mono).text_xs())
+                    .when(!column.numeric() && !dim, |d| d.text_sm())
+                    .when(dim, |d| d.text_color(muted))
                     .child(text)
                     .into_any_element()
             }

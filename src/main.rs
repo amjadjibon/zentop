@@ -18,7 +18,10 @@ icon_assets!(
     ExtraIcons,
     [
         AppWindow,
+        ArrowDown,
+        ArrowUp,
         ArrowUpRight,
+        ChevronsUpDown,
         ChevronLeft,
         ChevronRight,
         ChevronsLeft,

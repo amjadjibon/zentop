@@ -1,8 +1,8 @@
 //! The main window: resource cards and the process table.
 use super::monitor::{self, Monitor};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
-use super::table::ProcessTable;
-use super::{details, stats, theme, OpenAbout, OpenSettings, ShowOverview, SMALL_ICON};
+use super::table::ProcessList;
+use super::{stats, theme, OpenAbout, OpenSettings, ShowOverview, SMALL_ICON};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
@@ -11,10 +11,7 @@ use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
-use gpui_kit::component::table::{DataTable, TableEvent, TableState};
-use gpui_kit::component::{
-    h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, Size, TitleBar,
-};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, img, px, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
@@ -29,7 +26,7 @@ pub struct Zentop {
     last_sequence: Option<u64>,
     search: Entity<InputState>,
     thresholds: [Entity<InputState>; 4],
-    table: Entity<TableState<ProcessTable>>,
+    pub(super) list: ProcessList,
     _subscriptions: Vec<Subscription>,
 }
 
@@ -49,16 +46,8 @@ impl Zentop {
                 filters,
             )
         };
-        let root = cx.weak_entity();
-        let state = monitor.read(cx).state();
-        let initial_filters = filters.clone();
-        let table = cx.new(|cx| {
-            let mut delegate = ProcessTable::new(state, root, columns, tree);
-            delegate.set_filters(initial_filters);
-            TableState::new(delegate, window, cx)
-                .col_movable(false)
-                .row_selectable(true)
-        });
+        let mut list = ProcessList::new(monitor.read(cx).state(), columns, tree);
+        list.set_filters(filters.clone());
         let search = cx.new(|cx| {
             InputState::new(window, cx)
                 .placeholder("Search processes…")
@@ -79,17 +68,6 @@ impl Zentop {
                     this.set_search(text, cx);
                 }
             }),
-            cx.subscribe_in(
-                &table,
-                window,
-                |_, table, event: &TableEvent, window, cx| {
-                    if let TableEvent::DoubleClickedRow(row) = event {
-                        if let Some(id) = table.read(cx).delegate().identity_at(*row) {
-                            details::open(id, window, cx);
-                        }
-                    }
-                },
-            ),
         ];
         for (kind, input) in RuleKind::ALL.into_iter().zip(thresholds.iter()) {
             subscriptions.push(cx.subscribe_in(
@@ -113,7 +91,7 @@ impl Zentop {
             last_sequence: None,
             search,
             thresholds,
-            table,
+            list,
             _subscriptions: subscriptions,
         };
         this.update_demand(cx);
@@ -123,13 +101,8 @@ impl Zentop {
     }
 
     fn fit_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let width = f32::from(window.viewport_size().width);
-        self.table.update(cx, |table, cx| {
-            if table.delegate_mut().fit_width(width) {
-                table.refresh(cx);
-                cx.notify();
-            }
-        });
+        self.list.fit_width(f32::from(window.viewport_size().width));
+        cx.notify();
     }
 
     /// Pulls the latest frame and preferences from the shared model.
@@ -149,27 +122,19 @@ impl Zentop {
         if let Some(frame) = &new_frame {
             self.last_sequence = Some(frame.sequence);
         }
-        self.table.update(cx, |table, cx| {
-            let delegate = table.delegate_mut();
-            if delegate.columns() != columns.as_slice() {
-                delegate.set_columns(columns);
-                table.refresh(cx);
-            }
-            if table.delegate().per_page != per_page {
-                table.delegate_mut().set_per_page(per_page);
-            }
-            if table.delegate().tree != tree {
-                table.delegate_mut().set_tree(tree);
-            }
-            if let Some(frame) = new_frame {
-                table.delegate_mut().set_frame(frame);
-                // The visible range may not change when rows arrive.
-                let visible = table.visible_range().rows().clone();
-                let visible = visible.start..visible.end.max(visible.start + 40);
-                table.delegate_mut().load_icons(visible, cx);
-            }
-            cx.notify();
-        });
+        if self.list.columns() != columns.as_slice() {
+            self.list.set_columns(columns);
+        }
+        if self.list.per_page != per_page {
+            self.list.set_per_page(per_page);
+        }
+        if self.list.tree != tree {
+            self.list.set_tree(tree);
+        }
+        if let Some(frame) = new_frame {
+            self.list.set_frame(frame);
+        }
+        self.list.load_icons(cx);
         self.update_demand(cx);
         cx.notify();
     }
@@ -194,10 +159,8 @@ impl Zentop {
     fn set_search(&mut self, text: String, cx: &mut Context<Self>) {
         self.search_text = text.clone();
         self.update_demand(cx);
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().set_search(text);
-            cx.notify();
-        });
+        self.list.set_search(text);
+        self.list.load_icons(cx);
         cx.notify();
     }
 
@@ -205,10 +168,8 @@ impl Zentop {
         edit(&mut self.filters);
         self.update_demand(cx);
         let filters = self.filters.clone();
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().set_filters(filters);
-            cx.notify();
-        });
+        self.list.set_filters(filters);
+        self.list.load_icons(cx);
         cx.notify();
     }
 
@@ -453,7 +414,7 @@ impl Zentop {
     }
 
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let delegate = self.table.read(cx).delegate();
+        let delegate = &self.list;
         let tree = delegate.tree;
         let expanded = !delegate.expanded.is_empty();
         let total = delegate.total();
@@ -514,10 +475,8 @@ impl Zentop {
                         .ghost()
                         .label("Collapse all")
                         .on_click(cx.listener(|this, _, _, cx| {
-                            this.table.update(cx, |table, cx| {
-                                table.delegate_mut().collapse_all();
-                                cx.notify();
-                            });
+                            this.list.collapse_all();
+                            cx.notify();
                         })),
                 )
             })
@@ -561,16 +520,13 @@ impl Zentop {
     }
 
     fn set_page(&mut self, page: usize, cx: &mut Context<Self>) {
-        self.table.update(cx, |table, cx| {
-            table.delegate_mut().set_page(page);
-            table.scroll_to_row(0, cx);
-            cx.notify();
-        });
+        self.list.set_page(page);
+        self.list.load_icons(cx);
         cx.notify();
     }
 
     fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
-        let delegate = self.table.read(cx).delegate();
+        let delegate = &self.list;
         let (tree, results) = (delegate.tree, delegate.result_count());
         let (page, pages, per_page) = (delegate.page, delegate.page_count(), delegate.per_page);
         let monitor = self.monitor.clone();
@@ -710,15 +666,7 @@ impl Render for Zentop {
                         .child(SharedString::from(alert)),
                 )
             })
-            .child(
-                div().flex_1().min_h_0().child(
-                    DataTable::new(&self.table)
-                        .stripe(false)
-                        .bordered(false)
-                        .with_size(Size::Size(px(34.)))
-                        .header_row_height(px(36.)),
-                ),
-            )
+            .child(self.list.render(cx))
             .child(self.render_footer(cx))
     }
 }
