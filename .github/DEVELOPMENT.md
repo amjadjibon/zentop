@@ -1,26 +1,43 @@
 # Developing and releasing NeoHtop
 
-Use Node.js 22 and Rust 1.88 or newer. Install the [Tauri platform prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS. Shared controls live in `src/lib/components/ui`; compose shadcn-svelte primitives and semantic theme tokens before adding custom widgets.
+Use Rust 1.88 or newer; the desktop app is a single GPUI Kit crate (`src/`, UI in
+`src/ui/`). Compose gpui-component controls with the theme roles in
+`src/ui/theme.rs` before adding custom widgets. Node.js 22 is used for the website
+and release tooling only.
+
+On Linux, install the GPUI build dependencies first, for example on Ubuntu:
+`libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev`.
 
 ### Setup
 
 ```bash
-# Install dependencies
-npm ci
-
 # Run in development mode
-npm run tauri dev
+cargo run
 
-# Build for production
-npm run tauri build
+# Run tests
+cargo test
+
+# Build installers (dmg/app, nsis, deb, AppImage) into target/packager
+cargo install cargo-packager --locked
+cargo build --release
+cargo packager --release
+
+# RPM (Linux)
+cargo install cargo-generate-rpm --locked
+cargo generate-rpm
 ```
+
+Themes are defined in `site/lib/definitions/themes.ts` and resolved for contrast by
+`site/lib/utils/theme-tokens.js`. After changing either, run
+`npm run export:themes` to regenerate `assets/themes.json`, which the app embeds;
+`npm run test:release` fails if it is out of date.
 
 ### Build checks and releases
 
-Pull requests and pushes to `main` run formatting, type checks, release-tool tests,
+Pull requests and pushes to `main` run formatting, release-tool tests, Rust tests,
 and package builds for Windows x64, macOS Intel/Apple Silicon, and Linux x64/ARM64.
-Linux packages are built on Ubuntu 22.04; newer distributions still need the
-appropriate WebKitGTK runtime. AppImages are checked for bundled Wayland client
+Linux packages are built on Ubuntu 22.04 with cargo-packager (deb, AppImage) and
+cargo-generate-rpm (RPM). AppImages are checked for bundled Wayland client
 libraries to prevent the display-driver conflict reported in issue #203.
 
 To build preview packages, run **Build Check** or **Draft Release** from GitHub
@@ -30,8 +47,7 @@ packages are ad-hoc signed and are not notarized for public distribution.
 For a release candidate:
 
 1. Update the version in `package.json`, both root version entries in `package-lock.json`,
-   `src-tauri/tauri.conf.json`, `src-tauri/Cargo.toml`, and the NeoHtop entry in
-   `src-tauri/Cargo.lock`. Run `npm run release:check` and commit the changes.
+   `Cargo.toml`, and the NeoHtop entry in `Cargo.lock`. Run `npm run release:check` and commit the changes.
 2. Push a matching version tag, for example `v1.3.0`. All platform packages are
    built from that tag. A published version cannot be overwritten.
 3. After every build passes, **Draft Release** verifies all nine packages and
@@ -76,7 +92,7 @@ Before submitting a PR, ensure:
 
 GitHub Pages serves the generated static `docs/` directory from `main`. The
 website source is `site/Site.svelte`, with the same shadcn buttons, cards, badges
-and Catppuccin semantic tokens used by the desktop app. A small Svelte server
+and Catppuccin semantic tokens the desktop app's themes are exported from. A small Svelte server
 render produces complete HTML; there is no Svelte client bundle to hydrate.
 Native FAQ disclosures, links and download fallbacks work without JavaScript.
 

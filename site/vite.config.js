@@ -8,7 +8,7 @@ export default defineConfig({
     svelte({ configFile: false, preprocess: vitePreprocess() }),
   ],
   resolve: {
-    alias: { $lib: fileURLToPath(new URL("../src/lib", import.meta.url)) },
+    alias: { $lib: fileURLToPath(new URL("./lib", import.meta.url)) },
   },
   ssr: { noExternal: ["@lucide/svelte"] },
   build: {

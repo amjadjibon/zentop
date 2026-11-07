@@ -2,17 +2,15 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
-import { matchesTheme } from "../src/lib/utils/theme-search.js";
 import {
   themeTokens,
   themeIsDark,
   luminance,
   contrast,
   composite,
-} from "../src/lib/utils/theme-tokens.js";
-import { isNewerVersion } from "../src/lib/utils/app-version.js";
+} from "../site/lib/utils/theme-tokens.js";
 const source = readFileSync(
-  new URL("../src/lib/definitions/themes.ts", import.meta.url),
+  new URL("../site/lib/definitions/themes.ts", import.meta.url),
   "utf8",
 );
 const themes = vm.runInNewContext(
@@ -235,7 +233,7 @@ test("Ayu Light panels and every popup are opaque, stable surfaces", () => {
   }
 });
 test("bootstrap CSS matches the default palette semantic roles", () => {
-  const css = readFileSync(new URL("../src/app.css", import.meta.url), "utf8");
+  const css = readFileSync(new URL("../site/app.css", import.meta.url), "utf8");
   const root = css.slice(
     css.indexOf(":root {"),
     css.indexOf("\n}", css.indexOf(":root {")),
@@ -258,19 +256,12 @@ test("retro corner tokens and high contrast remain distinct from ordinary themes
     "0.625rem",
   );
 });
-test("release notice does not offer a downgrade as an update", () => {
-  assert.equal(isNewerVersion("macos-nightly-1.1.0", "1.2.0"), false);
-  assert.equal(isNewerVersion("1.2.0", "1.2.0"), false);
-  assert.equal(isNewerVersion("1.10.0", "1.9.9"), true);
-  assert.equal(isNewerVersion("2.0.0", "1.99.99"), true);
-  assert.equal(isNewerVersion("invalid", "1.2.0"), false);
-  assert.equal(isNewerVersion("1.3.0", ""), false);
-});
 
-test("theme search folds accents, case and keyboard whitespace", () => {
-  assert.equal(matchesTheme("Rosé Pine", "rose"), true);
-  assert.equal(matchesTheme("Rosé Pine", "  ROSE   pine "), true);
-  assert.equal(matchesTheme("GitHub Light", "github light"), true);
-  assert.equal(matchesTheme("Catppuccin", "   "), true);
-  assert.equal(matchesTheme("Solarized Dark", "Light"), false);
+test("native theme export is in sync with the palettes", async () => {
+  const { exportThemes, outputPath } = await import("./export-themes.mjs");
+  assert.deepEqual(
+    JSON.parse(readFileSync(outputPath, "utf8")),
+    exportThemes(),
+    "Run `node scripts/export-themes.mjs` after changing themes",
+  );
 });

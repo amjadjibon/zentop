@@ -32,7 +32,7 @@ const platforms = {
   "macos-x86_64": [["dmg", ".dmg", "intel-NeoHtop_VERSION_x64.dmg"]],
   "macos-aarch64": [["dmg", ".dmg", "silicon-NeoHtop_VERSION_aarch64.dmg"]],
   // The old Windows .exe was a portable binary. Label the new installer.
-  "windows-x86_64": [["nsis", ".exe", "NeoHtop_VERSION_x64-setup.exe"]],
+  "windows-x86_64": [["nsis", "-setup.exe", "NeoHtop_VERSION_x64-setup.exe"]],
 };
 
 export async function checkVersion(root = projectRoot, tag = "") {
@@ -40,11 +40,8 @@ export async function checkVersion(root = projectRoot, tag = "") {
   const npmLock = JSON.parse(
     await readFile(join(root, "package-lock.json"), "utf8"),
   );
-  const config = JSON.parse(
-    await readFile(join(root, "src-tauri/tauri.conf.json"), "utf8"),
-  );
-  const cargo = await readFile(join(root, "src-tauri/Cargo.toml"), "utf8");
-  const lock = await readFile(join(root, "src-tauri/Cargo.lock"), "utf8");
+  const cargo = await readFile(join(root, "Cargo.toml"), "utf8");
+  const lock = await readFile(join(root, "Cargo.lock"), "utf8");
   const packageBlock = cargo
     .split(/(?=^\[)/m)
     .find((block) => block.startsWith("[package]"));
@@ -56,7 +53,6 @@ export async function checkVersion(root = projectRoot, tag = "") {
     pkg.version,
     npmLock.version,
     npmLock.packages?.[""]?.version,
-    config.version,
     cargoVersion,
     lockedVersion,
   ];
@@ -66,7 +62,7 @@ export async function checkVersion(root = projectRoot, tag = "") {
     )
   ) {
     throw new Error(
-      `Versions differ (package.json, npm lock/root package, Tauri, Cargo.toml, Cargo.lock): ${versions.join(", ")}`,
+      `Versions differ (package.json, npm lock/root package, Cargo.toml, Cargo.lock): ${versions.join(", ")}`,
     );
   }
   if (
@@ -107,8 +103,9 @@ export async function stagePackages(
   if (!bundles) throw new Error(`Unknown platform: ${platform}`);
   const version = await checkVersion(root);
   const packages = [];
-  for (const [folder, extension, name] of bundles) {
-    const directory = join(source, folder);
+  // cargo-packager writes every format into one output directory.
+  for (const [, extension, name] of bundles) {
+    const directory = source;
     const candidates = (await readdir(directory)).filter((file) =>
       file.endsWith(extension),
     );

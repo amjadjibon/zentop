@@ -50,11 +50,9 @@ jobs:
           components: rustfmt
       - run: npm ci
       - run: npm run format:check
-      - run: npm run check
       - run: npm run build:site
       - run: npm run test:release
       - run: npm run release:check
-      - run: npm run build
 
   build:
     name: Package (${{ matrix.platform }})
@@ -68,11 +66,11 @@ jobs:
           - platform: linux-x86_64
             runner: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
-            bundles: deb,rpm,appimage
+            bundles: deb,appimage
           - platform: linux-aarch64
             runner: ubuntu-22.04-arm
             target: aarch64-unknown-linux-gnu
-            bundles: deb,rpm,appimage
+            bundles: deb,appimage
           - platform: macos-x86_64
             runner: macos-15
             target: x86_64-apple-darwin
@@ -96,7 +94,6 @@ jobs:
           targets: ${{ matrix.target }}
       - uses: Swatinem/rust-cache@v2
         with:
-          workspaces: src-tauri -> target
           key: ${{ matrix.target }}-${{ inputs.release && 'release' || 'check' }}
           cache-on-failure: true
 
@@ -105,9 +102,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y \
-            build-essential pkg-config libwebkit2gtk-4.1-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf \
-            libfuse2 file rpm xdg-utils
+            build-essential pkg-config libfontconfig-dev libfreetype-dev \
+            libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
+            libx11-xcb-dev libxcb1-dev libvulkan-dev \
+            libfuse2 file xdg-utils
 
       - run: npm ci
 
@@ -128,34 +126,34 @@ jobs:
             fi
           done
 
-      - name: Prepare frontend assets for native tests
-        # generate_context! embeds frontendDist even in cargo test builds.
-        run: npm run build
+      - name: Install packaging tools
+        shell: bash
+        run: |
+          cargo install --locked cargo-packager@0.11.8
+          if [ "$RUNNER_OS" = "Linux" ]; then cargo install --locked cargo-generate-rpm; fi
 
       - name: Test Rust code
         # Intel macOS is cross-compiled on ARM; tests run in the ARM job.
         if: matrix.platform != 'macos-x86_64'
-        run: cargo test --locked --manifest-path src-tauri/Cargo.toml --target ${{ matrix.target }}
+        run: cargo test --locked --target ${{ matrix.target }}
 
       - name: Remove cached package outputs
         # Keep compiler caches, but never mix installers from different versions.
         shell: bash
-        run: rm -rf "src-tauri/target/${{ matrix.target }}/release/bundle"
+        run: rm -rf target/packager "target/${{ matrix.target }}/generate-rpm"
+
+      - name: Build release binary
+        run: cargo build --release --locked --target ${{ matrix.target }}
 
       - name: Build packages without Apple credentials
         if: runner.os != 'macOS' || !inputs.release
-        uses: tauri-apps/tauri-action@v1
         env:
           APPIMAGE_EXTRACT_AND_RUN: 1
-          # Empty APPLE_CERTIFICATE still triggers Tauri's certificate import;
-          # preview builds must omit that variable entirely.
           APPLE_SIGNING_IDENTITY: "-"
-        with:
-          args: --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.bundles }}
 
       - name: Build signed macOS release packages
         if: runner.os == 'macOS' && inputs.release
-        uses: tauri-apps/tauri-action@v1
         env:
           APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
           APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
@@ -164,25 +162,30 @@ jobs:
           APPLE_ID: ${{ secrets.APPLE_ID }}
           APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
           APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        with:
-          # Build only: release assets upload after every platform passes.
-          args: --ci --target ${{ matrix.target }} --bundles ${{ matrix.bundles }} -- --locked
+        # Build only: release assets upload after every platform passes.
+        run: cargo packager --release --target ${{ matrix.target }} --formats ${{ matrix.bundles }}
+
+      - name: Build RPM package
+        if: runner.os == 'Linux'
+        run: |
+          cargo generate-rpm --target ${{ matrix.target }}
+          cp target/${{ matrix.target }}/generate-rpm/*.rpm target/packager/
 
       - name: Check AppImage display libraries
         if: runner.os == 'Linux'
-        run: node scripts/release.mjs check-appimage src-tauri/target/${{ matrix.target }}/release/bundle/appimage
+        run: node scripts/release.mjs check-appimage target/packager
 
       - name: Verify macOS release signature and notarization
         if: runner.os == 'macOS' && inputs.release
         shell: bash
         env:
-          BUNDLE_ROOT: src-tauri/target/${{ matrix.target }}/release/bundle
+          BUNDLE_ROOT: target/packager
         run: |
-          codesign --verify --deep --strict --verbose=2 "$BUNDLE_ROOT/macos/NeoHtop.app"
-          xcrun stapler validate "$BUNDLE_ROOT/macos/NeoHtop.app"
+          codesign --verify --deep --strict --verbose=2 "$BUNDLE_ROOT/NeoHtop.app"
+          xcrun stapler validate "$BUNDLE_ROOT/NeoHtop.app"
 
       - name: Stage and validate platform packages
-        run: node scripts/release.mjs stage ${{ matrix.platform }} src-tauri/target/${{ matrix.target }}/release/bundle artifacts
+        run: node scripts/release.mjs stage ${{ matrix.platform }} target/packager artifacts
 
       - uses: actions/upload-artifact@v4
         with:

@@ -25,13 +25,11 @@ import { uploadDraft } from "./upload-draft.mjs";
 async function fixture(t) {
   const root = await mkdtemp(join(tmpdir(), "neohtop-release-test-"));
   t.after(() => rm(root, { recursive: true, force: true }));
-  await mkdir(join(root, "src-tauri"));
   for (const file of [
     "package.json",
     "package-lock.json",
-    "src-tauri/tauri.conf.json",
-    "src-tauri/Cargo.toml",
-    "src-tauri/Cargo.lock",
+    "Cargo.toml",
+    "Cargo.lock",
   ]) {
     await copyFile(join(projectRoot, file), join(root, file));
   }
@@ -47,7 +45,7 @@ test("release versions must agree across both lockfiles and app manifests", asyn
   const { root, version } = await fixture(t);
   assert.equal(await checkVersion(root, `v${version}`), version);
   await assert.rejects(checkVersion(root, "v99.0.0"), /does not match/);
-  const path = join(root, "src-tauri/Cargo.lock");
+  const path = join(root, "Cargo.lock");
   const lock = await readFile(path, "utf8");
   await writeFile(
     path,
@@ -103,8 +101,8 @@ test("a missing, empty, or stale platform package blocks the release", async (t)
 test("Windows staging selects an installer instead of a portable executable", async (t) => {
   const { root, version } = await fixture(t);
   const source = join(root, "bundle");
-  await mkdir(join(source, "nsis"), { recursive: true });
-  await writeFile(join(source, "nsis/NeoHtop_setup.exe"), "installer");
+  await mkdir(source, { recursive: true });
+  await writeFile(join(source, "NeoHtop_1.0.0_x64-setup.exe"), "installer");
   await writeFile(join(source, "NeoHtop.exe"), "portable");
   const destination = join(root, "staged");
   const names = await stagePackages(
@@ -118,7 +116,7 @@ test("Windows staging selects an installer instead of a portable executable", as
     await readFile(join(destination, names[0]), "utf8"),
     "installer",
   );
-  await writeFile(join(source, "nsis/stale_setup.exe"), "stale");
+  await writeFile(join(source, "stale_x64-setup.exe"), "stale");
   await assert.rejects(
     stagePackages("windows-x86_64", source, destination, root),
     /found 2/,

@@ -131,18 +131,17 @@ Closing the main window quits by default. Enable **Keep running when the window 
 
 ## Build with us
 
-NeoHtop is built with **Rust + Tauri + Svelte**, with **shadcn-svelte + Tailwind CSS** for shared controls and all 24 original themes. Native process icons use platform providers, with Lucide for interface controls.
+NeoHtop is a native **Rust** app built with **[GPUI Kit](https://gpui-kit.com)** (GPU-accelerated UI from Zed, plus gpui-component), keeping all 24 original themes. Native process icons use platform providers, with Lucide for interface controls.
 
 ```sh
 git clone https://github.com/Abdenasser/neohtop.git
 cd neohtop
-npm ci
-npm run tauri dev
+cargo run
 ```
 
-Use **Node.js 22**, **Rust 1.88+**, and the [Tauri prerequisites](https://v2.tauri.app/start/prerequisites/) for your OS.
+Use **Rust 1.88+**. On Linux, install the GPUI build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb and Vulkan headers). Node.js 22 is only needed for the website and release tooling.
 
-[Development and release guide](.github/DEVELOPMENT.md) · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](https://github.com/Abdenasser/neohtop/issues) · [Migration notes](SHADCN_MIGRATION.md)
+[Development and release guide](.github/DEVELOPMENT.md) · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](https://github.com/Abdenasser/neohtop/issues)
 
 ## Prefer your terminal?
 
