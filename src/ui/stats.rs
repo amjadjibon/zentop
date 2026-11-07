@@ -567,11 +567,7 @@ pub fn trend(
 /// Missing readings break a line instead of being drawn as zero.
 fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl IntoElement {
     let end = history.last().map_or(0, |s| s.timestamp);
-    let start = history
-        .iter()
-        .map(|s| s.timestamp)
-        .find(|t| t + TREND_MS >= end)
-        .unwrap_or(end);
+    let start = end.saturating_sub(TREND_MS);
     let lines: Vec<Line> = series
         .into_iter()
         .map(|s| {
@@ -636,4 +632,35 @@ fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl In
         },
     )
     .size_full()
+}
+
+/// Shared receive/send chart for the network detail sheet.
+pub(super) fn network_trend(
+    history: &[Sample],
+    palette: &Palette,
+    unavailable: bool,
+) -> impl IntoElement {
+    let scale = history
+        .iter()
+        .flat_map(|s| [s.received, s.sent])
+        .flatten()
+        .max()
+        .unwrap_or(1)
+        .max(1) as f64;
+    trends(
+        history,
+        vec![
+            Series {
+                value: Rc::new(move |s| s.received.map(|v| v as f64 / scale * 100.)),
+                color: palette.charts[0],
+                fill: true,
+            },
+            Series {
+                value: Rc::new(move |s| s.sent.map(|v| v as f64 / scale * 100.)),
+                color: palette.charts[3],
+                fill: false,
+            },
+        ],
+        unavailable,
+    )
 }

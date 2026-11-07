@@ -5,8 +5,23 @@ use super::process_view::{format_bytes, format_uptime};
 use super::stats;
 use super::theme;
 use crate::sampling::Sample;
+use gpui_kit::component::button::Button;
+use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
+use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::progress::Progress;
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, WindowExt};
+use gpui_kit::AppContext;
+use std::{cell::RefCell, rc::Rc};
+
+#[derive(Default)]
+struct Selection {
+    volume: String,
+    gpu: String,
+    unused: bool,
+    interface_order: Vec<String>,
+}
+
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, px, AnyElement, App, FontWeight, InteractiveElement, IntoElement, ParentElement,
@@ -37,52 +52,122 @@ impl Resource {
 }
 
 pub fn open(resource: Resource, window: &mut Window, cx: &mut App) {
+    let selection = Rc::new(RefCell::new(Selection::default()));
+    let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search all interfaces…"));
+    let subscription = cx.subscribe(&search, |_, event: &InputEvent, cx| {
+        if matches!(event, InputEvent::Change) {
+            cx.refresh_windows();
+        }
+    });
     window.open_sheet(cx, move |sheet, _, cx| {
+        let _keep_subscription = &subscription;
         let monitor = monitor::global(cx).read(cx);
         let body = match (&monitor.frame, monitor.error.is_some()) {
             (Some(frame), unavailable) => {
                 let frame = frame.clone();
                 let history = monitor.history.clone();
-                content(resource, &frame, &history, unavailable, cx)
+                content(
+                    resource,
+                    &frame,
+                    &history,
+                    unavailable,
+                    (&selection, &search),
+                    cx,
+                )
             }
             (None, _) => note("Waiting for the first reading…", cx).into_any_element(),
         };
         sheet
-            .size(px(480.))
+            .size(px(448.))
             .title(
                 div()
                     .text_lg()
                     .font_weight(FontWeight::SEMIBOLD)
-                    .child(resource.title()),
+                    .child(resource.title())
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(match resource {
+                                Resource::Cpu => "Overall utilization and activity on each core.",
+                                Resource::Memory => "Physical RAM, allocation, and swap.",
+                                Resource::Gpu => "Driver-reported readings from this machine.",
+                                Resource::Storage => {
+                                    "Mounted volumes and their available capacity."
+                                }
+                                Resource::System => "Operating system, uptime, and system load.",
+                                Resource::Network => {
+                                    "Traffic across this machine’s network interfaces."
+                                }
+                            }),
+                    )
+                    .child(div().text_xs().child(if monitor.error.is_some() {
+                        "Updates unavailable"
+                    } else if monitor.paused {
+                        "Paused"
+                    } else {
+                        "Live"
+                    })),
+            )
+            .footer(
+                h_flex()
+                    .w_full()
+                    .justify_between()
+                    .child(
+                        Button::new("pause-resource")
+                            .outline()
+                            .small()
+                            .label(if monitor.paused { "Resume" } else { "Pause" })
+                            .on_click(|_, _, cx| {
+                                monitor::global(cx).update(cx, |m, cx| m.set_paused(!m.paused, cx));
+                            }),
+                    )
+                    .child(
+                        Button::new("done-resource")
+                            .small()
+                            .label("Done")
+                            .on_click(|_, window, cx| window.close_sheet(cx)),
+                    ),
             )
             .child(
                 v_flex()
                     .id("resource-details")
                     .size_full()
                     .overflow_y_scroll()
-                    .gap_3()
+                    .gap_5()
                     .child(body),
             )
     });
 }
 
 fn rows(items: Vec<(&'static str, String)>, cx: &App) -> impl IntoElement {
-    v_flex().children(items.into_iter().map(|(label, value)| {
-        h_flex()
-            .justify_between()
-            .gap_4()
-            .py_1p5()
-            .border_b_1()
-            .border_color(cx.theme().border.opacity(0.5))
-            .text_sm()
-            .child(div().text_color(cx.theme().muted_foreground).child(label))
-            .child(div().text_right().child(value))
-    }))
+    v_flex()
+        .p_4()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(theme::palette(cx).card)
+        .children(items.into_iter().map(|(label, value)| {
+            h_flex()
+                .justify_between()
+                .gap_4()
+                .py_3()
+                .border_b_1()
+                .border_color(cx.theme().border.opacity(0.5))
+                .text_sm()
+                .child(div().text_color(cx.theme().muted_foreground).child(label))
+                .child(div().text_right().child(value))
+        }))
 }
 
 fn note(text: &'static str, cx: &App) -> impl IntoElement {
     div()
-        .text_xs()
+        .p_4()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(cx.theme().muted.opacity(0.4))
+        .text_sm()
         .text_color(cx.theme().muted_foreground)
         .child(text)
 }
@@ -102,7 +187,7 @@ fn chart(
     unavailable: bool,
 ) -> impl IntoElement {
     div()
-        .h(px(96.))
+        .h(px(112.))
         .flex()
         .child(stats::trend(history, value, color, unavailable))
 }
@@ -116,8 +201,10 @@ fn content(
     frame: &crate::sampling::Frame,
     history: &[Sample],
     unavailable: bool,
+    controls: (&Rc<RefCell<Selection>>, &gpui_kit::Entity<InputState>),
     cx: &App,
 ) -> AnyElement {
+    let (selection, search) = controls;
     let s = &frame.stats;
     let identity = &s.details.identity;
     let palette = theme::palette(cx);
@@ -139,33 +226,34 @@ fn content(
                 .child(heading("Utilization over time"))
                 .child(chart(history, |s| s.cpu, palette.charts[0], unavailable))
                 .child(heading("Per-core activity"))
-                .child(v_flex().gap_1().children(s.cpu_usage.iter().enumerate().map(|(i, v)| {
-                    h_flex()
-                        .gap_2()
-                        .text_xs()
-                        .child(div().w(px(56.)).text_color(cx.theme().muted_foreground).child(format!("Core {i}")))
-                        .child(div().flex_1().child(Progress::new(("core-detail", i)).value(v.clamp(0.0, 100.0)).color(palette.charts[0])))
-                        .child(div().w(px(48.)).text_right().child(format!("{v:.1}%")))
+                .child(note("Each core is scaled from 0 to 100%.", cx))
+                .child(div().grid().grid_cols(2).gap_4().children(s.cpu_usage.iter().enumerate().map(|(i, v)| {
+                    v_flex().gap_1p5().child(h_flex().justify_between().text_xs()
+                        .child(div().text_color(cx.theme().muted_foreground).child(format!("Core {i}")))
+                        .child(format!("{v:.1}%")))
+                        .child(Progress::new(("core-detail", i)).value(v.clamp(0.0, 100.0)).color(palette.charts[0]))
                 })))
                 .child(note("The overview averages utilization across logical processors. A process can exceed 100% CPU when it uses several cores.", cx))
                 .into_any_element()
         }
         Resource::Memory => v_flex()
-            .gap_2()
-            .child(chart(history, |s| s.memory, palette.charts[1], unavailable))
+            .gap_4()
+            .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(format_bytes(s.memory_used)))
+            .child(note("RAM in use", cx))
+            .child(chart(history, |s| s.memory, palette.charts[2], unavailable))
             .child(rows(
                 vec![
                     ("Physical memory", format_bytes(s.memory_total)),
                     ("In use", format_bytes(s.memory_used)),
                     ("Not in use", format_bytes(s.memory_free)),
                     ("Unallocated", format_bytes(s.details.memory_unallocated)),
-                    ("Cached", format_bytes(s.memory_cached)),
+
                     (
                         "Swap",
                         if s.details.swap_total > 0 {
                             format!("{} of {}", format_bytes(s.details.swap_used), format_bytes(s.details.swap_total))
                         } else {
-                            "Not configured".into()
+                            "No swap space is currently allocated.".into()
                         },
                     ),
                 ],
@@ -179,22 +267,27 @@ fn content(
             }
             v_flex()
                 .gap_2()
-                .children(frame.gpus.iter().map(|g| {
+                .when(frame.gpus.len() > 1, |this| {
+                    let selection = selection.clone();
+                    let devices = frame.gpus.clone();
+                    this.child(heading("Graphics adapter")).child(Button::new("adapter").outline().label(frame.gpus.iter().find(|g| g.id == selection.borrow().gpu).unwrap_or(&frame.gpus[0]).name.clone()).dropdown_menu(move |mut menu, _, _| {
+                        for g in &devices { let selection = selection.clone(); let id = g.id.clone(); menu = menu.item(PopupMenuItem::new(g.name.clone()).on_click(move |_, _, cx| { selection.borrow_mut().gpu = id.clone(); cx.refresh_windows(); })); } menu
+                    }))
+                })
+                .children(frame.gpus.iter().filter(|g| g.id == selection.borrow().gpu || (selection.borrow().gpu.is_empty() && g.id == frame.gpus[0].id)).map(|g| {
                     let id = g.id.clone();
                     v_flex()
                         .gap_1()
                         .child(heading(format!("{} · {}", g.name, g.vendor)))
-                        .child(chart(history, move |s| s.gpus.get(&id).copied().flatten(), palette.charts[3], unavailable))
+                        .child(chart(history, move |s| s.gpus.get(&id).copied().flatten(), palette.charts[1], unavailable))
                         .child(rows(
                             vec![
-                                ("Utilization", unavailable_or(g.utilization, |v| format!("{v:.1}%"))),
+                                ("GPU utilization", unavailable_or(g.utilization, |v| format!("{v:.1}%"))),
                                 (
-                                    "Memory",
-                                    match (g.memory_used, g.memory_total) {
-                                        (Some(u), Some(t)) => format!("{} of {} ({})", format_bytes(u), format_bytes(t), g.memory_kind),
-                                        _ => "Unavailable".into(),
-                                    },
+                                    if g.memory_kind == "shared" { "Shared memory in use" } else { "GPU memory in use" },
+                                    unavailable_or(g.memory_used, format_bytes),
                                 ),
+                                ("GPU memory capacity", if g.memory_kind == "shared" { "Uses system memory".into() } else { unavailable_or(g.memory_total, format_bytes) }),
                                 ("Temperature", unavailable_or(g.temperature, |v| format!("{v:.0} °C"))),
                                 ("Power", unavailable_or(g.power_watts, |v| format!("{v:.1} W"))),
                                 ("Core clock", unavailable_or(g.core_clock_mhz, |v| format!("{v:.0} MHz"))),
@@ -212,13 +305,24 @@ fn content(
             v_flex()
                 .gap_2()
                 .when(volumes.is_empty(), |this| this.child(note("No volumes reported.", cx)))
-                .children(volumes.iter().enumerate().map(|(i, v)| {
+                .child(heading("Volume"))
+                .child({ let selection = selection.clone(); let volumes = volumes.clone();
+                    Button::new("volume-picker").outline().label(volumes.iter().find(|v| v.mount == selection.borrow().volume).or_else(|| volumes.iter().find(|v| v.mount == "/")).or_else(|| volumes.first()).map_or("No volumes".to_string(), |v| format!("{} · {}", v.mount, v.name))).dropdown_menu(move |mut menu, _, _| {
+                        for v in &volumes { let selection = selection.clone(); let mount = v.mount.clone(); menu = menu.item(PopupMenuItem::new(format!("{} · {}", v.mount, v.name)).on_click(move |_, _, cx| { selection.borrow_mut().volume = mount.clone(); cx.refresh_windows(); })); } menu
+                    })
+                })
+                .children(volumes.iter().enumerate().filter(|(_, v)| {
+                    let mount = selection.borrow().volume.clone();
+                    if mount.is_empty() { v.mount == volumes.iter().find(|v| v.mount == "/").or_else(|| volumes.first()).map_or("", |v| v.mount.as_str()) } else { v.mount == mount }
+                }).map(|(i, v)| {
                     let used = v.total.saturating_sub(v.available);
                     let percent = if v.total > 0 { used as f32 / v.total as f32 * 100.0 } else { 0.0 };
                     v_flex()
                         .gap_1()
                         .child(heading(format!("{} · {}", v.mount, if v.name.is_empty() { "Volume" } else { &v.name })))
-                        .child(Progress::new(("volume", i)).value(percent).color(palette.charts[2]))
+                        .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(if v.total > 0 { format_bytes(v.available) } else { "Unavailable".into() }))
+                        .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Available on this volume"))
+                        .child(Progress::new(("volume", i)).value(percent).color(palette.charts[3]))
                         .child(rows(
                             vec![
                                 ("Capacity", if v.total > 0 { format_bytes(v.total) } else { "Unavailable".into() }),
@@ -243,32 +347,47 @@ fn content(
                     ("Architecture", identity.architecture.clone()),
                     ("Processor", identity.cpu_model.clone().unwrap_or_else(|| "Unavailable".into())),
                     ("Logical processors", s.cpu_usage.len().to_string()),
-                    ("Load average (1, 5, 15 min)", format!("{:.2}  {:.2}  {:.2}", s.load_avg[0], s.load_avg[1], s.load_avg[2])),
+
                 ],
                 cx,
             ))
+            .child(heading("Load average"))
+            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Queued and running work over time."))
+            .child(h_flex().gap_3().children(s.load_avg.iter().enumerate().map(|(i,value)| v_flex().flex_1()
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{} minute{}",[1,5,15][i],if i==0 { "" }else{"s"})))
+                .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(format!("{value:.2}"))))))
             .child(note("Load is not a CPU percentage. Uptime is the time since the operating system started.", cx))
             .into_any_element(),
         Resource::Network => {
             let rate = |v: Option<u64>| unavailable_or(v, |b| format!("{}/s", format_bytes(b)));
             let mut interfaces = s.details.interfaces.clone();
-            // Interfaces with traffic first, then by name.
-            interfaces.sort_by(|a, b| {
-                (b.received_total + b.sent_total > 0)
-                    .cmp(&(a.received_total + a.sent_total > 0))
-                    .then_with(|| a.name.cmp(&b.name))
-            });
+            if selection.borrow().interface_order.is_empty() {
+                interfaces.sort_by(|a,b| (b.received.unwrap_or(0).saturating_add(b.sent.unwrap_or(0))).cmp(&a.received.unwrap_or(0).saturating_add(a.sent.unwrap_or(0)))
+                    .then_with(|| b.received_total.saturating_add(b.sent_total).cmp(&a.received_total.saturating_add(a.sent_total))).then_with(|| a.name.cmp(&b.name)));
+                selection.borrow_mut().interface_order = interfaces.iter().map(|i| i.name.clone()).collect();
+            }
+            interfaces.sort_by_key(|i| selection.borrow().interface_order.iter().position(|name| name == &i.name).unwrap_or(usize::MAX));
+            let query = search.read(cx).value().trim().to_lowercase();
+            let unused = selection.borrow().unused;
+            let total = interfaces.len();
+            interfaces.retain(|i| (unused || !query.is_empty() || i.received_total > 0 || i.sent_total > 0 || i.received.is_none() || i.sent.is_none()) && i.name.to_lowercase().contains(&query));
+            let shown = interfaces.len();
+            let toggle = selection.clone();
             v_flex()
-                .gap_2()
+                .gap_3()
                 .child(rows(vec![("Received", rate(s.network_rx_bytes)), ("Sent", rate(s.network_tx_bytes))], cx))
-                .child(heading("Interfaces"))
-                .when(interfaces.is_empty(), |this| this.child(note("No network interfaces were reported.", cx)))
+                .child(div().h(px(112.)).flex().child(stats::network_trend(history, &palette, unavailable)))
+                .child(heading(format!("Interfaces · {shown} of {total}")))
+                .child(Input::new(search).cleanable(true))
+                .child(Checkbox::new("include-unused").label("Include unused interfaces").checked(unused).on_click(move |checked, _, cx| { toggle.borrow_mut().unused = *checked; cx.refresh_windows(); }))
+                .when(interfaces.is_empty(), |this| this.child(note(if !query.is_empty() { "No interfaces match this search." } else if total > 0 { "No interfaces with recorded traffic." } else { "No network interfaces were reported." }, cx)))
                 .children(interfaces.into_iter().map(|i| {
                     v_flex()
-                        .py_1p5()
+                        .py_3()
                         .border_b_1()
                         .border_color(cx.theme().border.opacity(0.5))
-                        .child(div().text_sm().child(i.name.clone()))
+                        .p_4().rounded(cx.theme().radius).border_1().border_color(cx.theme().border)
+                        .child(div().text_sm().font_family(cx.theme().mono_font_family.clone()).child(i.name.clone()))
                         .child(
                             div()
                                 .text_xs()

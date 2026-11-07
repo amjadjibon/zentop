@@ -1,28 +1,31 @@
 //! Process details sheet and the end-process confirmation.
 use super::monitor;
-use super::process_view::{format_bytes, format_mb, format_timestamp, identity, Column, Identity};
+use super::process_view::{format_bytes, format_timestamp, identity, Column, Identity};
 use crate::monitoring::{ProcessInfo, ProcessMonitor};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::notification::Notification;
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
+use std::{cell::Cell, rc::Rc};
 
 const MAX_CHILDREN: usize = 50;
 
 /// Opens the details sheet. It reads the latest frame on every render, so
 /// numbers stay live while it is open.
 pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
+    let environment_open = Rc::new(Cell::new(false));
     window.open_sheet(cx, move |sheet, _, cx| {
         let frame = monitor::global(cx).read(cx).frame.clone();
         let process = frame
             .as_ref()
             .and_then(|f| f.processes.iter().find(|p| identity(p) == id));
         let Some(p) = process else {
-            return sheet.title("Process details").size(px(460.)).child(
+            return sheet.title("Process details").size(px(768.)).child(
                 div()
                     .text_sm()
                     .text_color(cx.theme().muted_foreground)
@@ -30,9 +33,8 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
             );
         };
         let all = &frame.as_ref().expect("frame present").processes;
-        let name = p.name.clone();
         sheet
-            .size(px(460.))
+            .size(px(768.))
             .title(
                 v_flex()
                     .child(
@@ -45,64 +47,41 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("PID {} · {}", p.pid, p.user)),
+                            .child(format!("PID {} · {}", p.pid, p.status)),
                     ),
             )
-            .child(body(p, all, cx))
-            .footer(
-                h_flex().justify_end().w_full().child(
-                    Button::new("end-process")
-                        .danger()
-                        .label("End Process")
-                        .on_click(move |_, window, cx| confirm_kill(id, name.clone(), window, cx)),
-                ),
-            )
+            .child(body(p, all, &environment_open, cx))
     });
 }
 
-fn metric(label: &'static str, value: String, cx: &App) -> impl IntoElement {
+fn card(title: &'static str, cx: &App) -> gpui_kit::Div {
     v_flex()
-        .flex_1()
-        .p_2()
+        .p_4()
+        .gap_4()
         .rounded(cx.theme().radius)
-        .bg(cx.theme().secondary)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(super::theme::palette(cx).card)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                .child(title),
+        )
+}
+
+fn field(label: &'static str, value: impl IntoElement, cx: &App) -> impl IntoElement {
+    v_flex()
+        .min_w_0()
+        .gap_1()
+        .text_sm()
         .child(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
         )
-        .child(
-            div()
-                .text_sm()
-                .font_family(cx.theme().mono_font_family.clone())
-                .child(value),
-        )
-}
-
-fn field(label: &'static str, value: impl IntoElement, cx: &App) -> impl IntoElement {
-    h_flex()
-        .gap_3()
-        .py_1()
-        .text_sm()
-        .child(
-            div()
-                .w(px(96.))
-                .flex_shrink_0()
-                .text_color(cx.theme().muted_foreground)
-                .child(label),
-        )
-        .child(div().min_w_0().flex_1().child(value))
-}
-
-fn section(title: &'static str, cx: &App) -> impl IntoElement {
-    div()
-        .pt_3()
-        .pb_1()
-        .text_xs()
-        .font_weight(gpui_kit::FontWeight::MEDIUM)
-        .text_color(cx.theme().muted_foreground)
-        .child(title)
+        .child(value)
 }
 
 fn link(key: SharedString, target: &ProcessInfo, label: String) -> AnyElement {
@@ -115,125 +94,54 @@ fn link(key: SharedString, target: &ProcessInfo, label: String) -> AnyElement {
         .into_any_element()
 }
 
-fn body(p: &ProcessInfo, all: &[ProcessInfo], cx: &App) -> impl IntoElement {
+fn body(
+    p: &ProcessInfo,
+    all: &[ProcessInfo],
+    environment_open: &Rc<Cell<bool>>,
+    cx: &App,
+) -> impl IntoElement {
     let parent = all
         .iter()
         .find(|q| q.pid == p.ppid && q.pid != p.pid && q.start_time <= p.start_time);
-    let children: Vec<&ProcessInfo> = all
+    let children: Vec<_> = all
         .iter()
         .filter(|q| q.ppid == p.pid && q.pid != p.pid)
         .collect();
     let mono = cx.theme().mono_font_family.clone();
-    v_flex()
-        .id("process-details")
-        .size_full()
-        .overflow_y_scroll()
-        .gap_1()
-        .child(
-            h_flex()
-                .gap_2()
-                .child(metric("CPU", format!("{:.1}%", p.cpu_usage), cx))
-                .child(metric("Memory", format_mb(p.memory_usage), cx))
-                .child(metric("GPU", Column::Gpu.text(p), cx)),
-        )
-        .child(section("Process", cx))
-        .child(field("Status", p.status.clone(), cx))
-        .child(field("User", p.user.clone(), cx))
-        .child(field(
-            "Parent",
-            match parent {
-                Some(parent) => link(
-                    "parent".into(),
-                    parent,
-                    format!("{} ({})", parent.name, parent.pid),
-                ),
-                None => p.ppid.to_string().into_any_element(),
-            },
-            cx,
-        ))
-        .child(field("Started", format_timestamp(p.start_time), cx))
-        .child(field("Run time", Column::RunTime.text(p), cx))
-        .when_some(p.threads, |this, threads| {
-            this.child(field("Threads", threads.to_string(), cx))
-        })
-        .when_some(p.session_id, |this, session| {
-            this.child(field("Session", session.to_string(), cx))
-        })
-        .child(section("Resources", cx))
-        .child(field("Virtual", format_bytes(p.virtual_memory), cx))
-        .child(field(
-            "Disk I/O",
-            format!(
-                "{} read · {} written",
-                format_bytes(p.disk_usage.0),
-                format_bytes(p.disk_usage.1)
-            ),
-            cx,
-        ))
-        .when(!p.ports.is_empty(), |this| {
-            this.child(field(
-                "Ports",
-                p.ports
-                    .iter()
-                    .map(u16::to_string)
-                    .collect::<Vec<_>>()
-                    .join(", "),
-                cx,
-            ))
-        })
-        .child(section("Command", cx))
-        .child(
-            div()
-                .p_2()
-                .rounded(cx.theme().radius)
-                .bg(cx.theme().secondary)
-                .font_family(mono.clone())
-                .text_xs()
-                .child(if p.command.is_empty() {
-                    "—".to_string()
-                } else {
-                    p.command.clone()
-                }),
-        )
-        .child(field("Root", p.root.clone(), cx))
-        .when(!children.is_empty(), |this| {
-            this.child(section("Children", cx)).child(
-                v_flex()
-                    .items_start()
-                    .children(
-                        children
-                            .iter()
-                            .take(MAX_CHILDREN)
-                            .enumerate()
-                            .map(|(i, child)| {
-                                link(
-                                    format!("child-{i}").into(),
-                                    child,
-                                    format!("{} ({})", child.name, child.pid),
-                                )
-                            }),
-                    )
-                    .when(children.len() > MAX_CHILDREN, |this| {
-                        this.child(
-                            div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!("and {} more", children.len() - MAX_CHILDREN)),
-                        )
-                    }),
-            )
-        })
-        .when(!p.environ.is_empty(), |this| {
-            this.child(section("Environment", cx)).child(
-                v_flex()
-                    .p_2()
-                    .rounded(cx.theme().radius)
-                    .bg(cx.theme().secondary)
-                    .font_family(mono)
-                    .text_xs()
-                    .children(p.environ.iter().map(|line| div().child(line.clone()))),
-            )
-        })
+    let toggle = environment_open.clone();
+    v_flex().id("process-details").size_full().overflow_y_scroll().gap_6()
+        .child(div().grid().grid_cols(2).gap_4()
+            .child(card("CPU usage", cx)
+                .child(div().text_2xl().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(format!("{:.1}%", p.cpu_usage)))
+                .child(Progress::new("process-cpu").value(p.cpu_usage.clamp(0.,100.)).color(if p.cpu_usage > 80. { super::theme::palette(cx).danger } else if p.cpu_usage > 50. { super::theme::palette(cx).warning } else { super::theme::palette(cx).charts[0] })))
+            .child(card("Resident memory", cx)
+                .child(div().text_2xl().font_weight(gpui_kit::FontWeight::SEMIBOLD).child(format_bytes(p.memory_usage)))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("Virtual: {}",format_bytes(p.virtual_memory))))))
+        .child(card("Process information", cx).child(div().grid().grid_cols(2).gap_4()
+            .child(field("Name", p.name.clone(), cx)).child(field("User",p.user.clone(),cx))
+            .child(field("Session ID",p.session_id.map_or_else(|| "Unavailable".into(), |v| v.to_string()),cx))
+            .child(field("Threads",p.threads.map_or_else(|| "Unavailable".into(), |v| v.to_string()),cx))
+            .child(field("Started",format_timestamp(p.start_time),cx))
+            .child(field("Run time",Column::RunTime.text(p),cx))
+            .child(field("Parent process",match parent { Some(parent) => link("parent".into(),parent,format!("{} · {} ↗",parent.name,parent.pid)), None => div().text_xs().child(format!("{} · not in this snapshot",p.ppid)).into_any_element() },cx))
+            .child(field("Disk I/O",div().text_xs().child(format!("Read {} · Written {}",format_bytes(p.disk_usage.0),format_bytes(p.disk_usage.1))),cx))))
+        .child(card("Command & root",cx)
+            .child(field("Command",div().id("command-block").max_h(px(176.)).overflow_y_scroll().p_3().border_1().border_color(cx.theme().border).rounded_md().bg(cx.theme().background).font_family(mono.clone()).text_xs().child(if p.command.is_empty(){"Unavailable".into()}else{p.command.clone()}),cx))
+            .child(field("Root",div().text_xs().font_family(mono.clone()).child(if p.root.is_empty(){"Unavailable".into()}else{p.root.clone()}),cx)))
+        .child(card("Child processes",cx)
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{} children",children.len())))
+            .when(children.is_empty(),|d| d.child(div().text_sm().text_color(cx.theme().muted_foreground).child("No child process in the current snapshot.")))
+            .when(!children.is_empty(),|d| d.child(h_flex().text_xs().gap_3().child(div().flex_1().child("Name")).child("PID").child("CPU").child("Memory")))
+            .children(children.iter().take(MAX_CHILDREN).enumerate().map(|(i,child)| h_flex().gap_3().py_2().border_t_1().border_color(cx.theme().border).text_xs()
+                .child(div().flex_1().min_w_0().child(link(format!("child-{i}").into(),child,format!("{} ↗",child.name))))
+                .child(child.pid.to_string()).child(format!("{:.1}%",child.cpu_usage)).child(format_bytes(child.memory_usage)))))
+        .child(Button::new("environment-toggle").outline().label(format!("Environment variables ({}) {}",p.environ.len(),if environment_open.get(){"⌃"}else{"⌄"})).on_click(move |_,_,cx| { toggle.set(!toggle.get());cx.refresh_windows(); }))
+        .when(environment_open.get(), |d| d.child(v_flex().gap_3()
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Values reported by the operating system for this process."))
+            .child(v_flex().id("environment-block").max_h(px(288.)).overflow_y_scroll().p_4().gap_2().rounded_md().border_1().border_color(cx.theme().border).font_family(mono).text_xs()
+                .children(p.environ.iter().map(|v| div().child(v.clone())))
+                .when(p.environ.is_empty(),|d| d.child("No accessible environment variables reported.")))))
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Readings follow the process snapshot. Virtual address space is not physical RAM; CPU can exceed 100% across cores."))
 }
 
 /// Asks before signalling; the process is re-identified by start time first.
@@ -241,12 +149,10 @@ pub fn confirm_kill(id: Identity, name: String, window: &mut Window, cx: &mut Ap
     window.open_alert_dialog(cx, move |dialog, _, _| {
         let name = name.clone();
         dialog
-            .title("End process?")
-            .description(format!(
-                "{name} (PID {}) will be terminated. Unsaved work in it may be lost.",
-                id.0
-            ))
-            .ok_text("End Process")
+            .title(format!("End {name}?"))
+            .description("This stops the selected process. Unsaved work may be lost.")
+            .child(div().p_3().child(format!("{name}\nPID {}", id.0)))
+            .ok_text("End process")
             .ok_variant(ButtonVariant::Danger)
             .confirm()
             .on_ok(move |_, window, cx| {
