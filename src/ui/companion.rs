@@ -184,8 +184,12 @@ impl Overview {
     }
 
     fn load_icons(&mut self, cx: &mut Context<Self>) {
-        let requests: Vec<IconRequest> = self
-            .busiest(cx)
+        let busiest = self.busiest(cx);
+        // The popup only shows five identities. Holding every past winner's
+        // image here would bypass the native icon cache's eviction limit.
+        self.icons
+            .retain(|id, _| busiest.iter().any(|process| identity(process) == *id));
+        let requests: Vec<IconRequest> = busiest
             .iter()
             .map(identity)
             .filter(|id| !self.icons.contains_key(id))
