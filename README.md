@@ -5,7 +5,6 @@
   <p>See every process, understand your graphics card, and keep your whole machine in view on macOS, Linux and Windows.<br />Built in Rust with GPU-accelerated UI. Nothing leaves your machine.</p>
 
 <a href="https://github.com/amjadjibon/zentop/releases/latest"><img src="https://img.shields.io/github/v/release/amjadjibon/zentop?style=flat-square&label=release" alt="Latest release" /></a>
-<a href="https://github.com/amjadjibon/zentop/actions/workflows/build-check.yml"><img src="https://github.com/amjadjibon/zentop/actions/workflows/build-check.yml/badge.svg" alt="Cross-platform builds" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT license" /></a>
 
   <p><a href="docs/install.md"><strong>Install</strong></a> · <a href="docs/usage.md">User guide</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="CHANGELOG.md">Changelog</a></p>
@@ -46,7 +45,7 @@ cargo run --release
 
 You need **Rust 1.88+**. On Linux, first install the GPUI and tray build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb, Vulkan, GTK 3 and AppIndicator headers); the [development guide](.github/DEVELOPMENT.md) lists the exact packages.
 
-Installers (macOS `.dmg`, Windows setup `.exe`, Linux `.deb`, `.rpm` and AppImage) are built by CI with cargo-packager and will be attached to [GitHub Releases](https://github.com/amjadjibon/zentop/releases) once published. See the [installation guide](docs/install.md).
+Installers (macOS `.dmg`, Windows setup `.exe`, Linux `.deb`, `.rpm` and AppImage) are built with cargo-packager and will be attached to [GitHub Releases](https://github.com/amjadjibon/zentop/releases) once published. See the [installation guide](docs/install.md).
 
 ### Coming from NeoHtop?
 

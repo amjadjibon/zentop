@@ -5,16 +5,15 @@
 #   scripts/build-dmg.sh aarch64    # Apple silicon
 #   scripts/build-dmg.sh x86_64     # Intel (cross-compiles on Apple silicon)
 #
-# cargo-packager builds Zentop.app from the [package.metadata.packager] config,
-# as CI does. With APPLE_SIGNING_IDENTITY (and the other APPLE_* credentials CI
-# uses) exported, it signs and notarizes the app; otherwise the app is ad-hoc
-# signed, which runs on this Mac and opens elsewhere after right-click → Open.
+# cargo-packager builds Zentop.app from the [package.metadata.packager] config.
+# With APPLE_SIGNING_IDENTITY and the other APPLE_* signing credentials
+# exported, it signs and notarizes the app; otherwise the app is ad-hoc signed, which runs on this Mac and opens elsewhere after right-click → Open.
 # The DMG is made with hdiutil, so no Finder automation permission is needed,
 # and lands in artifacts/ under its release name.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PACKAGER_VERSION="0.11.8" # keep in step with .github/workflows/build-check.yml
+PACKAGER_VERSION="0.11.8"
 
 die() {
   echo "$*" >&2

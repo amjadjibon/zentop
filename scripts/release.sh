@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Release checks and packaging helpers used by CI.
+# Release checks and packaging helpers.
 #
 #   release.sh check-version [tag]
 #   release.sh stage <platform> <packager-dir> <output-dir>

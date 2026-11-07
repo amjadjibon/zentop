@@ -36,41 +36,21 @@ Themes live in `assets/themes.json` as resolved semantic roles. `cargo test`
 checks every theme for readable contrast (WCAG AA for text and labels, 3:1 for
 controls and chart colors) on each surface it is used on.
 
-### Build checks and releases
+### Releases
 
-Pull requests and pushes to `main` run formatting, release-tool tests, Rust tests,
-and package builds for Windows x64, macOS Intel/Apple Silicon, and Linux x64/ARM64.
-Linux packages are built on Ubuntu 22.04 with cargo-packager (deb, AppImage) and
-cargo-generate-rpm (RPM). AppImages are checked for bundled Wayland client
-libraries to prevent the display-driver conflict reported in issue #203.
-
-To build preview packages, run **Build Check** or **Draft Release** from GitHub
-Actions on a branch. Download the `packages-*` workflow artifacts. Preview macOS
-packages are ad-hoc signed and are not notarized for public distribution.
-
-For a release candidate:
+There is no CI; build and check releases locally on each platform.
 
 1. Update the version in `Cargo.toml` and run `cargo check` to refresh `Cargo.lock`.
    Run `scripts/release.sh check-version` and commit the changes.
-2. Push a matching version tag, for example `v1.3.0`. All platform packages are
-   built from that tag. A published version cannot be overwritten.
-3. After every build passes, **Draft Release** verifies all nine packages and
-   attaches `SHA256SUMS` and `release-manifest.json` to a draft GitHub release.
-4. Install and launch the packages on their supported operating systems, review
-   the release notes, then publish the draft from GitHub when ready.
-
-Tagged macOS builds require the repository secrets `MACOS_CERTIFICATE`
-(base64-encoded Developer ID `.p12`), `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`,
-`APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`, plus the
-repository variable `APPLE_SIGNING_IDENTITY` naming your Developer ID
-Application identity. Tagged builds fail if credentials are missing or signature/notarization
-checks fail. Preview builds and pull requests do not need signing credentials.
-Windows packages are NSIS installers, named `Zentop_<version>_x64-setup.exe`;
-Windows code signing is not configured by this workflow.
-
-The release uses the scoped `GITHUB_TOKEN`; `PAT_TOKEN` is no longer needed.
-Existing branch-protection rules that require the old **Format Check** job should
-be updated to require **Source checks** and the platform package jobs.
+2. Before packaging, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
+   `cargo test` and `scripts/release-test.sh`.
+3. Build packages on each platform: `scripts/build-dmg.sh` on macOS (ad-hoc signed;
+   export the `APPLE_*` signing variables to sign and notarize), or
+   `cargo packager --release` on Windows and Linux. On Linux, also run
+   `cargo generate-rpm`, then `scripts/release.sh check-appimage target/packager`
+   to make sure the AppImage doesn't bundle the host's Wayland libraries (issue #203).
+4. Install and launch each package on its operating system before publishing a
+   GitHub release.
 
 ### Code Formatting and Checks
 
