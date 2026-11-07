@@ -536,9 +536,14 @@ fn network(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
     ))
 }
 
+/// Reads one 0–100 value from a sample, or `None` where it is missing.
+type Reading = Rc<dyn Fn(&Sample) -> Option<f64>>;
+/// A resolved line: (timestamp, value) points, color, and whether it is filled.
+type Line = (Vec<(u64, Option<f64>)>, Hsla, bool);
+
 /// One line on a trend chart, as a 0–100 value per sample.
 struct Series {
-    value: Rc<dyn Fn(&Sample) -> Option<f64>>,
+    value: Reading,
     color: Hsla,
     fill: bool,
 }
@@ -570,7 +575,7 @@ fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl In
         .map(|s| s.timestamp)
         .find(|t| t + TREND_MS >= end)
         .unwrap_or(end);
-    let lines: Vec<(Vec<(u64, Option<f64>)>, Hsla, bool)> = series
+    let lines: Vec<Line> = series
         .into_iter()
         .map(|s| {
             let points = history
