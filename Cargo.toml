@@ -17,7 +17,9 @@ gpui-kit = "0.9"
 dirs = "6"
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
-sysinfo = { version = "0.35.2", features = ["disk", "multithread", "network", "system"] }
+# Process refresh runs on the sampler's background worker. Parallel syscalls
+# across every CPU add contention and CPU time without improving UI cadence.
+sysinfo = { version = "0.35.2", features = ["disk", "network", "system"] }
 listeners = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"

@@ -201,6 +201,59 @@ mod tests {
         assert!(monitor.process_cache.is_empty());
     }
 
+    #[test]
+    fn refresh_preserves_live_metrics_identity_and_details() {
+        let mut sys = System::new_all();
+        let mut monitor = ProcessMonitor::new();
+        let pid = sysinfo::Pid::from_u32(std::process::id());
+        let first = monitor.collect_processes(&sys).unwrap();
+        let first = first.iter().find(|p| p.pid == pid.as_u32()).unwrap();
+        let identity = (first.start_time, first.owner);
+        // Use the same minimum CPU window as the sampler. This exercises two
+        // real refreshes with the configured sysinfo iterator implementation.
+        std::thread::sleep(std::time::Duration::from_millis(1500));
+        sys.refresh_all();
+        let processes = monitor.collect_processes(&sys).unwrap();
+        let info = processes.iter().find(|p| p.pid == pid.as_u32()).unwrap();
+        let process = sys.process(pid).unwrap();
+        assert_eq!((info.start_time, info.owner), identity);
+        assert!(info.start_time > 0);
+        assert!(info.memory_usage > 0);
+        assert!(info.virtual_memory > 0);
+        assert!(info.cpu_usage.is_finite());
+        assert_eq!(info.memory_usage, process.memory());
+        assert_eq!(info.ppid, process.parent().unwrap().as_u32());
+        assert_eq!(
+            info.command,
+            os_string_vec_to_string_vec(process.cmd()).join(" ")
+        );
+        assert!(!info.command.is_empty());
+        assert_eq!(info.environ, os_string_vec_to_string_vec(process.environ()));
+        assert!(!info.environ.is_empty());
+        assert_eq!(info.user, process.user_id().unwrap().to_string());
+        assert_eq!(
+            info.root,
+            process
+                .root()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        );
+        assert_eq!(
+            info.disk_usage,
+            (
+                process.disk_usage().read_bytes,
+                process.disk_usage().written_bytes
+            )
+        );
+        assert_eq!(info.status, ProcessMonitor::format_status(process.status()));
+        assert_eq!(info.session_id, process.session_id().map(|p| p.as_u32()));
+        assert!(!ProcessMonitor::kill_process(
+            &sys,
+            info.pid,
+            info.start_time.wrapping_add(1)
+        ));
+    }
+
     /// Tests process collection functionality
     #[test]
     fn test_process_collection() {
