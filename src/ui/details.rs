@@ -8,7 +8,7 @@ use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
+    div, img, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
 use std::{cell::Cell, rc::Rc};
@@ -18,6 +18,29 @@ const MAX_CHILDREN: usize = 50;
 /// Opens the details sheet. It reads the latest frame on every render, so
 /// numbers stay live while it is open.
 pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
+    let icon = Rc::new(std::cell::RefCell::new(None));
+    let resolved_icon = icon.clone();
+    let state = monitor::global(cx).read(cx).state();
+    cx.spawn(async move |cx| {
+        let resolved = cx
+            .background_executor()
+            .spawn(async move {
+                crate::native_icons::resolve_batch(
+                    &state,
+                    vec![crate::native_icons::IconRequest {
+                        pid: id.0,
+                        start_time: id.1,
+                    }],
+                )
+            })
+            .await;
+        *resolved_icon.borrow_mut() = resolved
+            .into_iter()
+            .find(|(key, _)| *key == id)
+            .and_then(|(_, icon)| icon);
+        cx.update(|cx| cx.refresh_windows());
+    })
+    .detach();
     let environment_open = Rc::new(Cell::new(false));
     window.open_sheet(cx, move |sheet, _, cx| {
         let frame = monitor::global(cx).read(cx).frame.clone();
@@ -36,18 +59,39 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
         sheet
             .size(px(768.))
             .title(
-                v_flex()
+                h_flex()
+                    .gap_3()
                     .child(
                         div()
-                            .text_lg()
-                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                            .child(p.name.clone()),
+                            .size_12()
+                            .rounded_lg()
+                            .bg(cx.theme().muted)
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(match icon.borrow().clone() {
+                                Some(icon) => img(icon).size_8().into_any_element(),
+                                None => gpui_kit::component::Icon::new(
+                                    gpui_kit::assets::IconName::SquareTerminal,
+                                )
+                                .size_6()
+                                .into_any_element(),
+                            }),
                     )
                     .child(
-                        div()
-                            .text_xs()
-                            .text_color(cx.theme().muted_foreground)
-                            .child(format!("PID {} · {}", p.pid, p.status)),
+                        v_flex()
+                            .child(
+                                div()
+                                    .text_lg()
+                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                                    .child(p.name.clone()),
+                            )
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!("PID {} · {}", p.pid, p.status)),
+                            ),
                     ),
             )
             .child(body(p, all, &environment_open, cx))

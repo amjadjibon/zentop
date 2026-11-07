@@ -37,10 +37,7 @@ impl Zentop {
         let (columns, tree, filters) = {
             let m = monitor.read(cx);
             let prefs = m.prefs();
-            let filters = Filters {
-                statuses: default_statuses(prefs),
-                ..Filters::default()
-            };
+            let filters = Filters::default();
             (
                 visible_columns(prefs),
                 prefs.behavior("processView").as_str() == Some("tree"),
@@ -286,6 +283,16 @@ impl Zentop {
                         .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
                         .child(
                             Popover::new("theme-picker")
+                                .open(self.theme_picker.read(cx).open)
+                                .on_open_change({
+                                    let picker = self.theme_picker.clone();
+                                    move |open, _, cx| {
+                                        picker.update(cx, |this, cx| {
+                                            this.open = *open;
+                                            cx.notify();
+                                        })
+                                    }
+                                })
                                 .trigger(
                                     Button::new("theme")
                                         .ghost()
@@ -585,7 +592,8 @@ impl Zentop {
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
                                         .child(
-                                            "⌘ / Ctrl F focuses search. Escape clears it. Invalid \
+                                            "⌘ / Ctrl F focuses search. Escape clears it. \
+                                             Invalid \
                                              expressions still match literal text.",
                                         ),
                                 )
@@ -655,6 +663,7 @@ impl Zentop {
                         .text_color(cx.theme().muted_foreground)
                         .when(searching, |this| {
                             this.child(format!("{} of {total} processes match", delegate.matching))
+                                .child(self.filter_chips(cx))
                                 .child(
                                     Button::new("clear-all")
                                         .ghost()
@@ -674,6 +683,59 @@ impl Zentop {
                         }),
                 )
             })
+    }
+
+    fn filter_chips(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let mut chips = h_flex().gap_2().flex_wrap();
+        if !self.search_text.trim().is_empty() {
+            chips = chips.child(
+                Button::new("remove-search")
+                    .xsmall()
+                    .outline()
+                    .label(format!("Search: {}", self.search_text.trim()))
+                    .icon(IconName::X)
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        this.search
+                            .update(cx, |input, cx| input.set_value("", window, cx));
+                        this.set_search(String::new(), cx);
+                    })),
+            );
+        }
+        for (i, kind) in RuleKind::ALL.into_iter().enumerate() {
+            let rule = self.filters.rule(kind);
+            if rule.enabled {
+                chips = chips.child(
+                    Button::new(("remove-rule", i))
+                        .xsmall()
+                        .outline()
+                        .label(format!(
+                            "{} {} {} {}",
+                            kind.label(),
+                            rule.operator.symbol(),
+                            rule.value,
+                            kind.unit()
+                        ))
+                        .icon(IconName::X)
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.update_filters(cx, |f| f.rule_mut(kind).enabled = false);
+                        })),
+                );
+            }
+        }
+        for (i, status) in self.filters.statuses.iter().enumerate() {
+            let status = status.clone();
+            chips = chips.child(
+                Button::new(("remove-status", i))
+                    .xsmall()
+                    .outline()
+                    .label(format!("Status: {status}"))
+                    .icon(IconName::X)
+                    .on_click(cx.listener(move |this, _, _, cx| {
+                        this.update_filters(cx, |f| f.statuses.retain(|s| s != &status));
+                    })),
+            );
+        }
+        chips
     }
 
     fn set_page(&mut self, page: usize, cx: &mut Context<Self>) {
@@ -823,7 +885,7 @@ impl Render for Zentop {
                         .border_color(danger)
                         .bg(danger.opacity(0.08))
                         .text_color(danger)
-                        .text_sm()
+                        .text_size(px(13.))
                         .child(SharedString::from(alert)),
                 )
             })
@@ -839,15 +901,4 @@ fn visible_columns(prefs: &Preferences) -> Vec<Column> {
         .into_iter()
         .filter(|c| *c == Column::Name || prefs.column_visible(c.key()).unwrap_or(false))
         .collect()
-}
-
-/// The "default status filter" preference, as an initial status filter.
-fn default_statuses(prefs: &Preferences) -> Vec<String> {
-    match prefs.behavior("defaultStatusFilter").as_str() {
-        Some("running") => vec!["Running".into()],
-        Some("sleeping") => vec!["Sleeping".into()],
-        Some("idle") => vec!["Idle".into()],
-        Some("unknown") => vec!["Unknown".into()],
-        _ => Vec::new(),
-    }
 }

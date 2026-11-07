@@ -8,13 +8,15 @@ use crate::sampling::Sample;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
+use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     canvas, div, point, px, relative, App, Bounds, FontWeight, Hsla, IntoElement, ParentElement,
     PathBuilder, Pixels, SharedString, Styled, Window,
 };
-use std::rc::Rc;
+use gpui_kit::{Focusable, InteractiveElement, RenderOnce, StatefulInteractiveElement};
+use std::{cell::Cell, rc::Rc};
 
 /// History window shown by the trend lines.
 const TREND_MS: u64 = 120_000;
@@ -53,8 +55,9 @@ fn card(
     badge: Option<String>,
     resource: Resource,
     cx: &App,
-) -> gpui_kit::Div {
+) -> gpui_kit::Stateful<gpui_kit::Div> {
     v_flex()
+        .id(title)
         .flex_1()
         .min_w_0()
         .h_full()
@@ -197,7 +200,7 @@ fn chart_block(chart: impl IntoElement, scale: String, cx: &App) -> impl IntoEle
         .child(caption(scale, cx))
 }
 
-fn cpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
+fn cpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let cores = &r.stats.cpu_usage;
     let average = (!cores.is_empty() && cores.iter().all(|v| v.is_finite()))
         .then(|| cores.iter().map(|v| *v as f64).sum::<f64>() / cores.len() as f64);
@@ -230,8 +233,12 @@ fn cpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
             .gap_y_1()
             .max_h(px(52.))
             .overflow_hidden()
-            .children(cores.iter().enumerate().map(|(i, value)| {
+            .children(cores.iter().copied().enumerate().map(|(i, value)| {
                 v_flex()
+                    .id(("core-tooltip", i))
+                    .tooltip(move |window, cx| {
+                        Tooltip::new(format!("Core {i} · {value:.1}%")).build(window, cx)
+                    })
                     .gap_0p5()
                     .items_center()
                     .child(
@@ -259,7 +266,7 @@ fn cpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
     ))
 }
 
-fn memory(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
+fn memory(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let s = r.stats;
     let accent = palette.charts[2];
     card(
@@ -290,7 +297,7 @@ fn memory(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
     ))
 }
 
-fn gpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
+fn gpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let accent = palette.charts[1];
     let Some(device) = r.gpus.first() else {
         return card(IconName::Gpu, "GPU", accent, None, Resource::Gpu, cx).child(headline(
@@ -335,7 +342,7 @@ fn gpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
         ))
 }
 
-fn storage(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
+fn storage(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let s = r.stats;
     let accent = palette.charts[3];
     let used = percent(s.disk_used_bytes, s.disk_total_bytes);
@@ -386,7 +393,7 @@ fn storage(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
     )
 }
 
-fn system(r: &Readings, cx: &App) -> gpui_kit::Div {
+fn system(r: &Readings, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let s = r.stats;
     let accent = theme::palette(cx).charts[4];
     let load = |label: &'static str, value: f64| {
@@ -470,7 +477,7 @@ fn legend(color: Hsla, dashed: bool, label: &'static str, cx: &App) -> impl Into
         .child(label)
 }
 
-fn network(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
+fn network(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let s = r.stats;
     let (received, sent) = (palette.charts[0], palette.charts[3]);
     let (value, unit) = rate_parts(s.network_rx_bytes);
@@ -594,52 +601,284 @@ fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl In
             (points, s.color, s.fill)
         })
         .collect();
-    let opacity = if unavailable { 0.4 } else { 1.0 };
-    canvas(
-        move |_, _, _| lines,
-        move |bounds: Bounds<Pixels>, lines, window: &mut Window, _| {
-            let span = end.saturating_sub(start).max(1) as f64;
-            let to_point = |t: u64, v: f64| {
-                point(
-                    bounds.origin.x + bounds.size.width * ((t - start) as f64 / span) as f32,
-                    bounds.origin.y + bounds.size.height * (1.0 - v as f32 / 100.0),
+    TrendChart {
+        lines,
+        start,
+        end,
+        unavailable,
+        history: history.to_vec(),
+    }
+}
+
+#[derive(IntoElement)]
+struct TrendChart {
+    lines: Vec<Line>,
+    start: u64,
+    end: u64,
+    unavailable: bool,
+    history: Vec<Sample>,
+}
+
+struct Inspection {
+    index: Option<usize>,
+    focus: gpui_kit::FocusHandle,
+}
+impl Focusable for Inspection {
+    fn focus_handle(&self, _: &App) -> gpui_kit::FocusHandle {
+        self.focus.clone()
+    }
+}
+
+/// Nearest sample in the fixed time domain, including missing readings.
+fn nearest_sample(times: &[u64], target: u64) -> Option<usize> {
+    times
+        .iter()
+        .enumerate()
+        .min_by_key(|(_, t)| t.abs_diff(target))
+        .map(|(i, _)| i)
+}
+
+impl RenderOnce for TrendChart {
+    fn render(self, window: &mut Window, cx: &mut App) -> impl IntoElement {
+        let Self {
+            lines,
+            start,
+            end,
+            unavailable,
+            history,
+        } = self;
+        let opacity = if unavailable { 0.4 } else { 1.0 };
+        let state = window.use_state(cx, |_, cx| Inspection {
+            index: None,
+            focus: cx.focus_handle(),
+        });
+        let selected = state.read(cx).index;
+        let times: Vec<_> = lines
+            .first()
+            .map_or(Vec::new(), |l| l.0.iter().map(|(t, _)| *t).collect());
+        let bounds_cell = Rc::new(Cell::new(Bounds::<Pixels>::default()));
+        let paint_bounds = bounds_cell.clone();
+        let hover_state = state.clone();
+        let exit_state = state.clone();
+        let key_state = state.clone();
+        let count = times.len();
+        let tooltip = selected.and_then(|i| times.get(i).copied()).map(|time| {
+            let time_label = chrono::DateTime::from_timestamp_millis(time as i64)
+                .map(|t| {
+                    t.with_timezone(&chrono::Local)
+                        .format("%H:%M:%S")
+                        .to_string()
+                })
+                .unwrap_or_else(|| "Unknown time".into());
+            let values = if lines.len() == 2 {
+                let sample = history.iter().find(|s| s.timestamp == time);
+                let rate = |v: Option<u64>| {
+                    v.map_or_else(
+                        || "Unavailable".into(),
+                        |v| format!("{}/s", format_bytes(v)),
+                    )
+                };
+                format!(
+                    "Received {} · Sent {}",
+                    rate(sample.and_then(|s| s.received)),
+                    rate(sample.and_then(|s| s.sent))
                 )
+            } else {
+                lines[0]
+                    .0
+                    .get(selected.unwrap_or(0))
+                    .and_then(|(_, v)| *v)
+                    .map_or_else(|| "Unavailable".into(), |v| format!("{v:.1}%"))
             };
-            let bottom = bounds.origin.y + bounds.size.height;
-            for (points, color, fill) in lines {
-                for run in points.split(|(_, v)| v.is_none()).filter(|r| !r.is_empty()) {
-                    let run: Vec<_> = run
-                        .iter()
-                        .map(|(t, v)| to_point(*t, v.unwrap_or(0.0)))
-                        .collect();
-                    if fill && run.len() > 1 {
-                        let mut area = PathBuilder::fill();
-                        area.move_to(point(run[0].x, bottom));
-                        for p in &run {
-                            area.line_to(*p);
+            format!("{time_label} · {values}")
+        });
+        div()
+            .id("trend-inspection")
+            .relative()
+            .size_full()
+            .track_focus(&state.focus_handle(cx))
+            .on_mouse_down(gpui_kit::MouseButton::Left, {
+                let state = state.clone();
+                move |_, window, cx| state.focus_handle(cx).focus(window, cx)
+            })
+            .on_mouse_move(move |event, _, cx| {
+                let bounds = bounds_cell.get();
+                let fraction = (f32::from(event.position.x - bounds.left() - px(3.))
+                    / f32::from(bounds.size.width - px(6.)).max(1.))
+                .clamp(0., 1.);
+                let target = start + ((end - start) as f64 * fraction as f64) as u64;
+                let index = nearest_sample(&times, target);
+                hover_state.update(cx, |state, cx| {
+                    if state.index != index {
+                        state.index = index;
+                        cx.notify();
+                    }
+                });
+            })
+            .on_hover(move |hovered, _, cx| {
+                if !hovered {
+                    exit_state.update(cx, |s, cx| {
+                        s.index = None;
+                        cx.notify();
+                    });
+                }
+            })
+            .on_key_down(move |event, _, cx| {
+                let delta = match event.keystroke.key.as_str() {
+                    "left" => -1,
+                    "right" => 1,
+                    _ => return,
+                };
+                key_state.update(cx, |s, cx| {
+                    if count > 0 {
+                        s.index = Some(
+                            (s.index.unwrap_or(count - 1) as isize + delta)
+                                .clamp(0, count as isize - 1) as usize,
+                        );
+                        cx.notify();
+                    }
+                });
+            })
+            .child(
+                canvas(
+                    move |_, _, _| lines,
+                    move |bounds: Bounds<Pixels>, lines, window: &mut Window, _| {
+                        paint_bounds.set(bounds);
+                        paint_trends(bounds, lines, (start, end), selected, opacity, window);
+                    },
+                )
+                .size_full(),
+            )
+            .when_some(tooltip, |this, tooltip| {
+                this.child(
+                    div()
+                        .absolute()
+                        .bottom(relative(1.0))
+                        .mb_1()
+                        .right_0()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(cx.theme().popover)
+                        .text_color(cx.theme().popover_foreground)
+                        .text_size(px(10.))
+                        .child(tooltip),
+                )
+            })
+    }
+}
+
+fn paint_trends(
+    bounds: Bounds<Pixels>,
+    lines: Vec<Line>,
+    domain: (u64, u64),
+    selected: Option<usize>,
+    opacity: f32,
+    window: &mut Window,
+) {
+    let (start, end) = domain;
+    let span = end.saturating_sub(start).max(1) as f64;
+    let to_point = |t: u64, v: f64| {
+        point(
+            bounds.origin.x
+                + px(3.)
+                + (bounds.size.width - px(6.)).max(px(0.)) * ((t - start) as f64 / span) as f32,
+            bounds.origin.y
+                + px(3.)
+                + (bounds.size.height - px(6.)).max(px(0.)) * (1.0 - v as f32 / 100.0),
+        )
+    };
+    let bottom = bounds.origin.y + bounds.size.height;
+    if let Some((time, _)) = selected.and_then(|i| lines.first()?.0.get(i)) {
+        let x = to_point(*time, 0.).x;
+        window.paint_quad(gpui_kit::fill(
+            Bounds::new(
+                point(x, bounds.top()),
+                gpui_kit::size(px(1.), bounds.size.height),
+            ),
+            gpui_kit::hsla(0., 0., 0.5, 0.7),
+        ));
+    }
+    for (points, color, fill) in lines {
+        if let Some((t, Some(v))) = selected.and_then(|i| points.get(i)) {
+            let p = to_point(*t, *v);
+            window.paint_quad(gpui_kit::quad(
+                Bounds::new(
+                    point(p.x - px(3.), p.y - px(3.)),
+                    gpui_kit::size(px(6.), px(6.)),
+                ),
+                px(3.),
+                color,
+                px(0.),
+                color,
+                gpui_kit::BorderStyle::Solid,
+            ));
+        }
+        for run in points.split(|(_, v)| v.is_none()).filter(|r| !r.is_empty()) {
+            let run: Vec<_> = run
+                .iter()
+                .map(|(t, v)| to_point(*t, v.unwrap_or(0.0)))
+                .collect();
+            if fill && run.len() > 1 {
+                let mut area = PathBuilder::fill();
+                area.move_to(point(run[0].x, bottom));
+                for p in &run {
+                    area.line_to(*p);
+                }
+                area.line_to(point(run[run.len() - 1].x, bottom));
+                area.close();
+                if let Ok(path) = area.build() {
+                    window.paint_path(
+                        path,
+                        gpui_kit::linear_gradient(
+                            180.,
+                            gpui_kit::linear_color_stop(color.opacity(0.24 * opacity), 0.),
+                            gpui_kit::linear_color_stop(color.opacity(0.01), 1.),
+                        ),
+                    );
+                }
+            }
+            let mut stroke = PathBuilder::stroke(px(1.5));
+            stroke.move_to(run[0]);
+            if fill {
+                for p in &run[1..] {
+                    stroke.line_to(*p);
+                }
+            } else {
+                let mut distance: f32 = 0.;
+                for segment in run.windows(2) {
+                    let dx = f32::from(segment[1].x - segment[0].x);
+                    let dy = f32::from(segment[1].y - segment[0].y);
+                    let length = dx.hypot(dy);
+                    let mut offset = 0.;
+                    while offset + 0.001 < length {
+                        let phase = distance % 7.;
+                        let step = (if phase < 4. { 4. - phase } else { 7. - phase })
+                            .max(0.001)
+                            .min(length - offset);
+                        let at = |d: f32| {
+                            point(
+                                segment[0].x + px(dx * d / length),
+                                segment[0].y + px(dy * d / length),
+                            )
+                        };
+                        stroke.move_to(at(offset));
+                        if phase < 4. {
+                            stroke.line_to(at(offset + step));
                         }
-                        area.line_to(point(run[run.len() - 1].x, bottom));
-                        area.close();
-                        if let Ok(path) = area.build() {
-                            window.paint_path(path, color.opacity(0.18 * opacity));
-                        }
-                    }
-                    let mut stroke = PathBuilder::stroke(px(1.5));
-                    stroke.move_to(run[0]);
-                    for p in &run[1..] {
-                        stroke.line_to(*p);
-                    }
-                    if run.len() == 1 {
-                        stroke.line_to(point(run[0].x + px(1.), run[0].y));
-                    }
-                    if let Ok(path) = stroke.build() {
-                        window.paint_path(path, color.opacity(opacity));
+                        offset += step;
+                        distance += step;
                     }
                 }
             }
-        },
-    )
-    .size_full()
+            if run.len() == 1 {
+                stroke.line_to(point(run[0].x + px(1.), run[0].y));
+            }
+            if let Ok(path) = stroke.build() {
+                window.paint_path(path, color.opacity(opacity));
+            }
+        }
+    }
 }
 
 /// Shared receive/send chart for the network detail sheet.
@@ -671,4 +910,17 @@ pub(super) fn network_trend(
         ],
         unavailable,
     )
+}
+
+#[cfg(test)]
+mod inspection_tests {
+    #[test]
+    fn nearest_uses_time_and_handles_edges_and_gaps() {
+        assert_eq!(super::nearest_sample(&[], 10), None);
+        let times = [100, 300, 900];
+        assert_eq!(super::nearest_sample(&times, 0), Some(0));
+        assert_eq!(super::nearest_sample(&times, 290), Some(1));
+        assert_eq!(super::nearest_sample(&times, 850), Some(2));
+        assert_eq!(super::nearest_sample(&times, 2000), Some(2));
+    }
 }

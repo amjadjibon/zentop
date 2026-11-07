@@ -5,7 +5,7 @@ use super::process_view::{format_bytes, format_uptime};
 use super::stats;
 use super::theme;
 use crate::sampling::Sample;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -284,21 +284,50 @@ fn content(
                     ("In use", format_bytes(s.memory_used)),
                     ("Not in use", format_bytes(s.memory_free)),
                     ("Unallocated", format_bytes(s.details.memory_unallocated)),
-                    (
-                        "Swap",
-                        if s.details.swap_total > 0 {
-                            format!(
-                                "{} of {}",
-                                format_bytes(s.details.swap_used),
-                                format_bytes(s.details.swap_total)
-                            )
-                        } else {
-                            "No swap space is currently allocated.".into()
-                        },
-                    ),
                 ],
                 cx,
             ))
+            .child(
+                v_flex()
+                    .p_4()
+                    .gap_3()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(heading("Swap"))
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Memory the operating system stores on disk."),
+                    )
+                    .when(s.details.swap_total > 0, |this| {
+                        this.child(
+                            h_flex()
+                                .justify_between()
+                                .text_sm()
+                                .child(format!("{} used", format_bytes(s.details.swap_used)))
+                                .child(format!("of {}", format_bytes(s.details.swap_total))),
+                        )
+                        .child(
+                            Progress::new("swap-used")
+                                .value(
+                                    (s.details.swap_used as f64 / s.details.swap_total as f64
+                                        * 100.)
+                                        .clamp(0., 100.) as f32,
+                                )
+                                .color(palette.charts[2]),
+                        )
+                    })
+                    .when(s.details.swap_total == 0, |this| {
+                        this.child(
+                            div()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No swap space is currently allocated."),
+                        )
+                    }),
+            )
             .child(note(
                 "Not in use is total RAM minus reported use. Unallocated is the OS free-page \
                  count. These can overlap, and swap use alone does not measure memory pressure.",
@@ -350,65 +379,8 @@ fn content(
                             g.id == selection.borrow().gpu
                                 || (selection.borrow().gpu.is_empty() && g.id == frame.gpus[0].id)
                         })
-                        .map(|g| {
-                            let id = g.id.clone();
-                            v_flex()
-                                .gap_1()
-                                .child(heading(format!("{} · {}", g.name, g.vendor)))
-                                .child(chart(
-                                    history,
-                                    move |s| s.gpus.get(&id).copied().flatten(),
-                                    palette.charts[1],
-                                    unavailable,
-                                ))
-                                .child(rows(
-                                    vec![
-                                        (
-                                            "GPU utilization",
-                                            unavailable_or(g.utilization, |v| format!("{v:.1}%")),
-                                        ),
-                                        (
-                                            if g.memory_kind == "shared" {
-                                                "Shared memory in use"
-                                            } else {
-                                                "GPU memory in use"
-                                            },
-                                            unavailable_or(g.memory_used, format_bytes),
-                                        ),
-                                        (
-                                            "GPU memory capacity",
-                                            if g.memory_kind == "shared" {
-                                                "Uses system memory".into()
-                                            } else {
-                                                unavailable_or(g.memory_total, format_bytes)
-                                            },
-                                        ),
-                                        (
-                                            "Temperature",
-                                            unavailable_or(g.temperature, |v| format!("{v:.0} °C")),
-                                        ),
-                                        (
-                                            "Power",
-                                            unavailable_or(g.power_watts, |v| format!("{v:.1} W")),
-                                        ),
-                                        (
-                                            "Core clock",
-                                            unavailable_or(g.core_clock_mhz, |v| {
-                                                format!("{v:.0} MHz")
-                                            }),
-                                        ),
-                                        ("Cores", unavailable_or(g.cores, |v| v.to_string())),
-                                        ("Source", g.source.clone()),
-                                    ],
-                                    cx,
-                                ))
-                        }),
+                        .map(|g| gpu_details(g, history, &palette, unavailable, cx)),
                 )
-                .child(note(
-                    "Readings depend on the driver. Missing counters never mean idle hardware. \
-                     Apple silicon shared GPU memory is part of system RAM.",
-                    cx,
-                ))
                 .into_any_element()
         }
         Resource::Storage => {
@@ -497,6 +469,22 @@ fn content(
                                     Progress::new(("volume", i))
                                         .value(percent)
                                         .color(palette.charts[3]),
+                                )
+                                .child(
+                                    h_flex()
+                                        .justify_between()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(if v.total > 0 {
+                                            format!("{percent:.1}% used")
+                                        } else {
+                                            "Unavailable".into()
+                                        })
+                                        .child(if v.total > 0 {
+                                            format!("{:.1}% available", 100. - percent)
+                                        } else {
+                                            String::new()
+                                        }),
                                 )
                                 .child(rows(
                                     vec![
@@ -695,6 +683,34 @@ fn content(
                         cx,
                     ))
                 })
+                .when(interfaces.is_empty() && !query.is_empty(), |this| {
+                    let search = search.clone();
+                    this.child(
+                        Button::new("clear-interface-search")
+                            .link()
+                            .small()
+                            .label("Clear search")
+                            .on_click(move |_, window, cx| {
+                                search.update(cx, |input, cx| input.set_value("", window, cx));
+                            }),
+                    )
+                })
+                .when(
+                    interfaces.is_empty() && query.is_empty() && total > 0 && !unused,
+                    |this| {
+                        let selection = selection.clone();
+                        this.child(
+                            Button::new("show-all-interfaces")
+                                .link()
+                                .small()
+                                .label("Show all interfaces")
+                                .on_click(move |_, _, cx| {
+                                    selection.borrow_mut().unused = true;
+                                    cx.refresh_windows();
+                                }),
+                        )
+                    },
+                )
                 .children(interfaces.into_iter().map(|i| {
                     v_flex()
                         .py_3()
@@ -712,15 +728,27 @@ fn content(
                         )
                         .child(
                             div()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(format!(
-                                    "↓ {} · ↑ {} · totals {} / {}",
-                                    rate(i.received),
-                                    rate(i.sent),
+                                .grid()
+                                .grid_cols(2)
+                                .gap_4()
+                                .py_3()
+                                .child(definition("↓ Received /s", rate(i.received), cx))
+                                .child(definition("↑ Sent /s", rate(i.sent), cx)),
+                        )
+                        .child(
+                            div()
+                                .grid()
+                                .grid_cols(2)
+                                .gap_4()
+                                .pt_2()
+                                .border_t_1()
+                                .border_color(cx.theme().border)
+                                .child(definition(
+                                    "Received total",
                                     format_bytes(i.received_total),
-                                    format_bytes(i.sent_total)
-                                )),
+                                    cx,
+                                ))
+                                .child(definition("Sent total", format_bytes(i.sent_total), cx)),
                         )
                 }))
                 .child(note(
@@ -731,4 +759,113 @@ fn content(
                 .into_any_element()
         }
     }
+}
+
+fn definition(label: &'static str, value: String, cx: &App) -> impl IntoElement {
+    v_flex()
+        .gap_1()
+        .text_xs()
+        .child(div().text_color(cx.theme().muted_foreground).child(label))
+        .child(value)
+}
+
+fn gpu_details(
+    g: &crate::gpu::GpuDevice,
+    history: &[Sample],
+    palette: &theme::Palette,
+    unavailable: bool,
+    cx: &App,
+) -> impl IntoElement {
+    let id = g.id.clone();
+    let facts = vec![
+        (
+            "GPU utilization",
+            unavailable_or(g.utilization, |v| format!("{v:.1}%")),
+        ),
+        (
+            if g.memory_kind == "shared" {
+                "Shared memory in use"
+            } else {
+                "GPU memory in use"
+            },
+            unavailable_or(g.memory_used, format_bytes),
+        ),
+        (
+            "GPU memory capacity",
+            if g.memory_kind == "shared" {
+                "Uses system memory".into()
+            } else {
+                unavailable_or(g.memory_total, format_bytes)
+            },
+        ),
+        (
+            "Temperature",
+            unavailable_or(g.temperature, |v| format!("{v:.0} °C")),
+        ),
+        (
+            "Power",
+            unavailable_or(g.power_watts, |v| format!("{v:.1} W")),
+        ),
+        (
+            "Core clock",
+            unavailable_or(g.core_clock_mhz, |v| format!("{v:.0} MHz")),
+        ),
+    ];
+    let shared = if g.memory_kind == "shared" {
+        "Shared GPU memory is part of your system memory, not additional VRAM. "
+    } else {
+        ""
+    };
+    let explanation = format!(
+        "{}. {shared}Unavailable counters are not reported as zero. \
+         Support depends on the GPU and its driver.",
+        g.source,
+    );
+    v_flex()
+        .gap_3()
+        .child(heading(g.name.clone()))
+        .child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child(format!(
+                    "{}{}",
+                    g.vendor,
+                    g.cores
+                        .map_or(String::new(), |n| format!(" · {n} graphics cores"))
+                )),
+        )
+        .child(rows(facts, cx))
+        .child(chart(
+            history,
+            move |s| s.gpus.get(&id).copied().flatten(),
+            palette.charts[1],
+            unavailable,
+        ))
+        .child(
+            v_flex()
+                .p_4()
+                .gap_2()
+                .rounded_lg()
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(cx.theme().muted.opacity(0.4))
+                .child(heading("About these readings"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(explanation),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(if monitor::global(cx).read(cx).paused {
+                            "Updates paused in both windows."
+                        } else {
+                            "History covers the last two minutes and stays in memory."
+                        }),
+                ),
+        )
 }

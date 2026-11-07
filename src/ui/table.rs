@@ -578,24 +578,41 @@ impl ProcessList {
 
     fn render_empty(&self, cx: &mut Context<Zentop>) -> AnyElement {
         let searching = self.searching();
-        h_flex()
+        v_flex()
             .flex_1()
+            .h(px(192.))
+            .items_center()
             .justify_center()
-            .gap_3()
+            .gap_2()
             .text_sm()
-            .text_color(cx.theme().muted_foreground)
+            .child(
+                UiIcon::new(IconName::Search)
+                    .size_6()
+                    .text_color(cx.theme().muted_foreground),
+            )
             .child(if self.frame.is_none() {
                 "Reading processes…"
             } else if searching {
-                "No processes match the current search and filters."
+                "No matching processes"
             } else {
-                "No processes."
+                "No processes in this snapshot"
             })
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(if searching {
+                        "Try another name, PID or condition."
+                    } else {
+                        "Wait for the next update or resume monitoring."
+                    }),
+            )
             .when(searching, |this| {
                 this.child(
                     Button::new("clear-empty")
+                        .link()
                         .small()
-                        .label("Clear filters")
+                        .label("Clear search and filters")
                         .on_click(cx.listener(|this, _, window, cx| {
                             this.clear_search_and_filters(window, cx)
                         })),

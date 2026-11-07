@@ -25,7 +25,6 @@
     "refreshRate": 3000,
     "menuBarEnabled": true,
     "keepRunning": false,
-    "defaultStatusFilter": "all",
     "processView": "flat"
   }
 }

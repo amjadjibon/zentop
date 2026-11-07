@@ -134,6 +134,7 @@ pub struct Overview {
     monitor: Entity<Monitor>,
     icons: HashMap<Identity, Option<Icon>>,
     _subscriptions: Vec<Subscription>,
+    _clock: gpui_kit::Task<()>,
 }
 
 impl Overview {
@@ -150,7 +151,16 @@ impl Overview {
                 }
             }),
         ];
+        let clock = cx.spawn(async move |this, cx| loop {
+            cx.background_executor()
+                .timer(std::time::Duration::from_secs(1))
+                .await;
+            if this.update(cx, |_, cx| cx.notify()).is_err() {
+                break;
+            }
+        });
         let mut this = Self {
+            _clock: clock,
             monitor,
             icons: HashMap::new(),
             _subscriptions: subscriptions,
@@ -215,9 +225,28 @@ fn metric(
         .px_2()
         .gap_2()
         .child(
-            div()
+            h_flex()
+                .gap_1p5()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
+                .child(
+                    div()
+                        .size_5()
+                        .rounded_md()
+                        .bg(color.opacity(0.12))
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .child(
+                            gpui_kit::component::Icon::new(match label {
+                                "CPU" => IconName::Cpu,
+                                "Memory" => IconName::MemoryStick,
+                                _ => IconName::Gpu,
+                            })
+                            .xsmall()
+                            .text_color(color),
+                        ),
+                )
                 .child(label),
         )
         .child(
@@ -258,8 +287,7 @@ impl Render for Overview {
             let memory =
                 (s.memory_total > 0).then(|| s.memory_used as f64 / s.memory_total as f64 * 100.);
             let gpu = frame.gpus.first();
-            let rate =
-                |v: Option<u64>| v.map_or_else(|| "—".into(), |b| format!("{}/s", format_bytes(b)));
+            let rate = network_rate;
             v_flex()
                 .gap_3()
                 .child(
@@ -353,13 +381,12 @@ impl Render for Overview {
                                     div()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(if paused {
-                                            "Updates paused"
-                                        } else if frame.is_some() {
-                                            "Live system overview"
-                                        } else {
-                                            "Reading this machine…"
-                                        }),
+                                        .child(overview_status(
+                                            paused,
+                                            frame.as_ref().map(|f| f.captured_at),
+                                            crate::sampling::now_ms(),
+                                            monitor.refresh_rate(),
+                                        )),
                                 ),
                         )
                         .child(
@@ -373,8 +400,10 @@ impl Render for Overview {
                 )
                 .child(
                     v_flex()
+                        .id("overview-scroll")
                         .flex_1()
                         .min_h_0()
+                        .overflow_y_scroll()
                         .p_4()
                         .gap_3()
                         .when_some(error, |this, error| {
@@ -490,5 +519,56 @@ impl Render for Overview {
                         ),
                 ),
         )
+    }
+}
+
+fn network_rate(value: Option<u64>) -> String {
+    value.map_or_else(|| "—".into(), |b| format!("{}/s", format_bytes(b)))
+}
+
+fn overview_status(paused: bool, captured: Option<u64>, now: u64, interval: u64) -> String {
+    if paused {
+        return "Updates paused".into();
+    }
+    let Some(captured) = captured else {
+        return "Reading this machine…".into();
+    };
+    let age = now.saturating_sub(captured);
+    if age > 10_000.max(interval.saturating_mul(3)) {
+        format!("Last reading {}s ago", age / 1000)
+    } else {
+        format!("Live · updated {}s ago", age / 1000)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::overview_status;
+    #[test]
+    fn overview_reports_fresh_stale_paused_and_missing_readings() {
+        assert_eq!(
+            overview_status(false, Some(1000), 4000, 3000),
+            "Live · updated 3s ago"
+        );
+        assert_eq!(
+            overview_status(false, Some(1000), 12000, 3000),
+            "Last reading 11s ago"
+        );
+        assert_eq!(
+            overview_status(true, Some(1000), 12000, 3000),
+            "Updates paused"
+        );
+        assert_eq!(
+            overview_status(false, None, 12000, 3000),
+            "Reading this machine…"
+        );
+        assert_eq!(
+            overview_status(false, Some(1000), 12000, 30000),
+            "Live · updated 11s ago"
+        );
+        assert_eq!(
+            overview_status(false, Some(9000), 1000, 3000),
+            "Live · updated 0s ago"
+        );
     }
 }

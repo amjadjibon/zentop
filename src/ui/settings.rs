@@ -263,7 +263,12 @@ fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn appearance(monitor: &Entity<Monitor>, query: &str, cx: &App) -> AnyElement {
+fn appearance(
+    monitor: &Entity<Monitor>,
+    query: &str,
+    picker: Option<Entity<ThemePicker>>,
+    cx: &App,
+) -> AnyElement {
     let current = monitor.read(cx).theme_name().to_owned();
     let mut gallery = v_flex().gap_4();
     for (group, names) in THEME_GROUPS {
@@ -283,6 +288,7 @@ fn appearance(monitor: &Entity<Monitor>, query: &str, cx: &App) -> AnyElement {
                 let preview = theme::preview(name).expect("known theme");
                 let selected = name == current;
                 let monitor = monitor.clone();
+                let picker = picker.clone();
                 h_flex()
                     .id(SharedString::from(name))
                     .min_h(px(36.))
@@ -306,7 +312,17 @@ fn appearance(monitor: &Entity<Monitor>, query: &str, cx: &App) -> AnyElement {
                     .child(label)
                     .child(div().flex_1())
                     .when(selected, |d| d.child(Icon::new(IconName::Check).xsmall()))
-                    .on_click(move |_, _, cx| monitor.update(cx, |m, cx| m.set_theme(name, cx)))
+                    .on_click(move |_, window, cx| {
+                        monitor.update(cx, |m, cx| m.set_theme(name, cx));
+                        if let Some(picker) = &picker {
+                            picker.update(cx, |this, cx| {
+                                this.open = false;
+                                this.search
+                                    .update(cx, |input, cx| input.set_value("", window, cx));
+                                cx.notify();
+                            });
+                        }
+                    })
             }));
         gallery = gallery.child(
             v_flex()
@@ -339,7 +355,7 @@ impl Render for Settings {
                             .cleanable(true)
                             .prefix(Icon::new(IconName::Search).small()),
                     )
-                    .child(appearance(&self.monitor, &query, cx))
+                    .child(appearance(&self.monitor, &query, None, cx))
                     .when(!matches, |this| {
                         this.child(
                             div()
@@ -465,6 +481,7 @@ impl Render for Settings {
 
 /// The title-bar picker uses the same searchable gallery as Settings.
 pub(super) struct ThemePicker {
+    pub open: bool,
     monitor: Entity<Monitor>,
     search: Entity<InputState>,
     _subscriptions: Vec<Subscription>,
@@ -478,6 +495,7 @@ impl ThemePicker {
             cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()),
         ];
         Self {
+            open: false,
             monitor,
             search,
             _subscriptions: subscriptions,
@@ -506,7 +524,7 @@ impl Render for ThemePicker {
                     .id("theme-picker-list")
                     .max_h(px(440.))
                     .overflow_y_scroll()
-                    .child(appearance(&self.monitor, &query, cx)),
+                    .child(appearance(&self.monitor, &query, Some(cx.entity()), cx)),
             )
     }
 }

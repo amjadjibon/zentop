@@ -39,10 +39,6 @@ fn merge(config: &mut Value, patch: &Value) {
                 "refreshRate" => value.as_u64().is_some_and(|n| (1000..=30000).contains(&n)),
                 "menuBarEnabled" | "keepRunning" => value.is_boolean(),
                 "processView" => matches!(value.as_str(), Some("flat" | "tree")),
-                "defaultStatusFilter" => matches!(
-                    value.as_str(),
-                    Some("all" | "running" | "sleeping" | "idle" | "unknown")
-                ),
                 _ => false,
             };
             if group == "behavior" && valid {
@@ -215,5 +211,20 @@ mod tests {
         assert!(persist(&dir, &defaults()).is_err());
         assert_eq!(load(&path, None).unwrap().unwrap(), config);
         fs::remove_dir_all(dir).unwrap();
+    }
+}
+
+#[cfg(test)]
+mod retired_filter_tests {
+    #[test]
+    fn legacy_default_status_is_ignored() {
+        let mut config = super::defaults();
+        super::merge(
+            &mut config,
+            &serde_json::json!({
+                "behavior": {"defaultStatusFilter": "sleeping"}
+            }),
+        );
+        assert!(config["behavior"].get("defaultStatusFilter").is_none());
     }
 }
