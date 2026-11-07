@@ -19,6 +19,7 @@ sysinfo = { version = "0.35.2", features = ["disk", "multithread", "network", "s
 listeners = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
+unicode-normalization = "0.1"
 tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
 
 [profile.release]

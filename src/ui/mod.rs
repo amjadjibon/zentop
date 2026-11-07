@@ -30,6 +30,7 @@ actions!(
         ShowOverview,
         ShowMain,
         ViewList,
+        FocusSearch,
         ViewTree,
         CloseWindow,
         Minimize,
@@ -73,6 +74,8 @@ pub fn init(cx: &mut App) {
 
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-f", FocusSearch, None),
+        KeyBinding::new("ctrl-f", FocusSearch, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
         KeyBinding::new("cmd-w", CloseWindow, None),
         KeyBinding::new("cmd-m", Minimize, None),
@@ -215,7 +218,7 @@ pub fn open_settings(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    let options = window_options(size(px(760.), px(600.)), Some(size(px(640.), px(480.))), cx);
+    let options = window_options(size(px(640.), px(640.)), Some(size(px(640.), px(480.))), cx);
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
         window.set_window_title("Zentop Settings");
         cx.new(|cx| settings::Settings::new(window, cx))
@@ -231,7 +234,7 @@ pub fn open_about(cx: &mut App) {
         cx.activate(true);
         return;
     }
-    let mut options = window_options(size(px(420.), px(440.)), None, cx);
+    let mut options = window_options(size(px(520.), px(400.)), None, cx);
     options.is_resizable = false;
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
         window.set_window_title("About Zentop");

@@ -14,13 +14,14 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, img, px, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
-    SharedString, Styled, Subscription, Window,
+    div, img, px, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window,
 };
 use serde_json::json;
 
 pub struct Zentop {
     monitor: Entity<Monitor>,
+    theme_picker: Entity<super::settings::ThemePicker>,
     search_text: String,
     filters: Filters,
     last_sequence: Option<u64>,
@@ -84,7 +85,9 @@ impl Zentop {
                 },
             ));
         }
+        let theme_picker = cx.new(|cx| super::settings::ThemePicker::new(window, cx));
         let mut this = Self {
+            theme_picker,
             monitor,
             search_text: String::new(),
             filters,
@@ -206,19 +209,19 @@ impl Zentop {
         let monitor = self.monitor.read(cx);
         let paused = monitor.paused;
         let rate = monitor.refresh_rate();
-        let current_theme = monitor.theme_name().to_owned();
-        let (pause_monitor, theme_monitor) = (self.monitor.clone(), self.monitor.clone());
+        let pause_monitor = self.monitor.clone();
+        let theme_picker = self.theme_picker.clone();
         let status_color = if paused {
             cx.theme().muted_foreground
         } else {
             theme::palette(cx).running
         };
-        TitleBar::new().h(px(48.)).bg(theme::palette(cx).card).border_b_1().border_color(cx.theme().border).child(
+        TitleBar::new().pl(px(96.)).h(px(48.)).bg(theme::palette(cx).card).border_b_1().border_color(cx.theme().border).child(
             h_flex()
                 .w_full()
                 .pr_3()
                 // Leave room for the macOS window controls drawn over the title bar.
-                .when(cfg!(target_os = "macos"), |this| this.pl(px(96.)))
+
                 .justify_between()
                 .child(
                     h_flex()
@@ -277,26 +280,9 @@ impl Zentop {
                         )
                         .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
                         .child(
-                            Button::new("theme")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Palette)
-                                .tooltip("Theme")
-                                .dropdown_menu(move |mut menu, _, _| {
-                                    menu = menu.scrollable(true).max_h(px(420.));
-                                    for (name, label) in theme::all() {
-                                        let monitor = theme_monitor.clone();
-                                        menu = menu.item(
-                                            PopupMenuItem::new(label)
-                                                .checked(name == current_theme)
-                                                .on_click(move |_, _, cx| {
-                                                    monitor
-                                                        .update(cx, |m, cx| m.set_theme(name, cx))
-                                                }),
-                                        );
-                                    }
-                                    menu
-                                }),
+                            Popover::new("theme-picker")
+                                .trigger(Button::new("theme").ghost().small().icon(IconName::Palette).tooltip(format!("Theme: {}", monitor.theme_name())))
+                                .content(move |_, _, _| theme_picker.clone()),
                         )
                         .child(
                             Button::new("more")
@@ -513,14 +499,20 @@ impl Zentop {
                 ),
             )
             .child(
-                Button::new("search-help")
-                    .ghost()
-                    .small()
-                    .icon(IconName::CircleQuestionMark)
-                    .tooltip(
-                        "Search names, commands or PIDs. Separate terms with commas. \
-                         Use :3000 or port:443 to find what owns a port. Names support regular expressions. Escape clears search.",
-                    ),
+                Popover::new("search-help").trigger(Button::new("search-help-button").ghost().small().icon(IconName::CircleQuestionMark).tooltip("Search syntax and examples"))
+                    .content({ let entity = cx.entity(); move |_, _, cx| {
+                        let examples = [("systemd, dbus", "Multiple names, separated by commas"),("d$", "Names ending in d"),("^kernel", "Names starting with kernel"),("ssh.*server", "Regular expressions"),("1234", "Find a process ID"),(":3000", "Processes listening on a local port"),("port:443", "Explicit local TCP listener or UDP port"),("python, node, nginx", "Several runtimes"),("docker, containerd", "Container processes"),("gnome, plasma", "Desktop environments")];
+                        v_flex().w(px(288.)).gap_3()
+                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Find a process"))
+                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Search names, commands, PIDs or local ports (:3000). Comma-separated terms match any term. Name searches also support regular expressions."))
+                            .children(examples.into_iter().enumerate().map(|(i,(query,label))| {
+                                let entity = entity.clone();
+                                Button::new(("search-example",i)).ghost().small().label(format!("{query} · {label}")).on_click(move |_,window,cx| {
+                                    entity.update(cx,|this,cx| { this.search.update(cx,|input,cx| input.set_value(query,window,cx)); this.set_search(query.to_owned(),cx); this.search.focus_handle(cx).focus(window, cx); });
+                                })
+                            }))
+                            .child(div().pt_3().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground).child("⌘ / Ctrl F focuses search. Escape clears it. Invalid expressions still match literal text."))
+                    }}),
             )
             .child(self.render_filters(cx))
             .when(tree && expanded && !searching, |this| {
@@ -723,6 +715,9 @@ impl Render for Zentop {
         let danger = theme::palette(cx).danger;
         v_flex()
             .size_full()
+            .on_action(cx.listener(|this, _: &super::FocusSearch, window, cx| {
+                this.search.focus_handle(cx).focus(window, cx)
+            }))
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.render_title_bar(cx))

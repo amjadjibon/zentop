@@ -62,22 +62,12 @@ pub fn exists(name: &str) -> bool {
 
 /// Swatch colors for a theme gallery, without applying the theme.
 pub struct Preview {
-    pub background: Hsla,
-    pub card: Hsla,
-    pub foreground: Hsla,
-    pub muted: Hsla,
-    pub border: Hsla,
     pub accents: [Hsla; 3],
 }
 
 pub fn preview(name: &str) -> Option<Preview> {
     THEMES.iter().find(|t| t.name == name).map(|t| Preview {
-        background: hex(&t.background),
-        card: hex(&t.card),
-        foreground: hex(&t.foreground),
-        muted: hex(&t.muted_foreground),
-        border: hex(&t.border),
-        accents: [hex(&t.primary), hex(&t.chart_2), hex(&t.chart_3)],
+        accents: [hex(&t.chart_1), hex(&t.status_stopped), hex(&t.chart_2)],
     })
 }
 
@@ -118,7 +108,7 @@ fn hex(value: &str) -> Hsla {
 }
 
 /// Mixes `amount` of `other` into `base`, for hover and pressed states.
-fn mix(base: Hsla, other: Hsla, amount: f32) -> Hsla {
+pub(super) fn mix(base: Hsla, other: Hsla, amount: f32) -> Hsla {
     let (a, b): (Rgba, Rgba) = (base.into(), other.into());
     Rgba {
         r: a.r + (b.r - a.r) * amount,

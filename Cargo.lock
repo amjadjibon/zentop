@@ -8984,6 +8984,7 @@ dependencies = [
  "serde_json",
  "sysinfo 0.35.2",
  "tray-icon",
+ "unicode-normalization",
  "windows 0.62.2",
 ]
 

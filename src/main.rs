@@ -40,6 +40,7 @@ icon_assets!(
         ListTree,
         MemoryStick,
         Monitor,
+        Server,
         Network,
         Palette,
         Pause,

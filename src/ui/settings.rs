@@ -1,14 +1,12 @@
 //! The Settings window. Every change is saved through the shared model, so the
 //! other windows pick it up immediately.
 use super::monitor::{self, Monitor, REFRESH_RATES};
-use super::process_view::Column;
 use super::theme;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
+use gpui_kit::component::button::Button;
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
-use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
@@ -17,39 +15,78 @@ use gpui_kit::{
     Subscription, Window,
 };
 use serde_json::{json, Value};
+use unicode_normalization::{char::is_combining_mark, UnicodeNormalization};
+
+fn fold_theme(value: &str) -> String {
+    value
+        .nfkd()
+        .filter(|c| !is_combining_mark(*c))
+        .flat_map(char::to_lowercase)
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+pub(super) fn matches_theme(label: &str, query: &str) -> bool {
+    fold_theme(label).contains(&fold_theme(query))
+}
+
+pub(super) const THEME_GROUPS: &[(&str, &[&str])] = &[
+    (
+        "Dark",
+        &[
+            "catppuccin",
+            "dracula",
+            "monokaiPro",
+            "tokyoNight",
+            "solarizedDark",
+            "ayuDark",
+            "ayuMirage",
+        ],
+    ),
+    (
+        "Light",
+        &["githubLight", "solarizedLight", "oneLight", "ayuLight"],
+    ),
+    ("Warm", &["gruvbox"]),
+    ("Cool", &["nord", "oneDark"]),
+    (
+        "Fun",
+        &[
+            "bubblegum",
+            "rosePine",
+            "cottonCandy",
+            "synthwave",
+            "candyfloss",
+        ],
+    ),
+    ("Retro", &["terminal", "amber", "ibmPC"]),
+    ("Accessibility", &["highContrast"]),
+    ("Glassy", &["glassy"]),
+];
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Pane {
     General,
     Appearance,
-    Columns,
 }
 
 impl Pane {
-    const ALL: [Pane; 3] = [Pane::General, Pane::Appearance, Pane::Columns];
+    const ALL: [Pane; 2] = [Pane::General, Pane::Appearance];
     fn label(self) -> &'static str {
         match self {
             Pane::General => "General",
             Pane::Appearance => "Appearance",
-            Pane::Columns => "Columns",
         }
     }
     fn icon(self) -> IconName {
         match self {
             Pane::General => IconName::Settings,
             Pane::Appearance => IconName::Palette,
-            Pane::Columns => IconName::Columns3,
         }
     }
 }
-
-const STATUS_FILTERS: [(&str, &str); 5] = [
-    ("all", "All statuses"),
-    ("running", "Running"),
-    ("sleeping", "Sleeping"),
-    ("idle", "Idle"),
-    ("unknown", "Unknown"),
-];
 
 pub struct Settings {
     monitor: Entity<Monitor>,
@@ -112,240 +149,101 @@ fn row(
 fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
     let m = monitor.read(cx);
     let rate = m.refresh_rate();
-    let tree = m.prefs().behavior("processView").as_str() == Some("tree");
-    let status = m
-        .prefs()
-        .behavior("defaultStatusFilter")
-        .as_str()
-        .unwrap_or("all")
-        .to_owned();
     let menu_bar = m.behavior_bool("menuBarEnabled");
     let keep_running = m.behavior_bool("keepRunning");
-    let status_label = STATUS_FILTERS
-        .iter()
-        .find(|(value, _)| *value == status)
-        .map_or("All statuses", |(_, label)| label);
-    let (rate_m, list_m, tree_m, status_m, bar_m, keep_m) = (
-        monitor.clone(),
-        monitor.clone(),
-        monitor.clone(),
-        monitor.clone(),
-        monitor.clone(),
-        monitor.clone(),
-    );
-    v_flex()
-        .child(row(
-            "Refresh rate",
-            "How often readings are captured. Shorter intervals use more CPU.",
-            Button::new("rate")
-                .small()
-                .outline()
-                .label(format!("Every {}s", rate / 1000))
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for ms in REFRESH_RATES {
-                        let monitor = rate_m.clone();
-                        menu = menu.item(
-                            PopupMenuItem::new(format!("Every {}s", ms / 1000))
-                                .checked(rate == ms)
-                                .on_click(move |_, _, cx| {
-                                    monitor.update(cx, |m, cx| m.set_refresh_rate(ms, cx))
-                                }),
-                        );
-                    }
-                    menu
-                }),
-            cx,
-        ))
-        .child(row(
-            "Process view",
-            "Show processes as a flat list or grouped into families.",
-            h_flex()
-                .child(
-                    Button::new("view-list")
-                        .small()
-                        .with_variant(if tree {
-                            ButtonVariant::Ghost
-                        } else {
-                            ButtonVariant::Secondary
-                        })
-                        .icon(IconName::List)
-                        .label("List")
-                        .on_click(move |_, _, cx| {
-                            save(&list_m, json!({"behavior": {"processView": "flat"}}), cx)
-                        }),
-                )
-                .child(
-                    Button::new("view-tree")
-                        .small()
-                        .with_variant(if tree {
-                            ButtonVariant::Secondary
-                        } else {
-                            ButtonVariant::Ghost
-                        })
-                        .icon(IconName::ListTree)
-                        .label("Tree")
-                        .on_click(move |_, _, cx| {
-                            save(&tree_m, json!({"behavior": {"processView": "tree"}}), cx)
-                        }),
-                ),
-            cx,
-        ))
-        .child(row(
-            "Default status filter",
-            "Applied when the main window opens.",
-            Button::new("status")
-                .small()
-                .outline()
-                .label(status_label)
-                .dropdown_caret(true)
-                .dropdown_menu(move |mut menu, _, _| {
-                    for (value, label) in STATUS_FILTERS {
-                        let monitor = status_m.clone();
-                        menu =
-                            menu.item(PopupMenuItem::new(label).checked(status == value).on_click(
-                                move |_, _, cx| {
-                                    save(
-                                        &monitor,
-                                        json!({"behavior": {"defaultStatusFilter": value}}),
-                                        cx,
-                                    )
-                                },
-                            ));
-                    }
-                    menu
-                }),
-            cx,
-        ))
-        .child(row(
-            "Menu-bar overview",
-            "Show the Zentop icon in the menu bar or system tray.",
-            Switch::new("menu-bar")
-                .checked(menu_bar)
-                .on_click(move |checked, _, cx| {
-                    save(
-                        &bar_m,
-                        json!({"behavior": {"menuBarEnabled": *checked}}),
-                        cx,
-                    )
-                }),
-            cx,
-        ))
-        .child(row(
-            "Keep running",
-            "Continue monitoring from the menu bar after closing the main window.",
-            Switch::new("keep-running")
-                .checked(keep_running && menu_bar)
-                .disabled(!menu_bar)
-                .on_click(move |checked, _, cx| {
-                    save(&keep_m, json!({"behavior": {"keepRunning": *checked}}), cx)
-                }),
-            cx,
-        ))
+    let rate_m = monitor.clone();
+    let bar_m = monitor.clone();
+    let keep_m = monitor.clone();
+    let card = |title| {
+        v_flex()
+            .p_4()
+            .gap_4()
+            .rounded(cx.theme().radius)
+            .border_1()
+            .border_color(cx.theme().border)
+            .bg(theme::palette(cx).card)
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(title),
+            )
+    };
+    v_flex().gap_5()
+        .child(card("Monitoring").child(row("Refresh interval","Applies to the app and menu-bar overview.",
+            Button::new("rate").outline().label(format!("{}s",super::super::sampling::interval(rate) as f64 / 1000.)).dropdown_caret(true).dropdown_menu(move |mut menu,_,_| {
+                for ms in REFRESH_RATES { let monitor = rate_m.clone(); menu = menu.item(PopupMenuItem::new(format!("{}s",ms / 1000)).checked(rate==ms).on_click(move |_,_,cx| monitor.update(cx,|m,cx|m.set_refresh_rate(ms,cx)))); } menu
+            }),cx))
+            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Longer intervals reduce background activity. Pause and resume from the app bar.")))
+        .child(card("Menu-bar companion")
+            .child(v_flex().gap_1()
+                .child(Checkbox::new("menu-bar").label("Show menu-bar icon").checked(menu_bar).on_click(move |checked,_,cx| save(&bar_m,json!({"behavior":{"menuBarEnabled":*checked}}),cx)))
+                .child(div().pl_6().text_xs().text_color(cx.theme().muted_foreground).child("Keep CPU, memory, graphics and network readings close at hand.")))
+            .child(v_flex().gap_1()
+                .child(Checkbox::new("keep-running").label("Keep running when the window closes").checked(keep_running).disabled(!menu_bar).on_click(move |checked,_,cx| save(&keep_m,json!({"behavior":{"keepRunning":*checked}}),cx)))
+                .child(div().pl_6().text_xs().text_color(cx.theme().muted_foreground).child("Continue from the menu bar. Choose Quit Zentop to exit completely."))))
         .into_any_element()
 }
 
 fn appearance(monitor: &Entity<Monitor>, query: &str, cx: &App) -> AnyElement {
     let current = monitor.read(cx).theme_name().to_owned();
-    div()
-        .grid()
-        .grid_cols(3)
-        .gap_3()
-        .children(theme::all().enumerate().filter_map(|(i, (name, label))| {
-            if !label.to_lowercase().contains(query) {
-                return None;
-            }
-            let preview = theme::preview(name)?;
-            let selected = name == current;
-            let monitor = monitor.clone();
-            Some(
-                v_flex()
-                    .id(("theme", i))
-                    .cursor_pointer()
+    let mut gallery = v_flex().gap_4();
+    for (group, names) in THEME_GROUPS {
+        let matches: Vec<_> = names
+            .iter()
+            .filter_map(|name| theme::all().find(|(key, _)| key == name))
+            .filter(|(_, label)| matches_theme(label, query))
+            .collect();
+        if matches.is_empty() {
+            continue;
+        }
+        let cards = div()
+            .grid()
+            .grid_cols(2)
+            .gap_1()
+            .children(matches.into_iter().map(|(name, label)| {
+                let preview = theme::preview(name).expect("known theme");
+                let selected = name == current;
+                let monitor = monitor.clone();
+                h_flex()
+                    .id(SharedString::from(name))
+                    .min_h(px(36.))
+                    .px_3()
+                    .py_2()
+                    .gap_2()
                     .rounded(cx.theme().radius)
-                    .h(px(104.))
-                    .border_2()
-                    .border_color(if selected {
-                        cx.theme().primary
-                    } else {
-                        cx.theme().border
-                    })
-                    .overflow_hidden()
-                    .on_click(move |_, _, cx| monitor.update(cx, |m, cx| m.set_theme(name, cx)))
+                    .text_xs()
+                    .cursor_pointer()
+                    .when(selected, |d| d.bg(cx.theme().secondary))
+                    .hover(|d| d.bg(cx.theme().accent))
                     .child(
-                        v_flex()
-                            .flex_1()
-                            .min_h_0()
-                            .p_2()
-                            .gap_1()
-                            .bg(preview.background)
-                            .child(
-                                div()
-                                    .h(px(6.))
-                                    .w(px(64.))
-                                    .rounded_sm()
-                                    .bg(preview.foreground),
-                            )
-                            .child(div().h(px(6.)).w(px(40.)).rounded_sm().bg(preview.muted))
-                            .child(h_flex().gap_1().mt_1().children(
-                                preview.accents.map(|c| div().size_3().rounded_full().bg(c)),
-                            )),
+                        h_flex().gap_0p5().children(
+                            preview
+                                .accents
+                                .into_iter()
+                                .take(3)
+                                .map(|color| div().size_2().rounded_full().bg(color)),
+                        ),
                     )
-                    .child(
-                        h_flex()
-                            .justify_between()
-                            .px_2()
-                            .py_1p5()
-                            .bg(preview.card)
-                            .border_t_1()
-                            .border_color(preview.border)
-                            .text_xs()
-                            .text_color(preview.foreground)
-                            .child(label)
-                            .when(selected, |this| {
-                                this.child(
-                                    Icon::new(IconName::Check)
-                                        .xsmall()
-                                        .text_color(preview.foreground),
-                                )
-                            }),
-                    ),
-            )
-        }))
-        .into_any_element()
-}
-
-fn columns(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
-    let prefs = monitor.read(cx).prefs();
-    v_flex()
-        .gap_2()
-        .child(
-            div()
-                .text_xs()
-                .text_color(cx.theme().muted_foreground)
-                .child("Process Name is always shown."),
-        )
-        .children(
-            Column::ALL
-                .into_iter()
-                .filter(|c| *c != Column::Name)
-                .enumerate()
-                .map(|(i, column)| {
-                    let visible = prefs.column_visible(column.key()) == Some(true);
-                    let monitor = monitor.clone();
-                    Checkbox::new(("column", i))
-                        .label(column.label())
-                        .checked(visible)
-                        .on_click(move |checked, _, cx| {
-                            save(
-                                &monitor,
-                                json!({"appearance": {"columnVisibility": {column.key(): *checked}}}),
-                                cx,
-                            )
-                        })
-                }),
-        )
-        .into_any_element()
+                    .child(label)
+                    .child(div().flex_1())
+                    .when(selected, |d| d.child(Icon::new(IconName::Check).xsmall()))
+                    .on_click(move |_, _, cx| monitor.update(cx, |m, cx| m.set_theme(name, cx)))
+            }));
+        gallery = gallery.child(
+            v_flex()
+                .gap_1()
+                .child(
+                    div()
+                        .px_2()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(*group),
+                )
+                .child(cards),
+        );
+    }
+    gallery.into_any_element()
 }
 
 impl Render for Settings {
@@ -354,8 +252,8 @@ impl Render for Settings {
         let content = match self.pane {
             Pane::General => general(&self.monitor, cx),
             Pane::Appearance => {
-                let query = self.search.read(cx).value().trim().to_lowercase();
-                let matches = theme::all().any(|(_, label)| label.to_lowercase().contains(&query));
+                let query = self.search.read(cx).value().to_string();
+                let matches = theme::all().any(|(_, label)| matches_theme(label, &query));
                 v_flex()
                     .gap_3()
                     .child(
@@ -375,7 +273,6 @@ impl Render for Settings {
                     })
                     .into_any_element()
             }
-            Pane::Columns => columns(&self.monitor, cx),
         };
         let danger = theme::palette(cx).danger;
         v_flex()
@@ -393,18 +290,18 @@ impl Render for Settings {
                 ),
             )
             .child(
-                h_flex()
+                v_flex()
                     .flex_1()
                     .min_h_0()
                     .items_start()
                     .child(
-                        v_flex()
-                            .w(px(180.))
-                            .h_full()
-                            .p_2()
-                            .gap_0p5()
+                        h_flex()
+                            .w_full()
+                            .p_4()
+                            .justify_center()
+                            .gap_1()
                             .bg(theme::palette(cx).card)
-                            .border_r_1()
+                            .border_b_1()
                             .border_color(cx.theme().border)
                             .children(Pane::ALL.map(|pane| {
                                 let selected = pane == self.pane;
@@ -435,6 +332,7 @@ impl Render for Settings {
                     .child(
                         v_flex()
                             .id("settings-pane")
+                            .w_full()
                             .flex_1()
                             .h_full()
                             .overflow_y_scroll()
@@ -459,8 +357,92 @@ impl Render for Settings {
                                         .child(error),
                                 )
                             })
+                            .child(
+                                div()
+                                    .text_sm()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(match self.pane {
+                                        Pane::General => "Choose how Zentop monitors your system.",
+                                        Pane::Appearance => {
+                                            "All your Zentop themes, across every window."
+                                        }
+                                    }),
+                            )
                             .child(content),
                     ),
             )
+            .child(
+                div()
+                    .px_6()
+                    .py_3()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .bg(theme::palette(cx).card)
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child("Changes are saved automatically."),
+            )
+    }
+}
+
+/// The title-bar picker uses the same searchable gallery as Settings.
+pub(super) struct ThemePicker {
+    monitor: Entity<Monitor>,
+    search: Entity<InputState>,
+    _subscriptions: Vec<Subscription>,
+}
+impl ThemePicker {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
+        let monitor = monitor::global(cx);
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find a theme…"));
+        let subscriptions = vec![
+            cx.observe(&monitor, |_, _, cx| cx.notify()),
+            cx.subscribe(&search, |_, _, _: &InputEvent, cx| cx.notify()),
+        ];
+        Self {
+            monitor,
+            search,
+            _subscriptions: subscriptions,
+        }
+    }
+}
+impl Render for ThemePicker {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let query = self.search.read(cx).value().to_string();
+        v_flex()
+            .w(px(352.))
+            .gap_3()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Choose a theme"),
+            )
+            .child(
+                Input::new(&self.search)
+                    .cleanable(true)
+                    .prefix(Icon::new(IconName::Search).small()),
+            )
+            .child(
+                v_flex()
+                    .id("theme-picker-list")
+                    .max_h(px(440.))
+                    .overflow_y_scroll()
+                    .child(appearance(&self.monitor, &query, cx)),
+            )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::matches_theme;
+    #[test]
+    fn theme_search_folds_accents_case_and_whitespace() {
+        for query in ["rose pine", "  ROSE   pine ", "Rosé Pine", "rose\tpine", ""] {
+            assert!(matches_theme("Rosé Pine", query), "{query:?}");
+        }
+        assert!(matches_theme("Rose\u{301} Pine", "rosé pine"));
+        assert!(matches_theme("Tokyo Night", "NIGHT"));
+        assert!(!matches_theme("Rosé Pine", "rose dark"));
     }
 }

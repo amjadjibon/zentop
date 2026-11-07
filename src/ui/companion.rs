@@ -1,11 +1,12 @@
 //! The menu-bar overview: essential readings and the busiest processes in a
 //! small popup anchored to the tray icon. It closes when it loses focus.
 use super::monitor::{self, Monitor};
-use super::process_view::{format_bytes, format_mb, identity, Identity};
-use super::{stats, theme, Windows, SMALL_ICON};
+use super::process_view::{format_bytes, identity, Identity};
+use super::{theme, Windows, SMALL_ICON};
 use crate::native_icons::{Icon, IconRequest};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
@@ -17,8 +18,8 @@ use gpui_kit::{
 use std::collections::HashMap;
 use std::time::Instant;
 
-const WIDTH: f32 = 340.;
-const HEIGHT: f32 = 540.;
+const WIDTH: f32 = 400.;
+const HEIGHT: f32 = 600.;
 const BUSIEST: usize = 5;
 
 /// The tray icon's screen rectangle, in physical pixels.
@@ -201,13 +202,18 @@ impl Overview {
     }
 }
 
-fn metric(label: &'static str, value: String, detail: String, cx: &App) -> impl IntoElement {
+fn metric(
+    label: &'static str,
+    value: Option<f64>,
+    detail: String,
+    color: gpui_kit::Hsla,
+    cx: &App,
+) -> impl IntoElement {
     v_flex()
         .flex_1()
         .min_w_0()
-        .p_2()
-        .rounded(cx.theme().radius)
-        .bg(cx.theme().secondary)
+        .px_2()
+        .gap_2()
         .child(
             div()
                 .text_xs()
@@ -216,13 +222,19 @@ fn metric(label: &'static str, value: String, detail: String, cx: &App) -> impl 
         )
         .child(
             div()
-                .text_lg()
+                .text_xl()
                 .font_weight(FontWeight::SEMIBOLD)
-                .child(value),
+                .child(value.map_or_else(|| "—".into(), |v| format!("{v:.1}%"))),
+        )
+        .child(
+            Progress::new(label)
+                .value(value.unwrap_or(0.) as f32)
+                .color(color)
+                .h(px(6.)),
         )
         .child(
             div()
-                .text_xs()
+                .text_size(px(10.))
                 .truncate()
                 .text_color(cx.theme().muted_foreground)
                 .child(detail),
@@ -234,213 +246,239 @@ impl Render for Overview {
         let monitor = self.monitor.read(cx);
         let paused = monitor.paused;
         let frame = monitor.frame.clone();
-        let history = monitor.history.clone();
-        let unavailable = monitor.error.is_some();
+        let error = monitor.error.clone();
         let busiest = self.busiest(cx);
         let palette = theme::palette(cx);
         let pause_monitor = self.monitor.clone();
-
         let readings = frame.as_ref().map(|frame| {
             let s = &frame.stats;
             let cpu = (!s.cpu_usage.is_empty()).then(|| {
                 s.cpu_usage.iter().map(|v| *v as f64).sum::<f64>() / s.cpu_usage.len() as f64
             });
             let memory =
-                (s.memory_total > 0).then(|| s.memory_used as f64 / s.memory_total as f64 * 100.0);
+                (s.memory_total > 0).then(|| s.memory_used as f64 / s.memory_total as f64 * 100.);
             let gpu = frame.gpus.first();
             let rate =
                 |v: Option<u64>| v.map_or_else(|| "—".into(), |b| format!("{}/s", format_bytes(b)));
             v_flex()
-                .gap_2()
+                .gap_3()
                 .child(
                     h_flex()
-                        .gap_2()
                         .child(metric(
                             "CPU",
-                            cpu.map_or_else(|| "—".into(), |v| format!("{v:.1}%")),
+                            cpu,
                             format!("{} cores", s.cpu_usage.len()),
+                            palette.charts[0],
                             cx,
                         ))
                         .child(metric(
                             "Memory",
-                            memory.map_or_else(|| "—".into(), |v| format!("{v:.1}%")),
+                            memory,
                             format!("{} used", format_bytes(s.memory_used)),
-                            cx,
-                        )),
-                )
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(metric(
-                            "GPU",
-                            gpu.and_then(|g| g.utilization)
-                                .map_or_else(|| "—".into(), |v| format!("{v:.1}%")),
-                            gpu.map_or_else(|| "No readings".into(), |g| g.name.clone()),
+                            palette.charts[2],
                             cx,
                         ))
                         .child(metric(
-                            "Network",
-                            rate(s.network_rx_bytes),
-                            format!("↑ {}", rate(s.network_tx_bytes)),
+                            "GPU",
+                            gpu.and_then(|g| g.utilization),
+                            gpu.map_or_else(|| "Unavailable".into(), |g| g.name.clone()),
+                            palette.charts[1],
                             cx,
                         )),
                 )
                 .child(
                     h_flex()
-                        .justify_between()
+                        .p_3()
+                        .gap_3()
+                        .rounded_lg()
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .bg(cx.theme().muted.opacity(0.3))
                         .text_xs()
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Free storage")
-                        .child(format_bytes(s.disk_free_bytes)),
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Network"),
+                                )
+                                .child(format!("↓ {}", rate(s.network_rx_bytes)))
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("↑ {}", rate(s.network_tx_bytes))),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .flex_1()
+                                .gap_1p5()
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Storage free"),
+                                )
+                                .child(format_bytes(s.disk_free_bytes))
+                                .child(
+                                    div()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(format!("of {}", format_bytes(s.disk_total_bytes))),
+                                ),
+                        ),
                 )
-                .child(div().h(px(36.)).flex().child(stats::trend(
-                    &history,
-                    |s| s.cpu,
-                    palette.charts[0],
-                    unavailable,
-                )))
         });
-
-        div().size_full().p_1().child(
+        div().size_full().p_2().child(
             v_flex()
                 .size_full()
-                .gap_2()
-                .p_3()
-                .rounded(cx.theme().radius_lg)
+                .rounded_2xl()
                 .border_1()
                 .border_color(cx.theme().border)
-                .bg(cx.theme().background)
+                .bg(palette.card)
                 .text_color(cx.theme().foreground)
                 .shadow_lg()
                 .child(
                     h_flex()
-                        .justify_between()
+                        .p_4()
+                        .gap_2()
+                        .border_b_1()
+                        .border_color(cx.theme().border)
+                        .child(img(SMALL_ICON.clone()).size_7())
                         .child(
-                            h_flex()
-                                .gap_2()
-                                .child(img(SMALL_ICON.clone()).size_5())
+                            v_flex()
+                                .flex_1()
+                                .child(div().font_weight(FontWeight::SEMIBOLD).child("Zentop"))
                                 .child(
                                     div()
-                                        .text_sm()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .child("Zentop"),
-                                )
-                                .child(
-                                    h_flex()
-                                        .gap_1()
                                         .text_xs()
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(div().size_1p5().rounded_full().bg(if paused {
-                                            cx.theme().muted_foreground
+                                        .child(if paused {
+                                            "Updates paused"
+                                        } else if frame.is_some() {
+                                            "Live system overview"
                                         } else {
-                                            palette.running
-                                        }))
-                                        .child(if paused { "Paused" } else { "Live" }),
+                                            "Reading this machine…"
+                                        }),
                                 ),
                         )
                         .child(
-                            Button::new("overview-pause")
+                            Button::new("open-overview-main")
                                 .ghost()
-                                .xsmall()
-                                .icon(if paused {
-                                    IconName::Play
-                                } else {
-                                    IconName::Pause
-                                })
-                                .tooltip(if paused {
-                                    "Resume updates"
-                                } else {
-                                    "Pause updates"
-                                })
-                                .on_click(move |_, _, cx| {
-                                    pause_monitor.update(cx, |m, cx| m.set_paused(!paused, cx))
-                                }),
+                                .small()
+                                .icon(IconName::ArrowUpRight)
+                                .tooltip("Open Zentop")
+                                .on_click(|_, _, cx| cx.defer(super::open_main)),
                         ),
-                )
-                .children(readings)
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(FontWeight::MEDIUM)
-                        .text_color(cx.theme().muted_foreground)
-                        .child("Busiest processes"),
                 )
                 .child(
                     v_flex()
                         .flex_1()
                         .min_h_0()
-                        .overflow_hidden()
-                        .gap_0p5()
-                        .children(busiest.into_iter().enumerate().map(|(i, p)| {
-                            let id = identity(&p);
-                            let icon = self.icons.get(&id).cloned().flatten();
+                        .p_4()
+                        .gap_3()
+                        .when_some(error, |this, error| {
+                            this.child(div().text_xs().text_color(palette.danger).child(error))
+                        })
+                        .children(readings)
+                        .child(
                             h_flex()
-                                .id(("busy", i))
-                                .gap_2()
-                                .px_2()
-                                .py_1()
-                                .rounded(cx.theme().radius)
-                                .cursor_pointer()
-                                .hover(|this| this.bg(cx.theme().accent))
-                                .on_click(move |_, _, cx| {
-                                    let id = id;
-                                    cx.defer(move |cx| super::show_process(id, cx));
-                                })
-                                .child(match icon {
-                                    Some(icon) => {
-                                        img(icon).size_4().flex_shrink_0().into_any_element()
-                                    }
-                                    None => div()
-                                        .size_4()
-                                        .flex_shrink_0()
-                                        .rounded_sm()
-                                        .bg(cx.theme().muted)
-                                        .into_any_element(),
-                                })
+                                .justify_between()
+                                .text_xs()
+                                .child("Top CPU processes")
                                 .child(
                                     div()
-                                        .flex_1()
-                                        .min_w_0()
-                                        .truncate()
-                                        .text_sm()
-                                        .child(p.name.clone()),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_family(cx.theme().mono_font_family.clone())
-                                        .when(p.cpu_usage > 50.0, |d| d.text_color(palette.danger))
-                                        .child(format!("{:.1}%", p.cpu_usage)),
-                                )
-                                .child(
-                                    div()
-                                        .w(px(72.))
-                                        .text_right()
-                                        .text_xs()
-                                        .font_family(cx.theme().mono_font_family.clone())
                                         .text_color(cx.theme().muted_foreground)
-                                        .child(format_mb(p.memory_usage)),
-                                )
-                        })),
+                                        .child("CPU · RAM"),
+                                ),
+                        )
+                        .child(
+                            v_flex()
+                                .rounded_lg()
+                                .border_1()
+                                .border_color(cx.theme().border)
+                                .children(busiest.into_iter().enumerate().map(|(i, p)| {
+                                    let id = identity(&p);
+                                    let icon = self.icons.get(&id).cloned().flatten();
+                                    h_flex()
+                                        .id(("busy", i))
+                                        .gap_2p5()
+                                        .px_3()
+                                        .py_2()
+                                        .border_b_1()
+                                        .border_color(cx.theme().border)
+                                        .cursor_pointer()
+                                        .hover(|d| d.bg(cx.theme().accent))
+                                        .on_click(move |_, _, cx| {
+                                            cx.defer(move |cx| super::show_process(id, cx))
+                                        })
+                                        .child(match icon {
+                                            Some(icon) => img(icon)
+                                                .size_5()
+                                                .flex_shrink_0()
+                                                .into_any_element(),
+                                            None => div()
+                                                .size_5()
+                                                .flex_shrink_0()
+                                                .bg(cx.theme().muted)
+                                                .into_any_element(),
+                                        })
+                                        .child(
+                                            div()
+                                                .flex_1()
+                                                .min_w_0()
+                                                .truncate()
+                                                .text_xs()
+                                                .child(p.name),
+                                        )
+                                        .child(
+                                            div().text_xs().child(format!("{:.1}%", p.cpu_usage)),
+                                        )
+                                        .child(
+                                            div()
+                                                .w(px(64.))
+                                                .text_right()
+                                                .text_xs()
+                                                .text_color(cx.theme().muted_foreground)
+                                                .child(format_bytes(p.memory_usage)),
+                                        )
+                                })),
+                        )
+                        .child(
+                            div()
+                                .text_size(px(10.))
+                                .text_color(cx.theme().muted_foreground)
+                                .child("Select to inspect. Process CPU can exceed 100%."),
+                        ),
                 )
                 .child(
                     h_flex()
+                        .p_3()
                         .gap_2()
+                        .justify_between()
+                        .border_t_1()
+                        .border_color(cx.theme().border)
                         .child(
-                            Button::new("open-main")
-                                .primary()
+                            Button::new("overview-pause")
+                                .outline()
                                 .small()
-                                .flex_1()
-                                .label("Open Zentop")
-                                .on_click(|_, _, cx| cx.defer(super::open_main)),
+                                .icon(if paused {
+                                    IconName::Play
+                                } else {
+                                    IconName::Pause
+                                })
+                                .label(if paused { "Resume" } else { "Pause" })
+                                .on_click(move |_, _, cx| {
+                                    pause_monitor.update(cx, |m, cx| m.set_paused(!paused, cx))
+                                }),
                         )
                         .child(
-                            Button::new("overview-settings")
+                            Button::new("open-main")
                                 .ghost()
                                 .small()
-                                .icon(IconName::Settings)
-                                .tooltip("Settings")
-                                .on_click(|_, _, cx| cx.defer(super::open_settings)),
+                                .label("Open Zentop")
+                                .icon(IconName::ArrowUpRight)
+                                .on_click(|_, _, cx| cx.defer(super::open_main)),
                         )
                         .child(
                             Button::new("overview-quit")

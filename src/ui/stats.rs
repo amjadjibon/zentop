@@ -120,6 +120,14 @@ fn headline(
     caption: impl Into<SharedString>,
     cx: &App,
 ) -> impl IntoElement {
+    let caption = caption.into();
+    let size = if caption == "Average utilization" {
+        30.
+    } else if caption == "Uptime" {
+        20.
+    } else {
+        24.
+    };
     let unit = if value.is_some() { unit } else { "" };
     v_flex()
         .child(
@@ -128,7 +136,7 @@ fn headline(
                 .gap_0p5()
                 .child(
                     div()
-                        .text_2xl()
+                        .text_size(px(size))
                         .font_weight(FontWeight::SEMIBOLD)
                         .child(value.unwrap_or_else(|| "—".into())),
                 )
@@ -143,7 +151,7 @@ fn headline(
             div()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
-                .child(caption.into()),
+                .child(caption),
         )
 }
 

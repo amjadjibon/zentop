@@ -458,10 +458,14 @@ impl ProcessList {
         let pinned = self
             .process(row)
             .is_some_and(|p| self.pinned.contains(&p.command));
-        let background = if self.hovered == Some(row) {
-            Some(cx.theme().accent)
-        } else if pinned {
-            Some(cx.theme().primary.opacity(0.06))
+        let background = if pinned {
+            Some(theme::mix(
+                theme::palette(cx).card,
+                cx.theme().primary,
+                0.06,
+            ))
+        } else if self.hovered == Some(row) {
+            Some(theme::mix(theme::palette(cx).card, cx.theme().muted, 0.5))
         } else {
             None
         };
