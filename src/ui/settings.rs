@@ -6,13 +6,15 @@ use super::theme;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
+use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::switch::Switch;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, px, AnyElement, App, Context, Entity, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
+    div, px, AnyElement, App, AppContext, Context, Entity, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, Render, SharedString, StatefulInteractiveElement, Styled,
+    Subscription, Window,
 };
 use serde_json::{json, Value};
 
@@ -53,13 +55,23 @@ pub struct Settings {
     monitor: Entity<Monitor>,
     pane: Pane,
     _observe: Subscription,
+    search: Entity<InputState>,
+    _search_subscription: Subscription,
 }
 
 impl Settings {
-    pub fn new(_: &mut Window, cx: &mut Context<Self>) -> Self {
+    pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let monitor = monitor::global(cx);
         let observe = cx.observe(&monitor, |_, _, cx| cx.notify());
+        let search = cx.new(|cx| InputState::new(window, cx).placeholder("Find a theme…"));
+        let subscription = cx.subscribe_in(&search, window, |_, _, event: &InputEvent, _, cx| {
+            if matches!(event, InputEvent::Change) {
+                cx.notify();
+            }
+        });
         Self {
+            search,
+            _search_subscription: subscription,
             monitor,
             pane: Pane::General,
             _observe: observe,
@@ -233,13 +245,16 @@ fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-fn appearance(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
+fn appearance(monitor: &Entity<Monitor>, query: &str, cx: &App) -> AnyElement {
     let current = monitor.read(cx).theme_name().to_owned();
     div()
         .grid()
         .grid_cols(3)
         .gap_3()
         .children(theme::all().enumerate().filter_map(|(i, (name, label))| {
+            if !label.to_lowercase().contains(query) {
+                return None;
+            }
             let preview = theme::preview(name)?;
             let selected = name == current;
             let monitor = monitor.clone();
@@ -338,7 +353,28 @@ impl Render for Settings {
         let error = self.monitor.read(cx).prefs_error.clone();
         let content = match self.pane {
             Pane::General => general(&self.monitor, cx),
-            Pane::Appearance => appearance(&self.monitor, cx),
+            Pane::Appearance => {
+                let query = self.search.read(cx).value().trim().to_lowercase();
+                let matches = theme::all().any(|(_, label)| label.to_lowercase().contains(&query));
+                v_flex()
+                    .gap_3()
+                    .child(
+                        Input::new(&self.search)
+                            .cleanable(true)
+                            .prefix(Icon::new(IconName::Search).small()),
+                    )
+                    .child(appearance(&self.monitor, &query, cx))
+                    .when(!matches, |this| {
+                        this.child(
+                            div()
+                                .p_3()
+                                .text_sm()
+                                .text_color(cx.theme().muted_foreground)
+                                .child("No matching themes."),
+                        )
+                    })
+                    .into_any_element()
+            }
             Pane::Columns => columns(&self.monitor, cx),
         };
         let danger = theme::palette(cx).danger;
