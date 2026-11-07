@@ -32,18 +32,18 @@ pub fn render(r: &Readings, cx: &App) -> impl IntoElement {
     h_flex()
         .gap_3()
         .px_4()
-        .py_3()
+        .py_4()
         .flex_shrink_0()
-        .h(px(232.))
+        .h(px(272.))
         .border_b_1()
         .border_color(cx.theme().border)
         // Proportions of the original layout: CPU and Network get extra room.
-        .child(cpu(r, &palette, cx).flex_basis(relative(0.21)))
-        .child(memory(r, &palette, cx).flex_basis(relative(0.14)))
-        .child(gpu(r, &palette, cx).flex_basis(relative(0.14)))
-        .child(storage(r, &palette, cx).flex_basis(relative(0.14)))
-        .child(system(r, cx).flex_basis(relative(0.15)))
-        .child(network(r, &palette, cx).flex_basis(relative(0.17)))
+        .child(cpu(r, &palette, cx).flex_basis(relative(1.5 / 6.75)))
+        .child(memory(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
+        .child(gpu(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
+        .child(storage(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
+        .child(system(r, cx).flex_basis(relative(1.05 / 6.75)))
+        .child(network(r, &palette, cx).flex_basis(relative(1.2 / 6.75)))
 }
 
 fn card(
@@ -59,7 +59,7 @@ fn card(
         .min_w_0()
         .h_full()
         .gap_1()
-        .p_3()
+        .p_4()
         .rounded(cx.theme().radius_lg)
         .border_1()
         .border_color(cx.theme().border)
@@ -180,7 +180,7 @@ fn chart_block(chart: impl IntoElement, scale: String, cx: &App) -> impl IntoEle
         .pt_1()
         .child(
             div()
-                .flex_1()
+                .h(px(48.))
                 .min_h(px(MIN_CHART_HEIGHT))
                 .w_full()
                 .flex()
@@ -288,7 +288,7 @@ fn gpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
         return card(IconName::Gpu, "GPU", accent, None, Resource::Gpu, cx).child(headline(
             None,
             "%",
-            "No GPU readings on this system",
+            "No supported GPU detected",
             cx,
         ));
     };
@@ -314,9 +314,6 @@ fn gpu(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
                     .text_color(cx.theme().muted_foreground)
                     .child(format!("{memory_kind} · {}", format_bytes(used))),
             )
-        })
-        .when_some(device.temperature, |this, t| {
-            this.child(line("Temperature", format!("{t:.0} °C"), cx))
         })
         .child(chart_block(
             trend(
@@ -363,7 +360,7 @@ fn storage(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Div {
                 Progress::new("disk")
                     .value(used.unwrap_or(0.0) as f32)
                     .color(color)
-                    .h(px(6.)),
+                    .h(px(8.)),
             )
             .child(
                 h_flex()
@@ -401,7 +398,7 @@ fn system(r: &Readings, cx: &App) -> gpui_kit::Div {
             )
     };
     card(
-        IconName::Monitor,
+        IconName::Server,
         "System",
         accent,
         None,

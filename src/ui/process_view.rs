@@ -198,6 +198,7 @@ pub enum Operator {
 }
 
 impl Operator {
+    pub const ALL: [Self; 5] = [Self::Gt, Self::Lt, Self::Eq, Self::Ge, Self::Le];
     pub fn symbol(self) -> &'static str {
         match self {
             Operator::Gt => ">",
@@ -205,15 +206,6 @@ impl Operator {
             Operator::Eq => "=",
             Operator::Ge => "≥",
             Operator::Le => "≤",
-        }
-    }
-    pub fn next(self) -> Self {
-        match self {
-            Operator::Gt => Operator::Lt,
-            Operator::Lt => Operator::Eq,
-            Operator::Eq => Operator::Ge,
-            Operator::Ge => Operator::Le,
-            Operator::Le => Operator::Gt,
         }
     }
     fn test(self, value: f64, target: f64) -> bool {
@@ -725,11 +717,13 @@ mod tests {
 
     #[test]
     fn gpu_filters_distinguish_unknown_from_zero() {
-        let mut filters = Filters::default();
-        filters.gpu = Rule {
-            enabled: true,
-            operator: Operator::Ge,
-            value: 0.0,
+        let filters = Filters {
+            gpu: Rule {
+                enabled: true,
+                operator: Operator::Ge,
+                value: 0.0,
+            },
+            ..Filters::default()
         };
         let mut p = process(1, 0, "a");
         let q = Query::new("");

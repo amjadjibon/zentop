@@ -19,12 +19,12 @@ use gpui_kit::{
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
-const ACTIONS_WIDTH: f32 = 104.;
+const ACTIONS_WIDTH: f32 = 112.;
 
 type HoverHandler = Box<dyn Fn(&bool, &mut gpui_kit::Window, &mut gpui_kit::App)>;
 type ClickHandler = Box<dyn Fn(&ClickEvent, &mut gpui_kit::Window, &mut gpui_kit::App)>;
-const ROW_HEIGHT: f32 = 36.;
-const HEADER_HEIGHT: f32 = 36.;
+const ROW_HEIGHT: f32 = 41.;
+const HEADER_HEIGHT: f32 = 40.;
 
 enum Row {
     Flat(usize),
@@ -392,7 +392,7 @@ impl ProcessList {
                                     .flex_shrink_0()
                                     .border_l_1()
                                     .border_color(border)
-                                    .bg(cx.theme().background)
+                                    .bg(theme::palette(cx).card)
                                     .children(
                                         (0..self.rows.len()).map(|row| self.actions_row(row, cx)),
                                     ),
@@ -507,7 +507,7 @@ impl ProcessList {
     fn data_row(&self, row: usize, widths: &[f32], cx: &mut Context<Zentop>) -> AnyElement {
         let id = self.process(row).map(identity);
         let (hover, open) = Self::hover_and_open(row, id, cx);
-        let mut cells = h_flex();
+        let mut cells = h_flex().bg(theme::palette(cx).card);
         for (&column, &width) in self.columns.iter().zip(widths) {
             cells = cells.child(
                 h_flex()
@@ -543,12 +543,9 @@ impl ProcessList {
                 Button::new(("pin", row))
                     .ghost()
                     .xsmall()
-                    .icon(if pinned {
-                        IconName::PinOff
-                    } else {
-                        IconName::Pin
-                    })
-                    .tooltip(if pinned { "Unpin" } else { "Pin to top" })
+                    .icon(IconName::Pin)
+                    .when(pinned, |b| b.text_color(cx.theme().primary))
+                    .tooltip(if pinned { "Unpin" } else { "Pin" })
                     .on_click(cx.listener(move |this, _, _, cx| {
                         this.list.toggle_pin(&command);
                         cx.notify();
@@ -559,7 +556,7 @@ impl ProcessList {
                     .ghost()
                     .xsmall()
                     .icon(IconName::Info)
-                    .tooltip("Details")
+                    .tooltip("Show details")
                     .on_click(move |_, window, cx| details::open(id, window, cx)),
             )
             .child(
@@ -638,7 +635,7 @@ impl ProcessList {
                             }))
                             .into_any_element()
                     } else {
-                        div().size_5().flex_shrink_0().into_any_element()
+                        div().size_6().flex_shrink_0().into_any_element()
                     })
             })
             .child(match icon {
@@ -650,7 +647,16 @@ impl ProcessList {
                     .text_color(cx.theme().muted_foreground)
                     .into_any_element(),
             })
-            .child(div().min_w_0().truncate().text_sm().child(p.name.clone()))
+            .child(
+                div()
+                    .id(("process-name", row))
+                    .min_w_0()
+                    .truncate()
+                    .text_size(px(13.))
+                    .cursor_pointer()
+                    .on_click(move |_, window, cx| details::open(id, window, cx))
+                    .child(p.name.clone()),
+            )
             .when_some(tree.filter(|t| t.family_count > 1), |this, tree| {
                 this.child(
                     div()
@@ -690,7 +696,8 @@ impl ProcessList {
                     .when(cpu > 50.0, |d| {
                         d.px_1p5()
                             .rounded_sm()
-                            .bg(palette.danger.opacity(0.12))
+                            .py_1()
+                            .bg(palette.danger.opacity(0.10))
                             .text_color(palette.danger)
                     })
                     .font_family(mono)

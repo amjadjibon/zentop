@@ -112,6 +112,13 @@ fn collect_from(root: &Path) -> Vec<GpuDevice> {
     result
 }
 
+fn hwmon_number(device: &Path, field: &str) -> Option<u64> {
+    fs::read_dir(device.join("hwmon"))
+        .ok()?
+        .flatten()
+        .find_map(|entry| integer(&entry.path(), field))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,11 +157,4 @@ mod tests {
         assert_eq!(devices[0].memory_used, None);
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-fn hwmon_number(device: &Path, field: &str) -> Option<u64> {
-    fs::read_dir(device.join("hwmon"))
-        .ok()?
-        .flatten()
-        .find_map(|entry| integer(&entry.path(), field))
 }

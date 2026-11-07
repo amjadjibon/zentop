@@ -2,7 +2,7 @@
 use super::monitor::{self, Monitor};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
 use super::table::ProcessList;
-use super::{stats, theme, OpenAbout, OpenSettings, ShowOverview, SMALL_ICON};
+use super::{stats, theme, OpenAbout, OpenSettings, Quit, ShowOverview, SMALL_ICON};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
@@ -213,17 +213,17 @@ impl Zentop {
         } else {
             theme::palette(cx).running
         };
-        TitleBar::new().child(
+        TitleBar::new().h(px(48.)).bg(theme::palette(cx).card).border_b_1().border_color(cx.theme().border).child(
             h_flex()
                 .w_full()
                 .pr_3()
                 // Leave room for the macOS window controls drawn over the title bar.
-                .when(cfg!(target_os = "macos"), |this| this.pl(px(72.)))
+                .when(cfg!(target_os = "macos"), |this| this.pl(px(96.)))
                 .justify_between()
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(img(SMALL_ICON.clone()).size_4())
+                        .child(img(SMALL_ICON.clone()).size_5())
                         .child(
                             div()
                                 .text_sm()
@@ -306,9 +306,11 @@ impl Zentop {
                                 .tooltip("More")
                                 .dropdown_menu(|menu, _, _| {
                                     menu.menu("Settings…", Box::new(OpenSettings))
-                                        .menu("Menu-bar Overview", Box::new(ShowOverview))
                                         .separator()
                                         .menu("About Zentop", Box::new(OpenAbout))
+                                        .item(PopupMenuItem::new("Check for updates…").on_click(|_, _, cx| cx.open_url("https://github.com/Abdenasser/neohtop/releases")))
+                                        .separator()
+                                        .menu("Quit Zentop", Box::new(Quit))
                                 }),
                         ),
                 ),
@@ -332,7 +334,7 @@ impl Zentop {
             )
             .content(move |_, _, cx| {
                 let filters = entity.read(cx).filters.clone();
-                let mut rules = v_flex().gap_2().w(px(320.)).p_1();
+                let mut rules = v_flex().gap_3().w(px(352.)).p_1();
                 for (i, kind) in RuleKind::ALL.into_iter().enumerate() {
                     let rule = *filters.rule(kind);
                     let toggle = entity.clone();
@@ -360,26 +362,37 @@ impl Zentop {
                                     .outline()
                                     .label(rule.operator.symbol())
                                     .accessibility_label(format!("{} comparison", kind.label()))
-                                    .on_click(move |_, _, cx| {
-                                        cycle.update(cx, |this, cx| {
-                                            this.update_filters(cx, |f| {
-                                                let r = f.rule_mut(kind);
-                                                r.operator = r.operator.next();
-                                            })
-                                        });
+                                    .disabled(!rule.enabled)
+                                    .dropdown_menu(move |mut menu, _, _| {
+                                        for operator in process_view::Operator::ALL {
+                                            let cycle = cycle.clone();
+                                            menu = menu.item(
+                                                PopupMenuItem::new(operator.symbol())
+                                                    .checked(operator == rule.operator)
+                                                    .on_click(move |_, _, cx| {
+                                                        cycle.update(cx, |this, cx| {
+                                                            this.update_filters(cx, |f| {
+                                                                f.rule_mut(kind).operator = operator
+                                                            })
+                                                        });
+                                                    }),
+                                            );
+                                        }
+                                        menu
                                     }),
                             )
                             .child(
                                 div().w(px(96.)).child(
                                     NumberInput::new(&thresholds[i])
                                         .small()
+                                        .disabled(!rule.enabled)
                                         .suffix(div().text_xs().child(kind.unit()))
                                         .accessibility_label(format!("{} threshold", kind.label())),
                                 ),
                             ),
                     );
                 }
-                let mut statuses = h_flex().flex_wrap().gap_3();
+                let mut statuses = div().grid().grid_cols(2).gap_3();
                 for (i, status) in STATUSES.into_iter().enumerate() {
                     let checked = filters.statuses.iter().any(|s| s == status);
                     let entity = entity.clone();
@@ -400,8 +413,21 @@ impl Zentop {
                             }),
                     );
                 }
+                let reset = entity.clone();
                 v_flex()
-                    .gap_3()
+                    .gap_4()
+                    .child(
+                        div()
+                            .text_sm()
+                            .font_weight(FontWeight::MEDIUM)
+                            .child("Filter processes"),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Combine conditions with name, command or PID search."),
+                    )
                     .child(rules)
                     .child(
                         div()
@@ -410,6 +436,35 @@ impl Zentop {
                             .child("Status"),
                     )
                     .child(statuses)
+                    .child(
+                        h_flex()
+                            .justify_between()
+                            .border_t_1()
+                            .border_color(cx.theme().border)
+                            .pt_3()
+                            .child(div().text_xs().child(if count == 0 {
+                                "No filters applied".into()
+                            } else {
+                                format!("{count} active conditions")
+                            }))
+                            .child(
+                                Button::new("reset-filters")
+                                    .ghost()
+                                    .small()
+                                    .label("Reset filters")
+                                    .disabled(count == 0)
+                                    .on_click(move |_, _, cx| {
+                                        reset.update(cx, |this, cx| {
+                                            this.update_filters(cx, |f| {
+                                                for kind in RuleKind::ALL {
+                                                    f.rule_mut(kind).enabled = false;
+                                                }
+                                                f.statuses.clear();
+                                            })
+                                        });
+                                    }),
+                            ),
+                    )
             })
     }
 
@@ -431,7 +486,7 @@ impl Zentop {
                 .icon(icon)
                 .label(label)
         };
-        h_flex()
+        let toolbar = h_flex()
             .gap_3()
             .px_4()
             .py_3()
@@ -449,7 +504,7 @@ impl Zentop {
                     ),
             )
             .child(
-                div().w(px(360.)).child(
+                div().flex_1().min_w(px(224.)).max_w(px(448.)).child(
                     Input::new(&self.search).cleanable(true).prefix(
                         Icon::new(IconName::Search)
                             .small()
@@ -464,7 +519,7 @@ impl Zentop {
                     .icon(IconName::CircleQuestionMark)
                     .tooltip(
                         "Search names, commands or PIDs. Separate terms with commas. \
-                         Use :3000 or port:443 to find what owns a port.",
+                         Use :3000 or port:443 to find what owns a port. Names support regular expressions. Escape clears search.",
                     ),
             )
             .child(self.render_filters(cx))
@@ -516,7 +571,39 @@ impl Zentop {
                         }
                         menu
                     }),
-            )
+            );
+        v_flex()
+            .bg(theme::palette(cx).card)
+            .child(toolbar)
+            .when(searching || tree, |this| {
+                this.child(
+                    h_flex()
+                        .px_4()
+                        .pb_2()
+                        .gap_2()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .when(searching, |this| {
+                            this.child(format!("{} of {total} processes match", delegate.matching))
+                                .child(
+                                    Button::new("clear-all")
+                                        .ghost()
+                                        .xsmall()
+                                        .label("Clear all")
+                                        .on_click(cx.listener(|this, _, window, cx| {
+                                            this.clear_search_and_filters(window, cx)
+                                        })),
+                                )
+                        })
+                        .when(tree, |this| {
+                            this.child(if searching {
+                                "Matching branches expanded · totals include hidden children"
+                            } else {
+                                "App families · combined CPU and memory"
+                            })
+                        }),
+                )
+            })
     }
 
     fn set_page(&mut self, page: usize, cx: &mut Context<Self>) {
@@ -553,10 +640,11 @@ impl Zentop {
             .flex_shrink_0()
             .justify_between()
             .px_4()
-            .py_2()
+            .py_3()
+            .bg(theme::palette(cx).card)
             .border_t_1()
             .border_color(cx.theme().border)
-            .text_sm()
+            .text_xs()
             .text_color(cx.theme().muted_foreground)
             .child(format!("{results} {noun}"))
             .child(
