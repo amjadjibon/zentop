@@ -60,13 +60,18 @@ impl Monitor {
                 sampling::interval(prefs.behavior("refreshRate").as_u64().unwrap_or(3000));
         }
         let sampler = cx.spawn(async move |this, cx| loop {
-            // With every window closed (kept running in the tray) nobody is
-            // looking, so stop capturing until a window opens again.
+            // A hidden, minimized or fully occluded window still exists in
+            // cx.windows(). Capture only while a window can show the result.
             let Ok(job) = this.update(cx, |this, cx| {
-                if cx.windows().is_empty() {
-                    None
-                } else {
+                let visible = cx.windows().into_iter().any(|handle| {
+                    handle
+                        .update(cx, |_, window, _| window.is_visible())
+                        .unwrap_or(false)
+                });
+                if visible {
                     this.poll_job()
+                } else {
+                    None
                 }
             }) else {
                 break;
