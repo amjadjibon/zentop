@@ -237,18 +237,18 @@ impl ProcessList {
         self.available_width = width;
     }
 
-    /// Column widths: each column's natural width, plus any spare room shared
-    /// by the text columns. When the columns do not fit they keep their natural
-    /// widths and scroll sideways under the pinned Actions column.
+    /// Column widths. Every data column scales with the window in proportion
+    /// to its natural width; only Actions is fixed. When the columns do not
+    /// fit they keep their natural widths and scroll sideways under Actions.
     fn widths(&self) -> Vec<f32> {
         let natural: f32 = self.columns.iter().map(|c| c.width()).sum();
         let room = self.available_width - ACTIONS_WIDTH;
-        let spare = (room - natural).max(0.);
-        let growing = self.columns.iter().filter(|c| c.grows()).count().max(1) as f32;
-        self.columns
-            .iter()
-            .map(|c| c.width() + if c.grows() { spare / growing } else { 0. })
-            .collect()
+        let scale = if natural > 0. {
+            (room / natural).max(1.)
+        } else {
+            1.
+        };
+        self.columns.iter().map(|c| c.width() * scale).collect()
     }
 
     /// Processes, or process families in tree view, across all pages.

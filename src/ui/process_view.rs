@@ -105,14 +105,6 @@ impl Column {
         )
     }
 
-    /// Text columns absorb spare width when the window is wider than needed.
-    pub fn grows(self) -> bool {
-        matches!(
-            self,
-            Column::Name | Column::Command | Column::Root | Column::Environ
-        )
-    }
-
     /// Default widths: the standard columns fit the 1120pt minimum window.
     pub fn width(self) -> f32 {
         match self {
