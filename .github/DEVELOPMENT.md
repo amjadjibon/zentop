@@ -24,6 +24,9 @@ cargo install cargo-packager --locked
 cargo build --release
 cargo packager --release
 
+# macOS DMG into artifacts/ (ad-hoc signed; pass aarch64 or x86_64 to pick)
+scripts/build-dmg.sh
+
 # RPM (Linux)
 cargo install cargo-generate-rpm --locked
 cargo generate-rpm
