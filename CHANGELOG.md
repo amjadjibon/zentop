@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- On macOS, helper processes now count toward the app they work for, such as a webview's WebKit content, GPU and networking processes. Tree view nests them under the app with combined CPU and memory, and process details show a **Process family** total and a **Belongs to** link.
 - Zentop now lives at [amjadjibon/zentop](https://github.com/amjadjibon/zentop), credited as a fork of NeoHtop by Abdenasser. README, guides and screenshots describe Zentop.
 - Rename the app to **Zentop** (bundle identifier `com.zentop.app`). Settings from NeoHtop are imported on first launch; the old NeoHtop settings folder is left untouched.
 - New app icon and menu-bar glyph: an open ensō ring with a dot in its gap. Sources live in `assets/brand/`.

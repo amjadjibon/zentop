@@ -515,27 +515,26 @@ struct Total {
     pinned: bool,
 }
 
-/// Groups processes into families. `matching` limits rows to matches and their
-/// ancestors and keeps those branches open; aggregates always cover the whole
-/// family. Memory is summed RSS, so shared pages can be counted more than once.
-pub fn build_tree(
-    processes: &[ProcessInfo],
-    order: &[usize],
-    expanded: &HashSet<Identity>,
-    matching: Option<&HashSet<usize>>,
-    sort: Sort,
-    pinned: &HashSet<String>,
-) -> (Vec<TreeRow>, usize) {
+/// Each process's place in a family, as indexes into `processes`. A helper
+/// that macOS attributes to an app (see `ProcessInfo::owner`) belongs to that
+/// app; everything else belongs to its parent. A parent that started after
+/// its child is a reused PID and is ignored, and cycles are cut.
+pub fn family_parents(processes: &[ProcessInfo], order: &[usize]) -> HashMap<usize, usize> {
     let by_pid: HashMap<u32, usize> = order.iter().map(|&i| (processes[i].pid, i)).collect();
     let mut parents: HashMap<usize, usize> = HashMap::new();
     for &i in order {
         let p = &processes[i];
-        if let Some(&parent) = by_pid.get(&p.ppid) {
-            let q = &processes[parent];
-            let newer_parent = q.start_time > 0 && p.start_time > 0 && q.start_time > p.start_time;
-            if parent != i && !newer_parent {
-                parents.insert(i, parent);
-            }
+        let candidates = p.owner.into_iter().chain([p.ppid]);
+        let parent = candidates
+            .filter_map(|pid| by_pid.get(&pid).copied())
+            .find(|&parent| {
+                let q = &processes[parent];
+                let newer_parent =
+                    q.start_time > 0 && p.start_time > 0 && q.start_time > p.start_time;
+                parent != i && !newer_parent
+            });
+        if let Some(parent) = parent {
+            parents.insert(i, parent);
         }
     }
     // Resolve every parent chain once; cut an edge where a cycle closes.
@@ -557,6 +556,21 @@ pub fn build_tree(
         }
         resolved.extend(chain);
     }
+    parents
+}
+
+/// Groups processes into families. `matching` limits rows to matches and their
+/// ancestors and keeps those branches open; aggregates always cover the whole
+/// family. Memory is summed RSS, so shared pages can be counted more than once.
+pub fn build_tree(
+    processes: &[ProcessInfo],
+    order: &[usize],
+    expanded: &HashSet<Identity>,
+    matching: Option<&HashSet<usize>>,
+    sort: Sort,
+    pinned: &HashSet<String>,
+) -> (Vec<TreeRow>, usize) {
+    let parents = family_parents(processes, order);
 
     let mut all_children: HashMap<usize, Vec<usize>> = HashMap::new();
     let mut all_roots = Vec::new();
@@ -679,6 +693,7 @@ mod tests {
             gpu_usage: None,
             pid,
             ppid,
+            owner: None,
             name: name.into(),
             cpu_usage: 0.0,
             memory_usage: 0,
@@ -767,6 +782,52 @@ mod tests {
             &HashSet::new(),
         );
         assert_eq!(order, vec![0, 1, 2]);
+    }
+
+    #[test]
+    fn helpers_join_the_app_macos_holds_responsible() {
+        // launchd adopts every helper; the owner says which app each works for.
+        let mut ps = vec![
+            process(1, 0, "launchd"),
+            process(100, 1, "NeoHtop"),
+            process(101, 1, "WebContent"),
+            process(102, 1, "GPU"),
+            process(103, 1, "Networking"),
+            process(104, 1, "orphaned helper"),
+        ];
+        for (i, cpu, memory) in [(1, 3.0, 90), (2, 2.0, 200), (3, 0.5, 40)] {
+            ps[i].cpu_usage = cpu;
+            ps[i].memory_usage = memory;
+        }
+        ps[2].owner = Some(100);
+        ps[3].owner = Some(100);
+        // An owner that started after the helper is a reused PID.
+        ps[4].owner = Some(100);
+        ps[4].start_time = 50;
+        // An owner missing from the snapshot falls back to the real parent.
+        ps[5].owner = Some(999);
+        let order: Vec<usize> = (0..ps.len()).collect();
+        let parents = family_parents(&ps, &order);
+        assert_eq!(parents.get(&2), Some(&1));
+        assert_eq!(parents.get(&3), Some(&1));
+        assert_eq!(parents.get(&4), Some(&0));
+        assert_eq!(parents.get(&5), Some(&0));
+
+        let expanded = HashSet::from([identity(&ps[0])]);
+        let (rows, _) = build_tree(
+            &ps,
+            &order,
+            &expanded,
+            None,
+            Sort::default(),
+            &HashSet::new(),
+        );
+        let app = rows.iter().find(|r| r.index == 1).unwrap();
+        assert_eq!(app.depth, 1);
+        assert_eq!(app.child_count, 2);
+        assert_eq!(app.family_count, 3);
+        assert!((app.family_cpu - 5.5).abs() < 1e-6);
+        assert_eq!(app.family_memory, 330);
     }
 
     #[test]

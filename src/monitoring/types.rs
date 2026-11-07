@@ -48,6 +48,8 @@ pub struct ProcessStaticInfo {
     pub command: String,
     /// Username of the process owner
     pub user: String,
+    /// App that macOS holds responsible for this process; see `ProcessInfo::owner`.
+    pub owner: Option<u32>,
 }
 
 /// Process information exposed to the frontend via Tauri
@@ -60,6 +62,9 @@ pub struct ProcessInfo {
     pub pid: u32,
     /// Parent process ID
     pub ppid: u32,
+    /// The app a launchd-adopted helper works for (macOS only), such as the
+    /// app that owns a WebKit content process. None for ordinary processes.
+    pub owner: Option<u32>,
     /// Process name
     pub name: String,
     /// CPU usage as percentage (0-100)

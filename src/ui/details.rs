@@ -1,6 +1,8 @@
 //! Process details sheet and the end-process confirmation.
 use super::monitor;
-use super::process_view::{format_bytes, format_timestamp, identity, Column, Identity};
+use super::process_view::{
+    family_parents, format_bytes, format_timestamp, identity, Column, Identity,
+};
 use crate::monitoring::{ProcessInfo, ProcessMonitor};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::notification::Notification;
@@ -11,7 +13,7 @@ use gpui_kit::{
     div, img, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
-use std::{cell::Cell, rc::Rc};
+use std::{cell::Cell, collections::HashMap, rc::Rc};
 
 const MAX_CHILDREN: usize = 50;
 
@@ -138,6 +140,30 @@ fn link(key: SharedString, target: &ProcessInfo, label: String) -> AnyElement {
         .into_any_element()
 }
 
+/// CPU, resident memory and process count of a process and its family.
+fn family_total(
+    all: &[ProcessInfo],
+    parents: &HashMap<usize, usize>,
+    root: usize,
+) -> (f64, u64, usize) {
+    let mut children: HashMap<usize, Vec<usize>> = HashMap::new();
+    for (&child, &parent) in parents {
+        children.entry(parent).or_default().push(child);
+    }
+    let (mut cpu, mut memory, mut count) = (0., 0, 0);
+    let mut stack = vec![root];
+    while let Some(i) = stack.pop() {
+        let p = &all[i];
+        if p.cpu_usage.is_finite() {
+            cpu += p.cpu_usage.max(0.) as f64;
+        }
+        memory += p.memory_usage;
+        count += 1;
+        stack.extend(children.get(&i).into_iter().flatten().copied());
+    }
+    (cpu, memory, count)
+}
+
 fn body(
     p: &ProcessInfo,
     all: &[ProcessInfo],
@@ -147,10 +173,21 @@ fn body(
     let parent = all
         .iter()
         .find(|q| q.pid == p.ppid && q.pid != p.pid && q.start_time <= p.start_time);
-    let children: Vec<_> = all
+    // Children and the family total follow the tree view's rules, so an app's
+    // helper processes count as part of it.
+    let order: Vec<usize> = (0..all.len()).collect();
+    let parents = family_parents(all, &order);
+    let me = all.iter().position(|q| identity(q) == identity(p));
+    let children: Vec<_> = order
         .iter()
-        .filter(|q| q.ppid == p.pid && q.pid != p.pid)
+        .filter(|i| me.is_some() && parents.get(i) == me.as_ref())
+        .map(|&i| &all[i])
         .collect();
+    let family = me.map_or((0., 0, 0), |me| family_total(all, &parents, me));
+    let owner = me
+        .and_then(|me| parents.get(&me))
+        .map(|&i| &all[i])
+        .filter(|q| p.owner == Some(q.pid));
     let mono = cx.theme().mono_font_family.clone();
     let toggle = environment_open.clone();
     v_flex()
@@ -199,6 +236,28 @@ fn body(
                         ),
                 ),
         )
+        .when(family.2 > 1, |d| {
+            d.child(
+                card("Process family", cx)
+                    .child(
+                        div()
+                            .text_2xl()
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .child(format!("{:.1}% · {}", family.0, format_bytes(family.1))),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(format!(
+                                "CPU and memory of this process and the {} child and helper \
+                                 processes that work for it. Memory is summed, so pages they \
+                                 share count more than once.",
+                                family.2 - 1
+                            )),
+                    ),
+            )
+        })
         .child(
             card("Process information", cx).child(
                 div()
@@ -236,6 +295,17 @@ fn body(
                         },
                         cx,
                     ))
+                    .when_some(owner, |d, owner| {
+                        d.child(field(
+                            "Belongs to",
+                            link(
+                                "owner".into(),
+                                owner,
+                                format!("{} · {} ↗", owner.name, owner.pid),
+                            ),
+                            cx,
+                        ))
+                    })
                     .child(field(
                         "Disk I/O",
                         div().text_xs().child(format!(
@@ -324,7 +394,11 @@ fn body(
                                 .child(div().flex_1().min_w_0().child(link(
                                     format!("child-{i}").into(),
                                     child,
-                                    format!("{} ↗", child.name),
+                                    if child.owner == Some(p.pid) {
+                                        format!("{} (helper) ↗", child.name)
+                                    } else {
+                                        format!("{} ↗", child.name)
+                                    },
                                 )))
                                 .child(child.pid.to_string())
                                 .child(format!("{:.1}%", child.cpu_usage))

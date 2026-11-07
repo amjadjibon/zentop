@@ -16,6 +16,32 @@ fn os_string_vec_to_string_vec(v: &[OsString]) -> Vec<String> {
         .collect::<Vec<_>>()
 }
 
+/// The app a launchd-adopted helper works for. macOS starts XPC services such as
+/// WebKit's content, GPU and networking processes under launchd (PID 1), but
+/// tracks the app responsible for each one. Only launchd's children are asked:
+/// anything started from a terminal would otherwise be attributed to the
+/// terminal. The answer is fixed for a process's lifetime, so it is cached.
+#[cfg(target_os = "macos")]
+fn owner_of(pid: u32, ppid: u32) -> Option<u32> {
+    extern "C" {
+        // Exported by libSystem since macOS 10.14; the same lookup the system
+        // uses for privacy attribution.
+        fn responsibility_get_pid_responsible_for_pid(pid: i32) -> i32;
+    }
+    if ppid != 1 {
+        return None;
+    }
+    let pid = i32::try_from(pid).ok()?;
+    // SAFETY: takes and returns plain integers; an unknown pid yields -1.
+    let owner = unsafe { responsibility_get_pid_responsible_for_pid(pid) };
+    (owner > 1 && owner != pid).then_some(owner as u32)
+}
+
+#[cfg(not(target_os = "macos"))]
+fn owner_of(_pid: u32, _ppid: u32) -> Option<u32> {
+    None
+}
+
 /// Monitors and manages system processes
 #[derive(Debug)]
 pub struct ProcessMonitor {
@@ -123,6 +149,7 @@ impl ProcessMonitor {
                         name: data.name.clone(),
                         command: data.cmd.join(" "),
                         user: data.user_id.unwrap_or_else(|| "-".to_string()),
+                        owner: data.ppid.and_then(|ppid| owner_of(data.pid, ppid)),
                     });
 
                 ProcessInfo {
@@ -130,6 +157,7 @@ impl ProcessMonitor {
                     ports: vec![],
                     pid: data.pid,
                     ppid: data.ppid.unwrap_or(0),
+                    owner: cached_info.owner,
                     name: cached_info.name.clone(),
                     cpu_usage: data.cpu_usage,
                     memory_usage: data.memory,
@@ -196,6 +224,7 @@ mod tests {
             name: "stale".into(),
             command: "stale command".into(),
             user: "stale user".into(),
+            owner: None,
         };
         // A reused PID must not inherit the previous process's static metadata.
         monitor.process_cache.clear();
