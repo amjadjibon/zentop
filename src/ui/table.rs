@@ -17,6 +17,8 @@ use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 use std::sync::Arc;
 
+const ACTIONS_WIDTH: f32 = 104.;
+
 enum Row {
     Flat(usize),
     Tree(TreeRow),
@@ -56,6 +58,8 @@ pub struct ProcessTable {
     /// Zero-based page, and rows (or families in tree view) per page.
     pub page: usize,
     pub per_page: usize,
+    /// Width the table has to fill; spare room goes to the text columns.
+    available_width: f32,
     icons: HashMap<Identity, Option<Icon>>,
 }
 
@@ -82,6 +86,7 @@ impl ProcessTable {
             families: 0,
             page: 0,
             per_page: 15,
+            available_width: 0.,
             icons: HashMap::new(),
         }
     }
@@ -191,6 +196,35 @@ impl ProcessTable {
                 .take(self.per_page)
                 .map(Row::Flat)
                 .collect();
+        }
+    }
+
+    /// Resizes columns to fill `width`. Returns whether anything changed.
+    pub fn fit_width(&mut self, width: f32) -> bool {
+        let changed = (self.available_width - width).abs() >= 1.;
+        self.available_width = width;
+        changed
+    }
+
+    fn column_width(&self, column: Column) -> f32 {
+        // Room for the actions column and the vertical scrollbar.
+        let used: f32 = self.columns.iter().map(|c| c.width()).sum::<f32>() + ACTIONS_WIDTH + 16.;
+        let spare = (self.available_width - used).max(0.);
+        let growing: Vec<Column> = self
+            .columns
+            .iter()
+            .copied()
+            .filter(|c| {
+                matches!(
+                    c,
+                    Column::Name | Column::Command | Column::Root | Column::Environ
+                )
+            })
+            .collect();
+        if growing.contains(&column) {
+            column.width() + spare / growing.len() as f32
+        } else {
+            column.width()
         }
     }
 
@@ -403,7 +437,7 @@ impl TableDelegate for ProcessTable {
     fn column(&self, col_ix: usize, _: &App) -> TableColumn {
         let Some(&column) = self.columns.get(col_ix) else {
             return TableColumn::new("actions", "")
-                .width(px(96.))
+                .width(px(ACTIONS_WIDTH))
                 .resizable(false)
                 .movable(false);
         };
@@ -417,7 +451,7 @@ impl TableDelegate for ProcessTable {
             ColumnSort::Default
         };
         let mut c = TableColumn::new(column.key(), column.label())
-            .width(px(column.width()))
+            .width(px(self.column_width(column)))
             .sort(sort)
             .movable(false);
         if column.numeric() {
@@ -465,74 +499,15 @@ impl TableDelegate for ProcessTable {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some(&column) = self.columns.get(col_ix) else {
-            return self.render_actions(row_ix, window, cx);
-        };
-        if column == Column::Name {
-            return self.render_name(row_ix, cx);
-        }
-        let Some(p) = self.process(row_ix) else {
-            return div().into_any_element();
-        };
-        let tree = self.rows[row_ix].tree();
-        let palette = theme::palette(cx);
-        let muted = cx.theme().muted_foreground;
-        match column {
-            Column::Cpu => {
-                let cpu = tree.map_or(p.cpu_usage as f64, |t| t.family_cpu);
-                div()
-                    .when(cpu > 50.0, |d| {
-                        d.px_1p5()
-                            .rounded_sm()
-                            .bg(palette.danger.opacity(0.12))
-                            .text_color(palette.danger)
-                    })
-                    .font_family(cx.theme().mono_font_family.clone())
-                    .text_xs()
-                    .child(format!("{cpu:.1}%"))
-                    .into_any_element()
-            }
-            Column::Memory if tree.is_some() => div()
-                .font_family(cx.theme().mono_font_family.clone())
-                .text_xs()
-                .child(process_view::format_mb(tree.map_or(0, |t| t.family_memory)))
-                .into_any_element(),
-            Column::Status => {
-                let color = match p.status.as_str() {
-                    "Running" => palette.running,
-                    "Zombie" | "Stopped" => palette.stopped,
-                    _ => palette.idle,
-                };
-                h_flex()
-                    .gap_1p5()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(div().size_1p5().rounded_full().bg(color))
-                    .child(p.status.clone())
-                    .into_any_element()
-            }
-            _ => {
-                let text: SharedString = column.text(p).into();
-                div()
-                    .truncate()
-                    .when(column.numeric(), |d| {
-                        d.font_family(cx.theme().mono_font_family.clone()).text_xs()
-                    })
-                    .when(
-                        matches!(
-                            column,
-                            Column::Pid | Column::Ppid | Column::User | Column::Session
-                        ),
-                        |d| {
-                            d.font_family(cx.theme().mono_font_family.clone())
-                                .text_xs()
-                                .text_color(muted)
-                        },
-                    )
-                    .child(text)
-                    .into_any_element()
-            }
-        }
+        let numeric = self.columns.get(col_ix).is_some_and(|c| c.numeric());
+        let actions = col_ix >= self.columns.len();
+        h_flex()
+            .size_full()
+            .min_w_0()
+            .items_center()
+            .when(numeric, |this| this.justify_end())
+            .when(actions, |this| this.justify_end().pr_2())
+            .child(self.cell(row_ix, col_ix, window, cx))
     }
 
     fn render_th(
@@ -629,5 +604,84 @@ impl TableDelegate for ProcessTable {
         cx: &mut Context<TableState<Self>>,
     ) {
         self.load_icons(range, cx);
+    }
+}
+
+impl ProcessTable {
+    fn cell(
+        &mut self,
+        row_ix: usize,
+        col_ix: usize,
+        window: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let Some(&column) = self.columns.get(col_ix) else {
+            return self.render_actions(row_ix, window, cx);
+        };
+        if column == Column::Name {
+            return self.render_name(row_ix, cx);
+        }
+        let Some(p) = self.process(row_ix) else {
+            return div().into_any_element();
+        };
+        let tree = self.rows[row_ix].tree();
+        let palette = theme::palette(cx);
+        let muted = cx.theme().muted_foreground;
+        match column {
+            Column::Cpu => {
+                let cpu = tree.map_or(p.cpu_usage as f64, |t| t.family_cpu);
+                div()
+                    .when(cpu > 50.0, |d| {
+                        d.px_1p5()
+                            .rounded_sm()
+                            .bg(palette.danger.opacity(0.12))
+                            .text_color(palette.danger)
+                    })
+                    .font_family(cx.theme().mono_font_family.clone())
+                    .text_xs()
+                    .child(format!("{cpu:.1}%"))
+                    .into_any_element()
+            }
+            Column::Memory if tree.is_some() => div()
+                .font_family(cx.theme().mono_font_family.clone())
+                .text_xs()
+                .child(process_view::format_mb(tree.map_or(0, |t| t.family_memory)))
+                .into_any_element(),
+            Column::Status => {
+                let color = match p.status.as_str() {
+                    "Running" => palette.running,
+                    "Zombie" | "Stopped" => palette.stopped,
+                    _ => palette.idle,
+                };
+                h_flex()
+                    .gap_1p5()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(div().size_1p5().rounded_full().bg(color))
+                    .child(p.status.clone())
+                    .into_any_element()
+            }
+            _ => {
+                let text: SharedString = column.text(p).into();
+                div()
+                    .truncate()
+                    .when(column.numeric(), |d| {
+                        d.font_family(cx.theme().mono_font_family.clone()).text_xs()
+                    })
+                    .when(
+                        matches!(
+                            column,
+                            Column::Pid | Column::Ppid | Column::User | Column::Session
+                        ),
+                        |d| {
+                            d.font_family(cx.theme().mono_font_family.clone())
+                                .text_xs()
+                                .text_color(muted)
+                        },
+                    )
+                    .child(text)
+                    .into_any_element()
+            }
+        }
     }
 }

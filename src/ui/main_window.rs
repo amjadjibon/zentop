@@ -71,6 +71,8 @@ impl Zentop {
         });
         let mut subscriptions = vec![
             cx.observe(&monitor, |this, _, cx| this.sync(cx)),
+            // Columns stretch to the window, so the list never leaves dead space.
+            cx.observe_window_bounds(window, |this, window, cx| this.fit_columns(window, cx)),
             cx.subscribe_in(&search, window, |this, input, event: &InputEvent, _, cx| {
                 if matches!(event, InputEvent::Change) {
                     let text = input.read(cx).value().to_string();
@@ -116,7 +118,18 @@ impl Zentop {
         };
         this.update_demand(cx);
         this.sync(cx);
+        this.fit_columns(window, cx);
         this
+    }
+
+    fn fit_columns(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let width = f32::from(window.viewport_size().width);
+        self.table.update(cx, |table, cx| {
+            if table.delegate_mut().fit_width(width) {
+                table.refresh(cx);
+                cx.notify();
+            }
+        });
     }
 
     /// Pulls the latest frame and preferences from the shared model.
