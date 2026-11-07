@@ -2,7 +2,7 @@
 use super::monitor::{self, Monitor, REFRESH_RATES};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
 use super::table::ProcessTable;
-use super::{details, stats, theme, OpenAbout, OpenSettings, ShowOverview, APP_ICON};
+use super::{details, stats, theme, OpenAbout, OpenSettings, ShowOverview, SMALL_ICON};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
@@ -243,7 +243,7 @@ impl Zentop {
                 .child(
                     h_flex()
                         .gap_2()
-                        .child(img(APP_ICON.clone()).size_4())
+                        .child(img(SMALL_ICON.clone()).size_4())
                         .child(
                             div()
                                 .text_sm()

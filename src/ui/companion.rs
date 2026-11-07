@@ -2,7 +2,7 @@
 //! small popup anchored to the tray icon. It closes when it loses focus.
 use super::monitor::{self, Monitor};
 use super::process_view::{format_bytes, format_mb, identity, Identity};
-use super::{stats, theme, Windows, APP_ICON};
+use super::{stats, theme, Windows, SMALL_ICON};
 use crate::native_icons::{Icon, IconRequest};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -318,7 +318,7 @@ impl Render for Overview {
                         .child(
                             h_flex()
                                 .gap_2()
-                                .child(img(APP_ICON.clone()).size_5())
+                                .child(img(SMALL_ICON.clone()).size_5())
                                 .child(
                                     div()
                                         .text_sm()

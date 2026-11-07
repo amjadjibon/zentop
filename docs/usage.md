@@ -27,7 +27,7 @@ GPU support is driver dependent: macOS IORegistry statistics; Linux AMD sysfs an
 
 ## Menu-bar companion
 
-Open the ghost icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no Zentop window is open.
+Open the Zentop ring icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no Zentop window is open.
 
 Linux tray behavior varies with the desktop; use **Show overview** in the tray menu or **View → Menu-bar Overview** if clicking the icon does not open it.
 

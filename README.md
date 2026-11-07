@@ -1,5 +1,5 @@
 <div align="center">
-  <img src="app-icon.png" alt="Zentop ghost" width="96" />
+  <img src="app-icon.png" alt="Zentop icon: an open ensō ring with a glowing dot" width="96" />
   <h1>Zentop</h1>
   <p><strong>Your system. In plain sight.</strong></p>
   <p>A modern, open-source system monitor for macOS, Linux and Windows.<br />Explore processes, understand your graphics card, and keep your whole machine in view.</p>
@@ -23,7 +23,7 @@ A fresh desktop experience with more to explore—from the process holding a por
 - **Go beyond a flat process list.** Expand process families, see their combined CPU and RAM, and keep matching children in context while you search.
 - **See your graphics card.** GPU utilization, memory and driver-reported diagnostics sit alongside CPU, RAM, storage, system and network readings.
 - **Keep the essentials in your menu bar.** A compact companion shows live resources and your busiest processes. Jump straight into an inspector without hunting through the table.
-- **Put a name to the process.** Native app icons when the system can provide them; the familiar ghost when it can’t.
+- **Put a name to the process.** Native app icons when the system can provide them; a quiet placeholder when it can’t.
 - **Find what owns a port.** Type `:3000` or `port:443`. Socket scans run only when you need them.
 - **Keep the themes you love.** All **24 themes**, each checked for readable contrast, with a visual gallery in Settings.
 
@@ -40,7 +40,7 @@ A fresh desktop experience with more to explore—from the process holding a por
 
 <table>
   <tr>
-    <td width="40%"><img src="docs/screenshots/menubar-overview-system.png" alt="The Zentop ghost in the macOS menu bar with its live overview open" width="400" /></td>
+    <td width="40%"><img src="docs/screenshots/menubar-overview-system.png" alt="The Zentop icon in the macOS menu bar with its live overview open" width="400" /></td>
     <td><h3>Open. Check. Carry on.</h3><p>Your essential readings, without bringing the full app forward.</p><ul><li>CPU, memory, GPU, network and free storage.</li><li>Your five busiest processes, with native icons.</li><li>One click from a process to its inspector.</li><li>Shared pause, sampling interval and theme.</li><li>Optional monitoring after closing the main window.</li></ul><p><a href="docs/usage.md#menu-bar-companion">Explore the companion →</a></p><sub>Real macOS system capture. Also available through the system tray on supported desktops.</sub></td>
   </tr>
 </table>
@@ -55,7 +55,7 @@ A fresh desktop experience with more to explore—from the process holding a por
 | GPU load and memory               | Open **Graphics** from the GPU card; select an adapter on multi-GPU machines. |
 | A sudden resource spike           | Inspect the CPU, memory, GPU or network chart with the pointer or keyboard.   |
 | Traffic on a particular interface | Open **Network**, search interfaces, or include inactive ones.                |
-| A quick check between tasks       | Open the ghost in the **menu bar/system tray**.                               |
+| A quick check between tasks       | Open the ring icon in the **menu bar/system tray**.                               |
 | Your preferred monitoring pace    | Open **Settings → General** and choose a refresh interval.                    |
 
 The charts keep roughly two minutes of history in memory. Pause, inspect and resume from the app bar or companion; both windows share the same sample and monitoring state.
