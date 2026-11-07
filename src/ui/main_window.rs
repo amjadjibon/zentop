@@ -1,18 +1,20 @@
 //! The main window: resource cards and the process table.
-use super::monitor::{self, Monitor, REFRESH_RATES};
+use super::monitor::{self, Monitor};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
 use super::table::ProcessTable;
 use super::{details, stats, theme, OpenAbout, OpenSettings, ShowOverview, SMALL_ICON};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::{Button, ButtonVariants};
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState, NumberInput};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
 use gpui_kit::component::popover::Popover;
 use gpui_kit::component::table::{DataTable, TableEvent, TableState};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable, TitleBar};
+use gpui_kit::component::{
+    h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, Size, TitleBar,
+};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, img, px, AppContext, Context, Entity, FontWeight, IntoElement, ParentElement, Render,
@@ -59,7 +61,7 @@ impl Zentop {
         });
         let search = cx.new(|cx| {
             InputState::new(window, cx)
-                .placeholder("Search name, command, PID or :port — separate terms with commas")
+                .placeholder("Search processes…")
                 .clean_on_escape()
         });
         let defaults = Filters::default();
@@ -123,6 +125,11 @@ impl Zentop {
         let frame = monitor.frame.clone();
         let columns = visible_columns(monitor.prefs());
         let tree = monitor.prefs().behavior("processView").as_str() == Some("tree");
+        let per_page = monitor
+            .prefs()
+            .behavior("itemsPerPage")
+            .as_u64()
+            .unwrap_or(15) as usize;
         let port_search = self.port_search();
         // A paused hub keeps returning the same frame; skip needless rebuilds.
         let new_frame = frame.filter(|f| port_search || self.last_sequence != Some(f.sequence));
@@ -134,6 +141,9 @@ impl Zentop {
             if delegate.columns() != columns.as_slice() {
                 delegate.set_columns(columns);
                 table.refresh(cx);
+            }
+            if table.delegate().per_page != per_page {
+                table.delegate_mut().set_per_page(per_page);
             }
             if table.delegate().tree != tree {
                 table.delegate_mut().set_tree(tree);
@@ -223,11 +233,7 @@ impl Zentop {
         let paused = monitor.paused;
         let rate = monitor.refresh_rate();
         let current_theme = monitor.theme_name().to_owned();
-        let (pause_monitor, rate_monitor, theme_monitor) = (
-            self.monitor.clone(),
-            self.monitor.clone(),
-            self.monitor.clone(),
-        );
+        let (pause_monitor, theme_monitor) = (self.monitor.clone(), self.monitor.clone());
         let status_color = if paused {
             cx.theme().muted_foreground
         } else {
@@ -286,27 +292,16 @@ impl Zentop {
                                 }),
                         )
                         .child(
-                            Button::new("refresh-rate")
+                            Button::new("overview")
                                 .ghost()
                                 .small()
-                                .icon(IconName::Timer)
-                                .tooltip("Refresh rate")
-                                .dropdown_menu(move |mut menu, _, _| {
-                                    for ms in REFRESH_RATES {
-                                        let monitor = rate_monitor.clone();
-                                        menu = menu.item(
-                                            PopupMenuItem::new(format!("Every {}s", ms / 1000))
-                                                .checked(rate == ms)
-                                                .on_click(move |_, _, cx| {
-                                                    monitor.update(cx, |m, cx| {
-                                                        m.set_refresh_rate(ms, cx)
-                                                    })
-                                                }),
-                                        );
-                                    }
-                                    menu
+                                .icon(IconName::PanelsTopLeft)
+                                .tooltip("Menu-bar overview")
+                                .on_click(|_, window, cx| {
+                                    window.dispatch_action(Box::new(ShowOverview), cx)
                                 }),
                         )
+                        .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
                         .child(
                             Button::new("theme")
                                 .ghost()
@@ -353,9 +348,8 @@ impl Zentop {
         Popover::new("filters")
             .trigger(
                 Button::new("filters-button")
-                    .small()
                     .outline()
-                    .icon(IconName::Funnel)
+                    .icon(IconName::SlidersHorizontal)
                     .label(if count > 0 {
                         format!("Filters · {count}")
                     } else {
@@ -449,71 +443,57 @@ impl Zentop {
         let delegate = self.table.read(cx).delegate();
         let tree = delegate.tree;
         let expanded = !delegate.expanded.is_empty();
-        let (matching, total, families) = (delegate.matching, delegate.total(), delegate.families);
+        let total = delegate.total();
         let searching = delegate.searching();
         let entity = cx.entity();
         let visible: Vec<Column> = delegate.columns().to_vec();
+        let segment = |id: &'static str, icon: IconName, label: &'static str, active: bool| {
+            Button::new(id)
+                .with_variant(if active {
+                    ButtonVariant::Secondary
+                } else {
+                    ButtonVariant::Ghost
+                })
+                .icon(icon)
+                .label(label)
+        };
         h_flex()
-            .gap_2()
+            .gap_3()
             .px_4()
             .py_3()
+            .border_b_1()
+            .border_color(cx.theme().border)
             .child(
-                div().flex_1().max_w(px(560.)).child(
-                    Input::new(&self.search).small().cleanable(true).prefix(
+                h_flex()
+                    .gap_2()
+                    .text_sm()
+                    .child(div().font_weight(FontWeight::SEMIBOLD).child("Processes"))
+                    .child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(total.to_string()),
+                    ),
+            )
+            .child(
+                div().w(px(360.)).child(
+                    Input::new(&self.search).cleanable(true).prefix(
                         Icon::new(IconName::Search)
                             .small()
                             .text_color(cx.theme().muted_foreground),
                     ),
                 ),
             )
-            .child(self.render_filters(cx))
             .child(
-                Button::new("columns")
+                Button::new("search-help")
+                    .ghost()
                     .small()
-                    .outline()
-                    .icon(IconName::Columns3)
-                    .label("Columns")
-                    .dropdown_menu(move |mut menu, _, _| {
-                        for column in Column::ALL.into_iter().filter(|c| *c != Column::Name) {
-                            let entity = entity.clone();
-                            menu = menu.item(
-                                PopupMenuItem::new(column.label())
-                                    .checked(visible.contains(&column))
-                                    .on_click(move |_, _, cx| {
-                                        entity.update(cx, |this, cx| this.toggle_column(column, cx))
-                                    }),
-                            );
-                        }
-                        menu
-                    }),
-            )
-            .child(
-                h_flex()
-                    .child(
-                        Button::new("view-list")
-                            .small()
-                            .with_variant(if tree {
-                                gpui_kit::component::button::ButtonVariant::Ghost
-                            } else {
-                                gpui_kit::component::button::ButtonVariant::Secondary
-                            })
-                            .icon(IconName::List)
-                            .tooltip("List view")
-                            .on_click(cx.listener(|this, _, _, cx| this.set_view(false, cx))),
-                    )
-                    .child(
-                        Button::new("view-tree")
-                            .small()
-                            .with_variant(if tree {
-                                gpui_kit::component::button::ButtonVariant::Secondary
-                            } else {
-                                gpui_kit::component::button::ButtonVariant::Ghost
-                            })
-                            .icon(IconName::ListTree)
-                            .tooltip("Tree view")
-                            .on_click(cx.listener(|this, _, _, cx| this.set_view(true, cx))),
+                    .icon(IconName::CircleQuestionMark)
+                    .tooltip(
+                        "Search names, commands or PIDs. Separate terms with commas. \
+                         Use :3000 or port:443 to find what owns a port.",
                     ),
             )
+            .child(self.render_filters(cx))
             .when(tree && expanded && !searching, |this| {
                 this.child(
                     Button::new("collapse")
@@ -530,19 +510,144 @@ impl Zentop {
             })
             .child(div().flex_1())
             .child(
-                div()
-                    .text_xs()
-                    .text_color(cx.theme().muted_foreground)
-                    .child(if tree {
-                        format!(
-                            "{families} {}",
-                            if families == 1 { "family" } else { "families" }
-                        )
-                    } else if searching {
-                        format!("{matching} of {total} processes")
-                    } else {
-                        format!("{total} processes")
+                h_flex()
+                    .p_0p5()
+                    .rounded(cx.theme().radius)
+                    .border_1()
+                    .border_color(cx.theme().border)
+                    .child(
+                        segment("view-list", IconName::List, "List", !tree)
+                            .on_click(cx.listener(|this, _, _, cx| this.set_view(false, cx))),
+                    )
+                    .child(
+                        segment("view-tree", IconName::ListTree, "Tree", tree)
+                            .on_click(cx.listener(|this, _, _, cx| this.set_view(true, cx))),
+                    ),
+            )
+            .child(
+                Button::new("columns")
+                    .ghost()
+                    .icon(IconName::Columns3)
+                    .label("View")
+                    .dropdown_caret(true)
+                    .dropdown_menu(move |mut menu, _, _| {
+                        menu = menu.label("Columns");
+                        for column in Column::ALL.into_iter().filter(|c| *c != Column::Name) {
+                            let entity = entity.clone();
+                            menu = menu.item(
+                                PopupMenuItem::new(column.label())
+                                    .checked(visible.contains(&column))
+                                    .on_click(move |_, _, cx| {
+                                        entity.update(cx, |this, cx| this.toggle_column(column, cx))
+                                    }),
+                            );
+                        }
+                        menu
                     }),
+            )
+    }
+
+    fn set_page(&mut self, page: usize, cx: &mut Context<Self>) {
+        self.table.update(cx, |table, cx| {
+            table.delegate_mut().set_page(page);
+            table.scroll_to_row(0, cx);
+            cx.notify();
+        });
+        cx.notify();
+    }
+
+    fn render_footer(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let delegate = self.table.read(cx).delegate();
+        let (tree, results) = (delegate.tree, delegate.result_count());
+        let (page, pages, per_page) = (delegate.page, delegate.page_count(), delegate.per_page);
+        let monitor = self.monitor.clone();
+        let noun = match (tree, results == 1) {
+            (true, true) => "family",
+            (true, false) => "families",
+            (false, true) => "process",
+            (false, false) => "processes",
+        };
+        let pager = |id: &'static str,
+                     icon: IconName,
+                     tooltip: &'static str,
+                     target: usize,
+                     enabled: bool| {
+            Button::new(id)
+                .small()
+                .outline()
+                .icon(icon)
+                .tooltip(tooltip)
+                .disabled(!enabled)
+                .on_click(cx.listener(move |this, _, _, cx| this.set_page(target, cx)))
+        };
+        h_flex()
+            .flex_shrink_0()
+            .justify_between()
+            .px_4()
+            .py_2()
+            .border_t_1()
+            .border_color(cx.theme().border)
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(format!("{results} {noun}"))
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child("Rows")
+                    .child(
+                        Button::new("rows-per-page")
+                            .small()
+                            .outline()
+                            .label(per_page.to_string())
+                            .dropdown_caret(true)
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for size in ITEMS_PER_PAGE {
+                                    let monitor = monitor.clone();
+                                    menu = menu.item(
+                                        PopupMenuItem::new(size.to_string())
+                                            .checked(size == per_page)
+                                            .on_click(move |_, _, cx| {
+                                                monitor.update(cx, |m, cx| {
+                                                    m.save(
+                                                        json!({"behavior": {"itemsPerPage": size}}),
+                                                        cx,
+                                                    )
+                                                })
+                                            }),
+                                    );
+                                }
+                                menu
+                            }),
+                    )
+                    .child(div().px_1().child(format!("Page {} of {pages}", page + 1)))
+                    .child(pager(
+                        "page-first",
+                        IconName::ChevronsLeft,
+                        "First page",
+                        0,
+                        page > 0,
+                    ))
+                    .child(pager(
+                        "page-prev",
+                        IconName::ChevronLeft,
+                        "Previous page",
+                        page.saturating_sub(1),
+                        page > 0,
+                    ))
+                    .child(pager(
+                        "page-next",
+                        IconName::ChevronRight,
+                        "Next page",
+                        page + 1,
+                        page + 1 < pages,
+                    ))
+                    .child(pager(
+                        "page-last",
+                        IconName::ChevronsRight,
+                        "Last page",
+                        pages - 1,
+                        page + 1 < pages,
+                    )),
             )
     }
 }
@@ -580,7 +685,7 @@ impl Render for Zentop {
                 this.child(
                     div()
                         .mx_4()
-                        .mb_2()
+                        .my_2()
                         .px_3()
                         .py_2()
                         .rounded(cx.theme().radius)
@@ -593,19 +698,19 @@ impl Render for Zentop {
                 )
             })
             .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .mx_4()
-                    .mb_4()
-                    .rounded(cx.theme().radius_lg)
-                    .border_1()
-                    .border_color(cx.theme().border)
-                    .overflow_hidden()
-                    .child(DataTable::new(&self.table).stripe(false).bordered(false)),
+                div().flex_1().min_h_0().child(
+                    DataTable::new(&self.table)
+                        .stripe(false)
+                        .bordered(false)
+                        .with_size(Size::Size(px(34.)))
+                        .header_row_height(px(36.)),
+                ),
             )
+            .child(self.render_footer(cx))
     }
 }
+
+const ITEMS_PER_PAGE: [usize; 6] = [15, 25, 50, 100, 250, 500];
 
 fn visible_columns(prefs: &Preferences) -> Vec<Column> {
     Column::ALL

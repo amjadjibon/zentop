@@ -53,6 +53,9 @@ pub struct ProcessTable {
     pub matching: usize,
     /// Root families shown in tree view.
     pub families: usize,
+    /// Zero-based page, and rows (or families in tree view) per page.
+    pub page: usize,
+    pub per_page: usize,
     icons: HashMap<Identity, Option<Icon>>,
 }
 
@@ -77,6 +80,8 @@ impl ProcessTable {
             rows: Vec::new(),
             matching: 0,
             families: 0,
+            page: 0,
+            per_page: 15,
             icons: HashMap::new(),
         }
     }
@@ -104,11 +109,13 @@ impl ProcessTable {
 
     pub fn set_search(&mut self, search: String) {
         self.search = search;
+        self.page = 0;
         self.rebuild();
     }
 
     pub fn set_filters(&mut self, filters: Filters) {
         self.filters = filters;
+        self.page = 0;
         self.rebuild();
     }
 
@@ -118,6 +125,7 @@ impl ProcessTable {
 
     pub fn set_tree(&mut self, tree: bool) {
         self.tree = tree;
+        self.page = 0;
         self.rebuild();
     }
 
@@ -165,11 +173,50 @@ impl ProcessTable {
                 &self.pinned,
             );
             self.families = families;
-            self.rows = rows.into_iter().map(Row::Tree).collect();
+            self.page = self.page.min(self.page_count() - 1);
+            let first = self.page * self.per_page;
+            let families = first..first + self.per_page;
+            self.rows = rows
+                .into_iter()
+                .filter(|row| families.contains(&row.root_index))
+                .map(Row::Tree)
+                .collect();
         } else {
             process_view::sort(&mut matched, processes, self.sort, &self.pinned);
             self.families = 0;
-            self.rows = matched.into_iter().map(Row::Flat).collect();
+            self.page = self.page.min(self.page_count() - 1);
+            self.rows = matched
+                .into_iter()
+                .skip(self.page * self.per_page)
+                .take(self.per_page)
+                .map(Row::Flat)
+                .collect();
+        }
+    }
+
+    /// Processes, or process families in tree view, across all pages.
+    pub fn result_count(&self) -> usize {
+        if self.tree {
+            self.families
+        } else {
+            self.matching
+        }
+    }
+
+    pub fn page_count(&self) -> usize {
+        self.result_count().div_ceil(self.per_page.max(1)).max(1)
+    }
+
+    pub fn set_page(&mut self, page: usize) {
+        self.page = page.min(self.page_count() - 1);
+        self.rebuild();
+    }
+
+    pub fn set_per_page(&mut self, per_page: usize) {
+        if per_page != self.per_page {
+            self.per_page = per_page.max(1);
+            self.page = 0;
+            self.rebuild();
         }
     }
 
@@ -229,11 +276,11 @@ impl ProcessTable {
             })
             .child(match icon {
                 Some(icon) => img(icon).size_4().flex_shrink_0().into_any_element(),
-                None => div()
-                    .size_4()
+                // Background services and tools without an app icon.
+                None => UiIcon::new(IconName::AppWindow)
+                    .small()
                     .flex_shrink_0()
-                    .rounded_sm()
-                    .bg(cx.theme().muted)
+                    .text_color(cx.theme().muted_foreground)
                     .into_any_element(),
             })
             .child(div().truncate().child(p.name.clone()))
@@ -486,6 +533,36 @@ impl TableDelegate for ProcessTable {
                     .into_any_element()
             }
         }
+    }
+
+    fn render_th(
+        &mut self,
+        col_ix: usize,
+        _: &mut Window,
+        cx: &mut Context<TableState<Self>>,
+    ) -> impl IntoElement {
+        let Some(&column) = self.columns.get(col_ix) else {
+            return h_flex()
+                .size_full()
+                .justify_end()
+                .pr_2()
+                .text_color(cx.theme().foreground)
+                .child("Actions");
+        };
+        // The sorted column is highlighted, as in earlier releases.
+        let sorted = self.sort.column == column;
+        h_flex()
+            .size_full()
+            .when(column.numeric(), |this| this.justify_end())
+            .text_color(if sorted {
+                cx.theme().primary
+            } else {
+                cx.theme().muted_foreground
+            })
+            .when(sorted, |this| {
+                this.font_weight(gpui_kit::FontWeight::MEDIUM)
+            })
+            .child(column.label())
     }
 
     fn cell_text(&self, row_ix: usize, col_ix: usize, _: &App) -> String {

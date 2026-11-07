@@ -5,7 +5,6 @@
 - Rename the app to **Zentop** (bundle identifier `com.zentop.app`). Settings from NeoHtop are imported on first launch; the old NeoHtop settings folder is left untouched.
 - New app icon and menu-bar glyph: an open ensō ring with a dot in its gap. Sources live in `assets/brand/`.
 - Rebuild the desktop app natively in Rust with GPUI Kit, replacing Tauri, Svelte and the webview. All windows (monitor, Settings, About and the menu-bar overview) share one sampling loop and one settings file; existing settings carry over.
-- The process table scrolls through every process instead of paging.
 - Ending a process now confirms it is still the same process (by start time) before signalling it.
 - Remove analytics entirely: Zentop makes no network requests.
 - Remove the website sources and all Node.js tooling; release packaging uses cargo-packager and cargo-generate-rpm.

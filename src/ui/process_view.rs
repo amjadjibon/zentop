@@ -105,15 +105,17 @@ impl Column {
         )
     }
 
+    /// Default widths: the standard columns fit the 1120pt minimum window.
     pub fn width(self) -> f32 {
         match self {
-            Column::Name => 260.,
-            Column::Command | Column::Environ | Column::Root => 320.,
-            Column::Disk => 140.,
-            Column::StartTime => 170.,
-            Column::User => 120.,
-            Column::Status => 110.,
-            _ => 100.,
+            Column::Name => 240.,
+            Column::Command | Column::Environ | Column::Root => 300.,
+            Column::Disk => 120.,
+            Column::StartTime => 160.,
+            Column::RunTime => 110.,
+            Column::Status => 100.,
+            Column::User | Column::Memory | Column::Virtual => 90.,
+            _ => 80.,
         }
     }
 
@@ -503,6 +505,8 @@ pub fn sort(
 #[derive(Clone, Debug, PartialEq)]
 pub struct TreeRow {
     pub index: usize,
+    /// Position of this row's family among the roots, for paging by family.
+    pub root_index: usize,
     pub depth: usize,
     pub child_count: usize,
     pub expanded: bool,
@@ -649,7 +653,7 @@ pub fn build_tree(
     }
 
     let mut rows = Vec::new();
-    for &root in &roots {
+    for (root_index, &root) in roots.iter().enumerate() {
         let mut stack = vec![(root, 0)];
         while let Some((i, depth)) = stack.pop() {
             let descendants = children.get(&i).map(Vec::as_slice).unwrap_or_default();
@@ -658,6 +662,7 @@ pub fn build_tree(
                 && (matching.is_some() || expanded.contains(&identity(&processes[i])));
             rows.push(TreeRow {
                 index: i,
+                root_index,
                 depth,
                 child_count: descendants.len(),
                 expanded: open,

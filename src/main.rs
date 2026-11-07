@@ -17,7 +17,14 @@ use std::borrow::Cow;
 icon_assets!(
     ExtraIcons,
     [
+        AppWindow,
         ArrowUpRight,
+        ChevronLeft,
+        ChevronRight,
+        ChevronsLeft,
+        ChevronsRight,
+        CircleQuestionMark,
+        PanelsTopLeft,
         Check,
         Columns3,
         Cpu,
@@ -38,6 +45,7 @@ icon_assets!(
         Play,
         Power,
         Settings,
+        SlidersHorizontal,
         Timer,
         X
     ]

@@ -33,6 +33,9 @@ fn merge(config: &mut Value, patch: &Value) {
                 continue;
             }
             let valid = match key.as_str() {
+                "itemsPerPage" => value
+                    .as_u64()
+                    .is_some_and(|n| [15, 25, 50, 100, 250, 500].contains(&n)),
                 "refreshRate" => value.as_u64().is_some_and(|n| (1000..=30000).contains(&n)),
                 "menuBarEnabled" | "keepRunning" => value.is_boolean(),
                 "processView" => matches!(value.as_str(), Some("flat" | "tree")),
@@ -171,10 +174,11 @@ mod tests {
         let mut config = defaults();
         merge(
             &mut config,
-            &json!({"behavior":{"refreshRate":5000,"keepRunning":true,"usageAnalytics":true,"processView":"bad"},"appearance":{"columnVisibility":{"name":false,"pid":false,"unknown":true}}}),
+            &json!({"behavior":{"refreshRate":5000,"keepRunning":true,"usageAnalytics":true,"itemsPerPage":0,"processView":"bad"},"appearance":{"columnVisibility":{"name":false,"pid":false,"unknown":true}}}),
         );
         assert_eq!(config["behavior"]["refreshRate"], 5000);
         assert!(config["behavior"].get("usageAnalytics").is_none());
+        assert_eq!(config["behavior"]["itemsPerPage"], 15);
         assert_eq!(config["behavior"]["processView"], "flat");
         assert_eq!(config["appearance"]["columnVisibility"]["name"], true);
         assert_eq!(config["appearance"]["columnVisibility"]["pid"], false);

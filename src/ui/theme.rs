@@ -164,6 +164,9 @@ pub fn apply(name: &str, cx: &mut App) {
     ];
 
     Theme::update(cx, |theme| {
+        // The density of earlier releases: 14px text, 12px monospace figures.
+        theme.font_size = px(14.);
+        theme.mono_font_size = px(12.);
         theme.radius = px(tokens.radius);
         theme.radius_lg = px(tokens.radius + 2.0);
         let c = &mut theme.colors;
