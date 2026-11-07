@@ -298,7 +298,10 @@ impl Zentop {
                                         .ghost()
                                         .small()
                                         .icon(IconName::Palette)
-                                        .tooltip(format!("Theme: {}", monitor.theme_name())),
+                                        .tooltip(format!(
+                                            "Theme: {}",
+                                            theme::label(monitor.theme_name())
+                                        )),
                                 )
                                 .content(move |_, _, _| theme_picker.clone()),
                         )

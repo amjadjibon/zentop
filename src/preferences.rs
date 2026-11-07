@@ -212,18 +212,14 @@ mod tests {
         assert_eq!(load(&path, None).unwrap().unwrap(), config);
         fs::remove_dir_all(dir).unwrap();
     }
-}
 
-#[cfg(test)]
-mod retired_filter_tests {
     #[test]
     fn legacy_default_status_is_ignored() {
-        let mut config = super::defaults();
-        super::merge(
+        // Retired preference: the status filter is per session, as in NeoHtop.
+        let mut config = defaults();
+        merge(
             &mut config,
-            &serde_json::json!({
-                "behavior": {"defaultStatusFilter": "sleeping"}
-            }),
+            &json!({"behavior": {"defaultStatusFilter": "sleeping"}}),
         );
         assert!(config["behavior"].get("defaultStatusFilter").is_none());
     }

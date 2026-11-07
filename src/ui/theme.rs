@@ -56,6 +56,14 @@ pub fn all() -> impl Iterator<Item = (&'static str, &'static str)> {
     THEMES.iter().map(|t| (t.name.as_str(), t.label.as_str()))
 }
 
+/// The display name for a theme id, falling back to the id itself.
+pub fn label(name: &str) -> &str {
+    THEMES
+        .iter()
+        .find(|t| t.name == name)
+        .map_or(name, |t| t.label.as_str())
+}
+
 pub fn exists(name: &str) -> bool {
     THEMES.iter().any(|t| t.name == name)
 }

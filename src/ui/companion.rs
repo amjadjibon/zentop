@@ -446,11 +446,14 @@ impl Render for Overview {
                                                 .size_5()
                                                 .flex_shrink_0()
                                                 .into_any_element(),
-                                            None => div()
-                                                .size_5()
-                                                .flex_shrink_0()
-                                                .bg(cx.theme().muted)
-                                                .into_any_element(),
+                                            // Same placeholder as the main list.
+                                            None => {
+                                                gpui_kit::component::Icon::new(IconName::AppWindow)
+                                                    .size_5()
+                                                    .flex_shrink_0()
+                                                    .text_color(cx.theme().muted_foreground)
+                                                    .into_any_element()
+                                            }
                                         })
                                         .child(
                                             div()
