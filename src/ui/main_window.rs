@@ -216,12 +216,17 @@ impl Zentop {
         } else {
             theme::palette(cx).running
         };
-        TitleBar::new().pl(px(96.)).h(px(48.)).bg(theme::palette(cx).card).border_b_1().border_color(cx.theme().border).child(
+        let title_bar = TitleBar::new()
+            .pl(px(96.))
+            .h(px(48.))
+            .bg(theme::palette(cx).card)
+            .border_b_1()
+            .border_color(cx.theme().border);
+        title_bar.child(
             h_flex()
                 .w_full()
                 .pr_3()
                 // Leave room for the macOS window controls drawn over the title bar.
-
                 .justify_between()
                 .child(
                     h_flex()
@@ -281,7 +286,13 @@ impl Zentop {
                         .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
                         .child(
                             Popover::new("theme-picker")
-                                .trigger(Button::new("theme").ghost().small().icon(IconName::Palette).tooltip(format!("Theme: {}", monitor.theme_name())))
+                                .trigger(
+                                    Button::new("theme")
+                                        .ghost()
+                                        .small()
+                                        .icon(IconName::Palette)
+                                        .tooltip(format!("Theme: {}", monitor.theme_name())),
+                                )
                                 .content(move |_, _, _| theme_picker.clone()),
                         )
                         .child(
@@ -294,7 +305,14 @@ impl Zentop {
                                     menu.menu("Settings…", Box::new(OpenSettings))
                                         .separator()
                                         .menu("About Zentop", Box::new(OpenAbout))
-                                        .item(PopupMenuItem::new("Check for updates…").on_click(|_, _, cx| cx.open_url("https://github.com/Abdenasser/neohtop/releases")))
+                                        .item(PopupMenuItem::new("Check for updates…").on_click(
+                                            |_, _, cx| {
+                                                cx.open_url(&format!(
+                                                    "{}/releases",
+                                                    super::REPOSITORY
+                                                ))
+                                            },
+                                        ))
                                         .separator()
                                         .menu("Quit Zentop", Box::new(Quit))
                                 }),
@@ -499,20 +517,80 @@ impl Zentop {
                 ),
             )
             .child(
-                Popover::new("search-help").trigger(Button::new("search-help-button").ghost().small().icon(IconName::CircleQuestionMark).tooltip("Search syntax and examples"))
-                    .content({ let entity = cx.entity(); move |_, _, cx| {
-                        let examples = [("systemd, dbus", "Multiple names, separated by commas"),("d$", "Names ending in d"),("^kernel", "Names starting with kernel"),("ssh.*server", "Regular expressions"),("1234", "Find a process ID"),(":3000", "Processes listening on a local port"),("port:443", "Explicit local TCP listener or UDP port"),("python, node, nginx", "Several runtimes"),("docker, containerd", "Container processes"),("gnome, plasma", "Desktop environments")];
-                        v_flex().w(px(288.)).gap_3()
-                            .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Find a process"))
-                            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Search names, commands, PIDs or local ports (:3000). Comma-separated terms match any term. Name searches also support regular expressions."))
-                            .children(examples.into_iter().enumerate().map(|(i,(query,label))| {
-                                let entity = entity.clone();
-                                Button::new(("search-example",i)).ghost().small().label(format!("{query} · {label}")).on_click(move |_,window,cx| {
-                                    entity.update(cx,|this,cx| { this.search.update(cx,|input,cx| input.set_value(query,window,cx)); this.set_search(query.to_owned(),cx); this.search.focus_handle(cx).focus(window, cx); });
-                                })
-                            }))
-                            .child(div().pt_3().border_t_1().border_color(cx.theme().border).text_xs().text_color(cx.theme().muted_foreground).child("⌘ / Ctrl F focuses search. Escape clears it. Invalid expressions still match literal text."))
-                    }}),
+                Popover::new("search-help")
+                    .trigger(
+                        Button::new("search-help-button")
+                            .ghost()
+                            .small()
+                            .icon(IconName::CircleQuestionMark)
+                            .tooltip("Search syntax and examples"),
+                    )
+                    .content({
+                        let entity = cx.entity();
+                        move |_, _, cx| {
+                            let examples = [
+                                ("systemd, dbus", "Multiple names, separated by commas"),
+                                ("d$", "Names ending in d"),
+                                ("^kernel", "Names starting with kernel"),
+                                ("ssh.*server", "Regular expressions"),
+                                ("1234", "Find a process ID"),
+                                (":3000", "Processes listening on a local port"),
+                                ("port:443", "Explicit local TCP listener or UDP port"),
+                                ("python, node, nginx", "Several runtimes"),
+                                ("docker, containerd", "Container processes"),
+                                ("gnome, plasma", "Desktop environments"),
+                            ];
+                            v_flex()
+                                .w(px(288.))
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .child("Find a process"),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            "Search names, commands, PIDs or local ports (:3000). \
+                                             Comma-separated terms match any term. Name searches \
+                                             also support regular expressions.",
+                                        ),
+                                )
+                                .children(examples.into_iter().enumerate().map(
+                                    |(i, (query, label))| {
+                                        let entity = entity.clone();
+                                        Button::new(("search-example", i))
+                                            .ghost()
+                                            .small()
+                                            .label(format!("{query} · {label}"))
+                                            .on_click(move |_, window, cx| {
+                                                entity.update(cx, |this, cx| {
+                                                    this.search.update(cx, |input, cx| {
+                                                        input.set_value(query, window, cx)
+                                                    });
+                                                    this.set_search(query.to_owned(), cx);
+                                                    this.search.focus_handle(cx).focus(window, cx);
+                                                });
+                                            })
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .pt_3()
+                                        .border_t_1()
+                                        .border_color(cx.theme().border)
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(
+                                            "⌘ / Ctrl F focuses search. Escape clears it. Invalid \
+                                             expressions still match literal text.",
+                                        ),
+                                )
+                        }
+                    }),
             )
             .child(self.render_filters(cx))
             .when(tree && expanded && !searching, |this| {

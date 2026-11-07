@@ -232,7 +232,8 @@ mod tests {
     use super::*;
     #[test]
     fn entries_match_primary_executable_not_actions() {
-        let text="[Desktop Entry]\nType=Application\nExec=\"/opt/My App/bin/app\" --open %U\nIcon=org.example.App\n[Desktop Action Other]\nExec=/wrong\nIcon=wrong";
+        let text = "[Desktop Entry]\nType=Application\nExec=\"/opt/My App/bin/app\" --open \
+                    %U\nIcon=org.example.App\n[Desktop Action Other]\nExec=/wrong\nIcon=wrong";
         assert_eq!(
             parse_entry(text),
             Some(("/opt/My App/bin/app".into(), "org.example.App".into()))

@@ -169,19 +169,97 @@ fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
                     .child(title),
             )
     };
-    v_flex().gap_5()
-        .child(card("Monitoring").child(row("Refresh interval","Applies to the app and menu-bar overview.",
-            Button::new("rate").outline().label(format!("{}s",super::super::sampling::interval(rate) as f64 / 1000.)).dropdown_caret(true).dropdown_menu(move |mut menu,_,_| {
-                for ms in REFRESH_RATES { let monitor = rate_m.clone(); menu = menu.item(PopupMenuItem::new(format!("{}s",ms / 1000)).checked(rate==ms).on_click(move |_,_,cx| monitor.update(cx,|m,cx|m.set_refresh_rate(ms,cx)))); } menu
-            }),cx))
-            .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Longer intervals reduce background activity. Pause and resume from the app bar.")))
-        .child(card("Menu-bar companion")
-            .child(v_flex().gap_1()
-                .child(Checkbox::new("menu-bar").label("Show menu-bar icon").checked(menu_bar).on_click(move |checked,_,cx| save(&bar_m,json!({"behavior":{"menuBarEnabled":*checked}}),cx)))
-                .child(div().pl_6().text_xs().text_color(cx.theme().muted_foreground).child("Keep CPU, memory, graphics and network readings close at hand.")))
-            .child(v_flex().gap_1()
-                .child(Checkbox::new("keep-running").label("Keep running when the window closes").checked(keep_running).disabled(!menu_bar).on_click(move |checked,_,cx| save(&keep_m,json!({"behavior":{"keepRunning":*checked}}),cx)))
-                .child(div().pl_6().text_xs().text_color(cx.theme().muted_foreground).child("Continue from the menu bar. Choose Quit Zentop to exit completely."))))
+    v_flex()
+        .gap_5()
+        .child(
+            card("Monitoring")
+                .child(row(
+                    "Refresh interval",
+                    "Applies to the app and menu-bar overview.",
+                    Button::new("rate")
+                        .outline()
+                        .label(format!(
+                            "{}s",
+                            super::super::sampling::interval(rate) as f64 / 1000.
+                        ))
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for ms in REFRESH_RATES {
+                                let monitor = rate_m.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(format!("{}s", ms / 1000))
+                                        .checked(rate == ms)
+                                        .on_click(move |_, _, cx| {
+                                            monitor.update(cx, |m, cx| m.set_refresh_rate(ms, cx))
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                    cx,
+                ))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(
+                            "Longer intervals reduce background activity. Pause and resume from \
+                             the app bar.",
+                        ),
+                ),
+        )
+        .child(
+            card("Menu-bar companion")
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Checkbox::new("menu-bar")
+                                .label("Show menu-bar icon")
+                                .checked(menu_bar)
+                                .on_click(move |checked, _, cx| {
+                                    save(
+                                        &bar_m,
+                                        json!({"behavior":{"menuBarEnabled":*checked}}),
+                                        cx,
+                                    )
+                                }),
+                        )
+                        .child(
+                            div()
+                                .pl_6()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "Keep CPU, memory, graphics and network readings close at \
+                                     hand.",
+                                ),
+                        ),
+                )
+                .child(
+                    v_flex()
+                        .gap_1()
+                        .child(
+                            Checkbox::new("keep-running")
+                                .label("Keep running when the window closes")
+                                .checked(keep_running)
+                                .disabled(!menu_bar)
+                                .on_click(move |checked, _, cx| {
+                                    save(&keep_m, json!({"behavior":{"keepRunning":*checked}}), cx)
+                                }),
+                        )
+                        .child(
+                            div()
+                                .pl_6()
+                                .text_xs()
+                                .text_color(cx.theme().muted_foreground)
+                                .child(
+                                    "Continue from the menu bar. Choose Quit Zentop to exit \
+                                     completely.",
+                                ),
+                        ),
+                ),
+        )
         .into_any_element()
 }
 

@@ -229,12 +229,8 @@ mod tests {
     /// A single fdinfo block is reduced to its client id and total engine time
     #[test]
     fn test_parse_fdinfo() {
-        let info = "pos:\t0\n\
-                    drm-driver:\tamdgpu\n\
-                    drm-client-id:\t495\n\
-                    drm-memory-vram:\t23240 KiB\n\
-                    drm-engine-gfx:\t1000000 ns\n\
-                    drm-engine-compute:\t500000 ns\n";
+        let info = "pos:\t0\ndrm-driver:\tamdgpu\ndrm-client-id:\t495\ndrm-memory-vram:\t23240 \
+                    KiB\ndrm-engine-gfx:\t1000000 ns\ndrm-engine-compute:\t500000 ns\n";
 
         assert_eq!(parse_fdinfo(info), Some((495, 1_500_000)));
     }
@@ -242,9 +238,7 @@ mod tests {
     /// Capacity lines describe how many engines exist, not how busy they were
     #[test]
     fn test_parse_fdinfo_ignores_capacity() {
-        let info = "drm-client-id:\t7\n\
-                    drm-engine-capacity-gfx:\t2\n\
-                    drm-engine-gfx:\t400 ns\n";
+        let info = "drm-client-id:\t7\ndrm-engine-capacity-gfx:\t2\ndrm-engine-gfx:\t400 ns\n";
 
         assert_eq!(parse_fdinfo(info), Some((7, 400)));
     }

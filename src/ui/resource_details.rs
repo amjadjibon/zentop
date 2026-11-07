@@ -210,15 +210,27 @@ fn content(
     let palette = theme::palette(cx);
     match resource {
         Resource::Cpu => {
-            let average = (!s.cpu_usage.is_empty())
-                .then(|| s.cpu_usage.iter().map(|v| *v as f64).sum::<f64>() / s.cpu_usage.len() as f64);
+            let average = (!s.cpu_usage.is_empty()).then(|| {
+                s.cpu_usage.iter().map(|v| *v as f64).sum::<f64>() / s.cpu_usage.len() as f64
+            });
             v_flex()
                 .gap_2()
-                .child(heading(identity.cpu_model.clone().unwrap_or_else(|| "Processor".into())))
+                .child(heading(
+                    identity
+                        .cpu_model
+                        .clone()
+                        .unwrap_or_else(|| "Processor".into()),
+                ))
                 .child(rows(
                     vec![
-                        ("Average utilization", unavailable_or(average, |v| format!("{v:.1}%"))),
-                        ("Physical cores", unavailable_or(identity.physical_cores, |v| v.to_string())),
+                        (
+                            "Average utilization",
+                            unavailable_or(average, |v| format!("{v:.1}%")),
+                        ),
+                        (
+                            "Physical cores",
+                            unavailable_or(identity.physical_cores, |v| v.to_string()),
+                        ),
                         ("Logical processors", s.cpu_usage.len().to_string()),
                     ],
                     cx,
@@ -227,18 +239,43 @@ fn content(
                 .child(chart(history, |s| s.cpu, palette.charts[0], unavailable))
                 .child(heading("Per-core activity"))
                 .child(note("Each core is scaled from 0 to 100%.", cx))
-                .child(div().grid().grid_cols(2).gap_4().children(s.cpu_usage.iter().enumerate().map(|(i, v)| {
-                    v_flex().gap_1p5().child(h_flex().justify_between().text_xs()
-                        .child(div().text_color(cx.theme().muted_foreground).child(format!("Core {i}")))
-                        .child(format!("{v:.1}%")))
-                        .child(Progress::new(("core-detail", i)).value(v.clamp(0.0, 100.0)).color(palette.charts[0]))
-                })))
-                .child(note("The overview averages utilization across logical processors. A process can exceed 100% CPU when it uses several cores.", cx))
+                .child(div().grid().grid_cols(2).gap_4().children(
+                    s.cpu_usage.iter().enumerate().map(|(i, v)| {
+                        v_flex()
+                            .gap_1p5()
+                            .child(
+                                h_flex()
+                                    .justify_between()
+                                    .text_xs()
+                                    .child(
+                                        div()
+                                            .text_color(cx.theme().muted_foreground)
+                                            .child(format!("Core {i}")),
+                                    )
+                                    .child(format!("{v:.1}%")),
+                            )
+                            .child(
+                                Progress::new(("core-detail", i))
+                                    .value(v.clamp(0.0, 100.0))
+                                    .color(palette.charts[0]),
+                            )
+                    }),
+                ))
+                .child(note(
+                    "The overview averages utilization across logical processors. A process can \
+                     exceed 100% CPU when it uses several cores.",
+                    cx,
+                ))
                 .into_any_element()
         }
         Resource::Memory => v_flex()
             .gap_4()
-            .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(format_bytes(s.memory_used)))
+            .child(
+                div()
+                    .text_3xl()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format_bytes(s.memory_used)),
+            )
             .child(note("RAM in use", cx))
             .child(chart(history, |s| s.memory, palette.charts[2], unavailable))
             .child(rows(
@@ -247,11 +284,14 @@ fn content(
                     ("In use", format_bytes(s.memory_used)),
                     ("Not in use", format_bytes(s.memory_free)),
                     ("Unallocated", format_bytes(s.details.memory_unallocated)),
-
                     (
                         "Swap",
                         if s.details.swap_total > 0 {
-                            format!("{} of {}", format_bytes(s.details.swap_used), format_bytes(s.details.swap_total))
+                            format!(
+                                "{} of {}",
+                                format_bytes(s.details.swap_used),
+                                format_bytes(s.details.swap_total)
+                            )
                         } else {
                             "No swap space is currently allocated.".into()
                         },
@@ -259,135 +299,417 @@ fn content(
                 ],
                 cx,
             ))
-            .child(note("Not in use is total RAM minus reported use. Unallocated is the OS free-page count. These can overlap, and swap use alone does not measure memory pressure.", cx))
+            .child(note(
+                "Not in use is total RAM minus reported use. Unallocated is the OS free-page \
+                 count. These can overlap, and swap use alone does not measure memory pressure.",
+                cx,
+            ))
             .into_any_element(),
         Resource::Gpu => {
             if frame.gpus.is_empty() {
-                return note("No graphics adapters reported readings on this system.", cx).into_any_element();
+                return note("No graphics adapters reported readings on this system.", cx)
+                    .into_any_element();
             }
             v_flex()
                 .gap_2()
                 .when(frame.gpus.len() > 1, |this| {
                     let selection = selection.clone();
                     let devices = frame.gpus.clone();
-                    this.child(heading("Graphics adapter")).child(Button::new("adapter").outline().label(frame.gpus.iter().find(|g| g.id == selection.borrow().gpu).unwrap_or(&frame.gpus[0]).name.clone()).dropdown_menu(move |mut menu, _, _| {
-                        for g in &devices { let selection = selection.clone(); let id = g.id.clone(); menu = menu.item(PopupMenuItem::new(g.name.clone()).on_click(move |_, _, cx| { selection.borrow_mut().gpu = id.clone(); cx.refresh_windows(); })); } menu
-                    }))
+                    this.child(heading("Graphics adapter")).child(
+                        Button::new("adapter")
+                            .outline()
+                            .label(
+                                frame
+                                    .gpus
+                                    .iter()
+                                    .find(|g| g.id == selection.borrow().gpu)
+                                    .unwrap_or(&frame.gpus[0])
+                                    .name
+                                    .clone(),
+                            )
+                            .dropdown_menu(move |mut menu, _, _| {
+                                for g in &devices {
+                                    let selection = selection.clone();
+                                    let id = g.id.clone();
+                                    menu = menu.item(PopupMenuItem::new(g.name.clone()).on_click(
+                                        move |_, _, cx| {
+                                            selection.borrow_mut().gpu = id.clone();
+                                            cx.refresh_windows();
+                                        },
+                                    ));
+                                }
+                                menu
+                            }),
+                    )
                 })
-                .children(frame.gpus.iter().filter(|g| g.id == selection.borrow().gpu || (selection.borrow().gpu.is_empty() && g.id == frame.gpus[0].id)).map(|g| {
-                    let id = g.id.clone();
-                    v_flex()
-                        .gap_1()
-                        .child(heading(format!("{} · {}", g.name, g.vendor)))
-                        .child(chart(history, move |s| s.gpus.get(&id).copied().flatten(), palette.charts[1], unavailable))
-                        .child(rows(
-                            vec![
-                                ("GPU utilization", unavailable_or(g.utilization, |v| format!("{v:.1}%"))),
-                                (
-                                    if g.memory_kind == "shared" { "Shared memory in use" } else { "GPU memory in use" },
-                                    unavailable_or(g.memory_used, format_bytes),
-                                ),
-                                ("GPU memory capacity", if g.memory_kind == "shared" { "Uses system memory".into() } else { unavailable_or(g.memory_total, format_bytes) }),
-                                ("Temperature", unavailable_or(g.temperature, |v| format!("{v:.0} °C"))),
-                                ("Power", unavailable_or(g.power_watts, |v| format!("{v:.1} W"))),
-                                ("Core clock", unavailable_or(g.core_clock_mhz, |v| format!("{v:.0} MHz"))),
-                                ("Cores", unavailable_or(g.cores, |v| v.to_string())),
-                                ("Source", g.source.clone()),
-                            ],
-                            cx,
-                        ))
-                }))
-                .child(note("Readings depend on the driver. Missing counters never mean idle hardware. Apple silicon shared GPU memory is part of system RAM.", cx))
+                .children(
+                    frame
+                        .gpus
+                        .iter()
+                        .filter(|g| {
+                            g.id == selection.borrow().gpu
+                                || (selection.borrow().gpu.is_empty() && g.id == frame.gpus[0].id)
+                        })
+                        .map(|g| {
+                            let id = g.id.clone();
+                            v_flex()
+                                .gap_1()
+                                .child(heading(format!("{} · {}", g.name, g.vendor)))
+                                .child(chart(
+                                    history,
+                                    move |s| s.gpus.get(&id).copied().flatten(),
+                                    palette.charts[1],
+                                    unavailable,
+                                ))
+                                .child(rows(
+                                    vec![
+                                        (
+                                            "GPU utilization",
+                                            unavailable_or(g.utilization, |v| format!("{v:.1}%")),
+                                        ),
+                                        (
+                                            if g.memory_kind == "shared" {
+                                                "Shared memory in use"
+                                            } else {
+                                                "GPU memory in use"
+                                            },
+                                            unavailable_or(g.memory_used, format_bytes),
+                                        ),
+                                        (
+                                            "GPU memory capacity",
+                                            if g.memory_kind == "shared" {
+                                                "Uses system memory".into()
+                                            } else {
+                                                unavailable_or(g.memory_total, format_bytes)
+                                            },
+                                        ),
+                                        (
+                                            "Temperature",
+                                            unavailable_or(g.temperature, |v| format!("{v:.0} °C")),
+                                        ),
+                                        (
+                                            "Power",
+                                            unavailable_or(g.power_watts, |v| format!("{v:.1} W")),
+                                        ),
+                                        (
+                                            "Core clock",
+                                            unavailable_or(g.core_clock_mhz, |v| {
+                                                format!("{v:.0} MHz")
+                                            }),
+                                        ),
+                                        ("Cores", unavailable_or(g.cores, |v| v.to_string())),
+                                        ("Source", g.source.clone()),
+                                    ],
+                                    cx,
+                                ))
+                        }),
+                )
+                .child(note(
+                    "Readings depend on the driver. Missing counters never mean idle hardware. \
+                     Apple silicon shared GPU memory is part of system RAM.",
+                    cx,
+                ))
                 .into_any_element()
         }
         Resource::Storage => {
             let volumes = &s.details.volumes;
             v_flex()
                 .gap_2()
-                .when(volumes.is_empty(), |this| this.child(note("No volumes reported.", cx)))
-                .child(heading("Volume"))
-                .child({ let selection = selection.clone(); let volumes = volumes.clone();
-                    Button::new("volume-picker").outline().label(volumes.iter().find(|v| v.mount == selection.borrow().volume).or_else(|| volumes.iter().find(|v| v.mount == "/")).or_else(|| volumes.first()).map_or("No volumes".to_string(), |v| format!("{} · {}", v.mount, v.name))).dropdown_menu(move |mut menu, _, _| {
-                        for v in &volumes { let selection = selection.clone(); let mount = v.mount.clone(); menu = menu.item(PopupMenuItem::new(format!("{} · {}", v.mount, v.name)).on_click(move |_, _, cx| { selection.borrow_mut().volume = mount.clone(); cx.refresh_windows(); })); } menu
-                    })
+                .when(volumes.is_empty(), |this| {
+                    this.child(note("No volumes reported.", cx))
                 })
-                .children(volumes.iter().enumerate().filter(|(_, v)| {
-                    let mount = selection.borrow().volume.clone();
-                    if mount.is_empty() { v.mount == volumes.iter().find(|v| v.mount == "/").or_else(|| volumes.first()).map_or("", |v| v.mount.as_str()) } else { v.mount == mount }
-                }).map(|(i, v)| {
-                    let used = v.total.saturating_sub(v.available);
-                    let percent = if v.total > 0 { used as f32 / v.total as f32 * 100.0 } else { 0.0 };
-                    v_flex()
-                        .gap_1()
-                        .child(heading(format!("{} · {}", v.mount, if v.name.is_empty() { "Volume" } else { &v.name })))
-                        .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(if v.total > 0 { format_bytes(v.available) } else { "Unavailable".into() }))
-                        .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Available on this volume"))
-                        .child(Progress::new(("volume", i)).value(percent).color(palette.charts[3]))
-                        .child(rows(
-                            vec![
-                                ("Capacity", if v.total > 0 { format_bytes(v.total) } else { "Unavailable".into() }),
-                                ("Used", if v.total > 0 { format_bytes(used) } else { "Unavailable".into() }),
-                                ("Available", if v.total > 0 { format_bytes(v.available) } else { "Unavailable".into() }),
-                                ("File system", if v.file_system.is_empty() { "Unavailable".into() } else { v.file_system.clone() }),
-                                ("Access", if v.read_only { "Read only".into() } else { "Read and write".into() }),
-                            ],
-                            cx,
-                        ))
-                }))
-                .child(note("These are file-system capacity readings, not a scan of files. Volumes can share one storage pool (APFS), so their capacities can overlap.", cx))
+                .child(heading("Volume"))
+                .child({
+                    let selection = selection.clone();
+                    let volumes = volumes.clone();
+                    Button::new("volume-picker")
+                        .outline()
+                        .label(
+                            volumes
+                                .iter()
+                                .find(|v| v.mount == selection.borrow().volume)
+                                .or_else(|| volumes.iter().find(|v| v.mount == "/"))
+                                .or_else(|| volumes.first())
+                                .map_or("No volumes".to_string(), |v| {
+                                    format!("{} · {}", v.mount, v.name)
+                                }),
+                        )
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for v in &volumes {
+                                let selection = selection.clone();
+                                let mount = v.mount.clone();
+                                menu = menu.item(
+                                    PopupMenuItem::new(format!("{} · {}", v.mount, v.name))
+                                        .on_click(move |_, _, cx| {
+                                            selection.borrow_mut().volume = mount.clone();
+                                            cx.refresh_windows();
+                                        }),
+                                );
+                            }
+                            menu
+                        })
+                })
+                .children(
+                    volumes
+                        .iter()
+                        .enumerate()
+                        .filter(|(_, v)| {
+                            let mount = selection.borrow().volume.clone();
+                            if mount.is_empty() {
+                                v.mount
+                                    == volumes
+                                        .iter()
+                                        .find(|v| v.mount == "/")
+                                        .or_else(|| volumes.first())
+                                        .map_or("", |v| v.mount.as_str())
+                            } else {
+                                v.mount == mount
+                            }
+                        })
+                        .map(|(i, v)| {
+                            let used = v.total.saturating_sub(v.available);
+                            let percent = if v.total > 0 {
+                                used as f32 / v.total as f32 * 100.0
+                            } else {
+                                0.0
+                            };
+                            v_flex()
+                                .gap_1()
+                                .child(heading(format!(
+                                    "{} · {}",
+                                    v.mount,
+                                    if v.name.is_empty() { "Volume" } else { &v.name }
+                                )))
+                                .child(div().text_3xl().font_weight(FontWeight::SEMIBOLD).child(
+                                    if v.total > 0 {
+                                        format_bytes(v.available)
+                                    } else {
+                                        "Unavailable".into()
+                                    },
+                                ))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child("Available on this volume"),
+                                )
+                                .child(
+                                    Progress::new(("volume", i))
+                                        .value(percent)
+                                        .color(palette.charts[3]),
+                                )
+                                .child(rows(
+                                    vec![
+                                        (
+                                            "Capacity",
+                                            if v.total > 0 {
+                                                format_bytes(v.total)
+                                            } else {
+                                                "Unavailable".into()
+                                            },
+                                        ),
+                                        (
+                                            "Used",
+                                            if v.total > 0 {
+                                                format_bytes(used)
+                                            } else {
+                                                "Unavailable".into()
+                                            },
+                                        ),
+                                        (
+                                            "Available",
+                                            if v.total > 0 {
+                                                format_bytes(v.available)
+                                            } else {
+                                                "Unavailable".into()
+                                            },
+                                        ),
+                                        (
+                                            "File system",
+                                            if v.file_system.is_empty() {
+                                                "Unavailable".into()
+                                            } else {
+                                                v.file_system.clone()
+                                            },
+                                        ),
+                                        (
+                                            "Access",
+                                            if v.read_only {
+                                                "Read only".into()
+                                            } else {
+                                                "Read and write".into()
+                                            },
+                                        ),
+                                    ],
+                                    cx,
+                                ))
+                        }),
+                )
+                .child(note(
+                    "These are file-system capacity readings, not a scan of files. Volumes can \
+                     share one storage pool (APFS), so their capacities can overlap.",
+                    cx,
+                ))
                 .into_any_element()
         }
-        Resource::System => v_flex()
-            .gap_2()
-            .child(heading(identity.os_version.clone().unwrap_or_else(|| "Operating system unavailable".into())))
-            .child(rows(
-                vec![
-                    ("Uptime", format_uptime(s.uptime)),
-                    ("Kernel", identity.kernel_version.clone().unwrap_or_else(|| "Unavailable".into())),
-                    ("Architecture", identity.architecture.clone()),
-                    ("Processor", identity.cpu_model.clone().unwrap_or_else(|| "Unavailable".into())),
-                    ("Logical processors", s.cpu_usage.len().to_string()),
-
-                ],
-                cx,
-            ))
-            .child(heading("Load average"))
-            .child(div().text_sm().text_color(cx.theme().muted_foreground).child("Queued and running work over time."))
-            .child(h_flex().gap_3().children(s.load_avg.iter().enumerate().map(|(i,value)| v_flex().flex_1()
-                .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!("{} minute{}",[1,5,15][i],if i==0 { "" }else{"s"})))
-                .child(div().text_xl().font_weight(FontWeight::SEMIBOLD).child(format!("{value:.2}"))))))
-            .child(note("Load is not a CPU percentage. Uptime is the time since the operating system started.", cx))
-            .into_any_element(),
+        Resource::System => {
+            v_flex()
+                .gap_2()
+                .child(heading(
+                    identity
+                        .os_version
+                        .clone()
+                        .unwrap_or_else(|| "Operating system unavailable".into()),
+                ))
+                .child(rows(
+                    vec![
+                        ("Uptime", format_uptime(s.uptime)),
+                        (
+                            "Kernel",
+                            identity
+                                .kernel_version
+                                .clone()
+                                .unwrap_or_else(|| "Unavailable".into()),
+                        ),
+                        ("Architecture", identity.architecture.clone()),
+                        (
+                            "Processor",
+                            identity
+                                .cpu_model
+                                .clone()
+                                .unwrap_or_else(|| "Unavailable".into()),
+                        ),
+                        ("Logical processors", s.cpu_usage.len().to_string()),
+                    ],
+                    cx,
+                ))
+                .child(heading("Load average"))
+                .child(
+                    div()
+                        .text_sm()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Queued and running work over time."),
+                )
+                .child(h_flex().gap_3().children(s.load_avg.iter().enumerate().map(
+                    |(i, value)| {
+                        v_flex()
+                            .flex_1()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(format!(
+                                        "{} minute{}",
+                                        [1, 5, 15][i],
+                                        if i == 0 { "" } else { "s" }
+                                    )),
+                            )
+                            .child(
+                                div()
+                                    .text_xl()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .child(format!("{value:.2}")),
+                            )
+                    },
+                )))
+                .child(note(
+                    "Load is not a CPU percentage. Uptime is the time since the operating system \
+                     started.",
+                    cx,
+                ))
+                .into_any_element()
+        }
         Resource::Network => {
             let rate = |v: Option<u64>| unavailable_or(v, |b| format!("{}/s", format_bytes(b)));
             let mut interfaces = s.details.interfaces.clone();
             if selection.borrow().interface_order.is_empty() {
-                interfaces.sort_by(|a,b| (b.received.unwrap_or(0).saturating_add(b.sent.unwrap_or(0))).cmp(&a.received.unwrap_or(0).saturating_add(a.sent.unwrap_or(0)))
-                    .then_with(|| b.received_total.saturating_add(b.sent_total).cmp(&a.received_total.saturating_add(a.sent_total))).then_with(|| a.name.cmp(&b.name)));
-                selection.borrow_mut().interface_order = interfaces.iter().map(|i| i.name.clone()).collect();
+                interfaces.sort_by(|a, b| {
+                    (b.received.unwrap_or(0).saturating_add(b.sent.unwrap_or(0)))
+                        .cmp(&a.received.unwrap_or(0).saturating_add(a.sent.unwrap_or(0)))
+                        .then_with(|| {
+                            b.received_total
+                                .saturating_add(b.sent_total)
+                                .cmp(&a.received_total.saturating_add(a.sent_total))
+                        })
+                        .then_with(|| a.name.cmp(&b.name))
+                });
+                selection.borrow_mut().interface_order =
+                    interfaces.iter().map(|i| i.name.clone()).collect();
             }
-            interfaces.sort_by_key(|i| selection.borrow().interface_order.iter().position(|name| name == &i.name).unwrap_or(usize::MAX));
+            interfaces.sort_by_key(|i| {
+                selection
+                    .borrow()
+                    .interface_order
+                    .iter()
+                    .position(|name| name == &i.name)
+                    .unwrap_or(usize::MAX)
+            });
             let query = search.read(cx).value().trim().to_lowercase();
             let unused = selection.borrow().unused;
             let total = interfaces.len();
-            interfaces.retain(|i| (unused || !query.is_empty() || i.received_total > 0 || i.sent_total > 0 || i.received.is_none() || i.sent.is_none()) && i.name.to_lowercase().contains(&query));
+            interfaces.retain(|i| {
+                (unused
+                    || !query.is_empty()
+                    || i.received_total > 0
+                    || i.sent_total > 0
+                    || i.received.is_none()
+                    || i.sent.is_none())
+                    && i.name.to_lowercase().contains(&query)
+            });
             let shown = interfaces.len();
             let toggle = selection.clone();
             v_flex()
                 .gap_3()
-                .child(rows(vec![("Received", rate(s.network_rx_bytes)), ("Sent", rate(s.network_tx_bytes))], cx))
-                .child(div().h(px(112.)).flex().child(stats::network_trend(history, &palette, unavailable)))
+                .child(rows(
+                    vec![
+                        ("Received", rate(s.network_rx_bytes)),
+                        ("Sent", rate(s.network_tx_bytes)),
+                    ],
+                    cx,
+                ))
+                .child(div().h(px(112.)).flex().child(stats::network_trend(
+                    history,
+                    &palette,
+                    unavailable,
+                )))
                 .child(heading(format!("Interfaces · {shown} of {total}")))
                 .child(Input::new(search).cleanable(true))
-                .child(Checkbox::new("include-unused").label("Include unused interfaces").checked(unused).on_click(move |checked, _, cx| { toggle.borrow_mut().unused = *checked; cx.refresh_windows(); }))
-                .when(interfaces.is_empty(), |this| this.child(note(if !query.is_empty() { "No interfaces match this search." } else if total > 0 { "No interfaces with recorded traffic." } else { "No network interfaces were reported." }, cx)))
+                .child(
+                    Checkbox::new("include-unused")
+                        .label("Include unused interfaces")
+                        .checked(unused)
+                        .on_click(move |checked, _, cx| {
+                            toggle.borrow_mut().unused = *checked;
+                            cx.refresh_windows();
+                        }),
+                )
+                .when(interfaces.is_empty(), |this| {
+                    this.child(note(
+                        if !query.is_empty() {
+                            "No interfaces match this search."
+                        } else if total > 0 {
+                            "No interfaces with recorded traffic."
+                        } else {
+                            "No network interfaces were reported."
+                        },
+                        cx,
+                    ))
+                })
                 .children(interfaces.into_iter().map(|i| {
                     v_flex()
                         .py_3()
                         .border_b_1()
                         .border_color(cx.theme().border.opacity(0.5))
-                        .p_4().rounded(cx.theme().radius).border_1().border_color(cx.theme().border)
-                        .child(div().text_sm().font_family(cx.theme().mono_font_family.clone()).child(i.name.clone()))
+                        .p_4()
+                        .rounded(cx.theme().radius)
+                        .border_1()
+                        .border_color(cx.theme().border)
+                        .child(
+                            div()
+                                .text_sm()
+                                .font_family(cx.theme().mono_font_family.clone())
+                                .child(i.name.clone()),
+                        )
                         .child(
                             div()
                                 .text_xs()
@@ -401,7 +723,11 @@ fn content(
                                 )),
                         )
                 }))
-                .child(note("Rates use the shared sampling interval. Totals can reset when an interface restarts, and virtual interfaces can count the same traffic twice.", cx))
+                .child(note(
+                    "Rates use the shared sampling interval. Totals can reset when an interface \
+                     restarts, and virtual interfaces can count the same traffic twice.",
+                    cx,
+                ))
                 .into_any_element()
         }
     }
