@@ -21,12 +21,10 @@
     }
   },
   "behavior": {
-    "itemsPerPage": 15,
     "refreshRate": 3000,
     "menuBarEnabled": true,
     "keepRunning": false,
     "defaultStatusFilter": "all",
-    "processView": "flat",
-    "usageAnalytics": false
+    "processView": "flat"
   }
 }

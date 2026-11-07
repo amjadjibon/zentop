@@ -33,11 +33,8 @@ fn merge(config: &mut Value, patch: &Value) {
                 continue;
             }
             let valid = match key.as_str() {
-                "itemsPerPage" => value
-                    .as_u64()
-                    .is_some_and(|n| [15, 25, 50, 100, 250, 500].contains(&n)),
                 "refreshRate" => value.as_u64().is_some_and(|n| (1000..=30000).contains(&n)),
-                "menuBarEnabled" | "keepRunning" | "usageAnalytics" => value.is_boolean(),
+                "menuBarEnabled" | "keepRunning" => value.is_boolean(),
                 "processView" => matches!(value.as_str(), Some("flat" | "tree")),
                 "defaultStatusFilter" => matches!(
                     value.as_str(),
@@ -86,8 +83,8 @@ fn load(path: &Path, legacy: Option<&Value>) -> Result<Option<Value>, String> {
     Ok(Some(config))
 }
 /// Same location Tauri used (`<config dir>/com.neohtop.dev`), so existing
-/// installations keep their settings and usage identifier.
-pub fn config_dir() -> Option<PathBuf> {
+/// installations keep their settings.
+fn config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("com.neohtop.dev"))
 }
 
@@ -101,6 +98,11 @@ impl Preferences {
     /// Loads saved settings, writing defaults on first launch. A missing config
     /// directory or unreadable file falls back to defaults and reports why.
     pub fn open() -> (Self, Option<String>) {
+        // Earlier releases stored an optional analytics identifier here. Nothing
+        // is sent anymore, so do not keep it around.
+        if let Some(dir) = config_dir() {
+            let _ = fs::remove_file(dir.join("usage-id"));
+        }
         let Some(path) = config_dir().map(|dir| dir.join("settings.json")) else {
             return (
                 Self {
@@ -152,13 +154,6 @@ impl Preferences {
             .as_ref()
             .ok_or("Settings could not be loaded, so changes cannot be saved.")?;
         persist(path, &next)?;
-        let analytics = next["behavior"]["usageAnalytics"]
-            .as_bool()
-            .unwrap_or(false);
-        if let Err(error) = crate::telemetry::configure(analytics) {
-            persist(path, &self.config).map_err(|rollback| format!("{error}. {rollback}"))?;
-            return Err(error);
-        }
         self.config = next;
         Ok(())
     }
@@ -172,10 +167,10 @@ mod tests {
         let mut config = defaults();
         merge(
             &mut config,
-            &json!({"behavior":{"refreshRate":5000,"keepRunning":true,"itemsPerPage":0,"processView":"bad"},"appearance":{"columnVisibility":{"name":false,"pid":false,"unknown":true}}}),
+            &json!({"behavior":{"refreshRate":5000,"keepRunning":true,"usageAnalytics":true,"processView":"bad"},"appearance":{"columnVisibility":{"name":false,"pid":false,"unknown":true}}}),
         );
         assert_eq!(config["behavior"]["refreshRate"], 5000);
-        assert_eq!(config["behavior"]["itemsPerPage"], 15);
+        assert!(config["behavior"].get("usageAnalytics").is_none());
         assert_eq!(config["behavior"]["processView"], "flat");
         assert_eq!(config["appearance"]["columnVisibility"]["name"], true);
         assert_eq!(config["appearance"]["columnVisibility"]["pid"], false);

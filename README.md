@@ -9,10 +9,10 @@
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT license" /></a>
 <a href="https://github.com/Abdenasser/neohtop/stargazers"><img src="https://img.shields.io/github/stars/Abdenasser/neohtop?style=flat-square" alt="GitHub stars" /></a>
 
-  <p><a href="https://github.com/Abdenasser/neohtop/releases/latest"><strong>Download NeoHtop</strong></a> · <a href="https://abdenasser.github.io/neohtop/">Website</a> · <a href="CHANGELOG.md">What’s new</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="docs/usage.md">Desktop guide</a></p>
+  <p><a href="https://github.com/Abdenasser/neohtop/releases/latest"><strong>Download NeoHtop</strong></a> · <a href="CHANGELOG.md">What’s new</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="docs/usage.md">Desktop guide</a></p>
 </div>
 
-<img src="docs/assets/neohtop-desktop.png" alt="NeoHtop in Catppuccin, captured with macOS: CPU, memory and GPU charts, storage, network and processes" width="1280" />
+<img src="docs/screenshots/neohtop-desktop.png" alt="NeoHtop in Catppuccin, captured with macOS: CPU, memory and GPU charts, storage, network and processes" width="1280" />
 
 <p align="center"><sub>Catppuccin, front and center. 23 more themes when you want a change. Free, local, and open source.</sub></p>
 
@@ -25,7 +25,7 @@ A fresh desktop experience with more to explore—from the process holding a por
 - **Keep the essentials in your menu bar.** A compact companion shows live resources and your busiest processes. Jump straight into an inspector without hunting through the table.
 - **Put a name to the process.** Native app icons when the system can provide them; the familiar ghost when it can’t.
 - **Find what owns a port.** Type `:3000` or `port:443`. Socket scans run only when you need them.
-- **Keep the themes you love.** All **24 themes**, rebuilt around consistent shadcn-svelte controls, readable tokens, and a searchable gallery.
+- **Keep the themes you love.** All **24 themes**, each checked for readable contrast, with a visual gallery in Settings.
 
 [Read the complete v1.3.0 changelog →](CHANGELOG.md)
 
@@ -161,6 +161,6 @@ If NeoHtop earns a place in your setup, [star the project](https://github.com/Ab
 
 [The story behind NeoHtop](https://www.abdenasser.com/2024/11/06/oh-boy-neohtop/) · [MIT License](LICENSE)
 
-## Privacy and analytics
+## Privacy
 
-Official v1.3.0 builds send a basic launch count and app version without a persistent identifier, even when optional sharing is off. **Settings → Privacy** lets you opt in to limited feature usage. Process names, search text, commands, paths and system readings stay local. See the [privacy notice](https://abdenasser.github.io/neohtop/privacy.html).
+NeoHtop sends nothing. There are no analytics or launch counts, and no network requests; process names, commands, searches and system readings never leave your machine. Earlier versions' optional usage identifier is deleted on first launch.

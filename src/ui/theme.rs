@@ -1,7 +1,8 @@
 //! NeoHtop palettes applied to the gpui-component theme.
 //!
-//! `assets/themes.json` holds semantic roles already resolved for contrast by
-//! `site/lib/utils/theme-tokens.js` (regenerate with `node scripts/export-themes.mjs`).
+//! `assets/themes.json` is the palette source: each theme's semantic roles,
+//! already resolved for contrast (text and controls meet WCAG AA against the
+//! surfaces they sit on). Edit roles there and keep that guarantee.
 use gpui_kit::component::{Theme, ThemeMode};
 use gpui_kit::{px, App, Global, Hsla, Rgba};
 use serde::Deserialize;
@@ -57,6 +58,27 @@ pub fn all() -> impl Iterator<Item = (&'static str, &'static str)> {
 
 pub fn exists(name: &str) -> bool {
     THEMES.iter().any(|t| t.name == name)
+}
+
+/// Swatch colors for a theme gallery, without applying the theme.
+pub struct Preview {
+    pub background: Hsla,
+    pub card: Hsla,
+    pub foreground: Hsla,
+    pub muted: Hsla,
+    pub border: Hsla,
+    pub accents: [Hsla; 3],
+}
+
+pub fn preview(name: &str) -> Option<Preview> {
+    THEMES.iter().find(|t| t.name == name).map(|t| Preview {
+        background: hex(&t.background),
+        card: hex(&t.card),
+        foreground: hex(&t.foreground),
+        muted: hex(&t.muted_foreground),
+        border: hex(&t.border),
+        accents: [hex(&t.primary), hex(&t.chart_2), hex(&t.chart_3)],
+    })
 }
 
 /// Colors NeoHtop paints itself, beyond the component theme.
@@ -170,6 +192,22 @@ pub fn apply(name: &str, cx: &mut App) {
         c.danger_hover = hover(danger);
         c.danger_active = pressed(danger);
         c.danger_foreground = hex(&tokens.destructive_foreground);
+        c.button = secondary;
+        c.button_hover = hover(secondary);
+        c.button_active = pressed(secondary);
+        c.button_foreground = foreground;
+        c.button_primary = primary;
+        c.button_primary_hover = hover(primary);
+        c.button_primary_active = pressed(primary);
+        c.button_primary_foreground = c.primary_foreground;
+        c.button_secondary = secondary;
+        c.button_secondary_hover = hover(secondary);
+        c.button_secondary_active = pressed(secondary);
+        c.button_secondary_foreground = foreground;
+        c.button_danger = danger;
+        c.button_danger_hover = hover(danger);
+        c.button_danger_active = pressed(danger);
+        c.button_danger_foreground = c.danger_foreground;
         c.link = primary;
         c.link_hover = hover(primary);
         c.link_active = pressed(primary);
@@ -235,6 +273,81 @@ pub fn apply(name: &str, cx: &mut App) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn luminance(color: &str) -> f64 {
+        let v = u32::from_str_radix(&color[1..7], 16).unwrap();
+        let channel = |c: u32| {
+            let s = c as f64 / 255.0;
+            if s <= 0.04045 {
+                s / 12.92
+            } else {
+                ((s + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * channel(v >> 16 & 0xff)
+            + 0.7152 * channel(v >> 8 & 0xff)
+            + 0.0722 * channel(v & 0xff)
+    }
+
+    fn contrast(a: &str, b: &str) -> f64 {
+        let (a, b) = (luminance(a), luminance(b));
+        (a.max(b) + 0.05) / (a.min(b) + 0.05)
+    }
+
+    /// Text and controls stay readable (WCAG AA) on every surface they use.
+    #[test]
+    fn every_theme_meets_contrast_minimums() {
+        for t in THEMES.iter() {
+            for surface in [
+                &t.background,
+                &t.card,
+                &t.popover,
+                &t.secondary,
+                &t.muted,
+                &t.accent,
+            ] {
+                assert!(
+                    contrast(&t.foreground, surface) >= 4.5,
+                    "{}: text on {surface}",
+                    t.name
+                );
+                assert!(
+                    contrast(&t.muted_foreground, surface) >= 4.5,
+                    "{}: muted text on {surface}",
+                    t.name
+                );
+            }
+            assert!(
+                contrast(&t.primary_foreground, &t.primary) >= 4.5,
+                "{}: primary label",
+                t.name
+            );
+            assert!(
+                contrast(&t.destructive_foreground, &t.destructive) >= 4.5,
+                "{}: destructive label",
+                t.name
+            );
+            for surface in [&t.background, &t.card] {
+                assert!(
+                    contrast(&t.primary, surface) >= 3.0,
+                    "{}: primary on {surface}",
+                    t.name
+                );
+                assert!(
+                    contrast(&t.destructive, surface) >= 3.0,
+                    "{}: destructive on {surface}",
+                    t.name
+                );
+                for chart in [&t.chart_1, &t.chart_2, &t.chart_3, &t.chart_4, &t.chart_5] {
+                    assert!(
+                        contrast(chart, surface) >= 3.0,
+                        "{}: chart {chart} on {surface}",
+                        t.name
+                    );
+                }
+            }
+        }
+    }
     #[test]
     fn every_theme_parses_and_default_exists() {
         assert_eq!(THEMES.len(), 24);

@@ -17,40 +17,19 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
       - name: Verify version and tag
         env:
           RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
-        run: node scripts/release.mjs check-version "$RELEASE_TAG"
-      - name: Verify the desktop analytics relay
-        if: startsWith(github.ref, 'refs/tags/')
-        env:
-          NEOHTOP_ANALYTICS_ENDPOINT: ${{ vars.NEOHTOP_ANALYTICS_ENDPOINT }}
-        run: |
-          node --input-type=module <<'JS'
-          const endpoint = new URL(process.env.NEOHTOP_ANALYTICS_ENDPOINT || '');
-          if (endpoint.protocol !== 'https:' || endpoint.pathname !== '/v1/events' || endpoint.search || endpoint.hash || endpoint.username || endpoint.password) throw new Error('Set the public desktop analytics relay URL before tagging.');
-          const health = new URL('/health', endpoint);
-          const response = await fetch(health, {signal: AbortSignal.timeout(10000)});
-          const state = await response.json();
-          if (!response.ok || state.configured !== true || state.validation_only !== false) throw new Error('The desktop relay must be configured for production before release.');
-          console.log('Desktop relay is configured for production.');
-          JS
+        run: scripts/release.sh check-version "$RELEASE_TAG"
       - name: Refuse changes to a published release
         if: startsWith(github.ref, 'refs/tags/')
-        uses: actions/github-script@v7
-        with:
-          script: |
-            try {
-              const { data } = await github.rest.repos.getReleaseByTag({
-                ...context.repo, tag: context.ref.replace('refs/tags/', '')
-              });
-              if (!data.draft) core.setFailed('This version is already published. Create a new version and tag.');
-            } catch (error) {
-              if (error.status !== 404) throw error;
-            }
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) && [ "$draft" != "true" ]; then
+            echo "::error::This version is already published. Create a new version and tag."
+            exit 1
+          fi
 
   packages:
     needs: preflight
@@ -68,23 +47,15 @@ jobs:
       contents: write
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
         with:
-          node-version-file: .nvmrc
+          fetch-depth: 0
       - uses: actions/download-artifact@v4
         with:
           pattern: packages-*
           merge-multiple: true
           path: artifacts
-      - name: Verify all packages and generate checksums
+      - name: Verify packages, write checksums and create or update the draft
         env:
+          GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ github.ref_name }}
-        run: node scripts/release.mjs manifest artifacts "$RELEASE_TAG"
-      - name: Create or update the draft
-        uses: actions/github-script@v7
-        env:
-          ARTIFACT_DIR: artifacts
-        with:
-          script: |
-            const { uploadDraft } = await import(`${process.env.GITHUB_WORKSPACE}/scripts/upload-draft.mjs`);
-            await uploadDraft({ github, context, directory: process.env.ARTIFACT_DIR });
+        run: scripts/release.sh upload-draft artifacts "$RELEASE_TAG"

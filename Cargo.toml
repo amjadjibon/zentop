@@ -13,14 +13,13 @@ path = "src/main.rs"
 [dependencies]
 gpui-kit = "0.9"
 dirs = "6"
-uuid = { version = "1.11", features = ["v4"] }
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde_json = "1.0"
 serde = { version = "1.0", features = ["derive", "rc"] }
 sysinfo = { version = "0.35.2", features = ["disk", "multithread", "network", "system"] }
 listeners = "0.6"
 chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
 regex = "1"
+tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
 
 [profile.release]
 panic = "abort"            # Strip expensive panic clean-up logic
@@ -40,6 +39,8 @@ core-foundation = "0.10"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 freedesktop-icons = "0.4"
+# The tray icon needs a GTK main loop of its own (matches tray-icon's GTK).
+gtk = "0.18"
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]
 nvml-wrapper = "0.13"

@@ -1,10 +1,12 @@
 //! Resource cards above the process table.
 use super::process_view::{format_bytes, format_uptime, GIB};
+use super::resource_details::{self, Resource};
 use super::theme::{self, Palette};
 use crate::gpu::GpuDevice;
 use crate::monitoring::SystemStats;
 use crate::sampling::Sample;
 use gpui_kit::assets::IconName;
+use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::progress::Progress;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Icon, Sizable};
 use gpui_kit::prelude::FluentBuilder;
@@ -44,6 +46,7 @@ fn card(
     title: &'static str,
     accent: Hsla,
     badge: Option<String>,
+    resource: Resource,
     cx: &App,
 ) -> gpui_kit::Div {
     v_flex()
@@ -76,17 +79,31 @@ fn card(
                         )
                         .child(title),
                 )
-                .when_some(badge, |this, badge| {
-                    this.child(
-                        div()
-                            .px_1p5()
-                            .rounded_md()
-                            .text_xs()
-                            .bg(cx.theme().secondary)
-                            .text_color(cx.theme().muted_foreground)
-                            .child(badge),
-                    )
-                }),
+                .child(
+                    h_flex()
+                        .gap_1()
+                        .when_some(badge, |this, badge| {
+                            this.child(
+                                div()
+                                    .px_1p5()
+                                    .rounded_md()
+                                    .text_xs()
+                                    .bg(cx.theme().secondary)
+                                    .text_color(cx.theme().muted_foreground)
+                                    .child(badge),
+                            )
+                        })
+                        .child(
+                            Button::new(SharedString::from(format!("details-{title}")))
+                                .ghost()
+                                .xsmall()
+                                .icon(IconName::ArrowUpRight)
+                                .tooltip(format!("{title} details"))
+                                .on_click(move |_, window, cx| {
+                                    resource_details::open(resource, window, cx)
+                                }),
+                        ),
+                ),
         )
 }
 
@@ -154,6 +171,7 @@ fn cpu(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
         "CPU",
         accent,
         Some(format!("{} cores", cores.len())),
+        Resource::Cpu,
         cx,
     )
     .child(headline(
@@ -204,6 +222,7 @@ fn memory(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
         "Memory",
         accent,
         Some(format_bytes(s.memory_total)),
+        Resource::Memory,
         cx,
     )
     .child(headline(
@@ -225,13 +244,13 @@ fn memory(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
 fn gpu(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
     let accent = palette.charts[3];
     let Some(device) = r.gpus.first() else {
-        return card(IconName::Gpu, "GPU", accent, None, cx)
+        return card(IconName::Gpu, "GPU", accent, None, Resource::Gpu, cx)
             .child(headline(None, "%", "No GPU readings on this system", cx))
             .into_any_element();
     };
     let id = device.id.clone();
     let extra = (r.gpus.len() > 1).then(|| format!("+{} more", r.gpus.len() - 1));
-    card(IconName::Gpu, "GPU", accent, extra, cx)
+    card(IconName::Gpu, "GPU", accent, extra, Resource::Gpu, cx)
         .child(headline(
             device.utilization.map(|v| format!("{v:.1}")),
             "%",
@@ -276,49 +295,63 @@ fn storage(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
         Some(v) if v >= 75.0 => palette.warning,
         _ => accent,
     };
-    card(IconName::HardDrive, "Storage", accent, None, cx)
-        .child(headline(
-            used.map(|v| format!("{v:.1}")),
-            "%",
-            "Used across local volumes",
-            cx,
-        ))
-        .child(
-            Progress::new("disk")
-                .value(used.unwrap_or(0.0) as f32)
-                .color(color)
-                .h(px(6.)),
-        )
-        .child(line("Used", format_bytes(s.disk_used_bytes), cx))
-        .child(line("Free", format_bytes(s.disk_free_bytes), cx))
-        .child(line("Total", format_bytes(s.disk_total_bytes), cx))
-        .into_any_element()
+    card(
+        IconName::HardDrive,
+        "Storage",
+        accent,
+        None,
+        Resource::Storage,
+        cx,
+    )
+    .child(headline(
+        used.map(|v| format!("{v:.1}")),
+        "%",
+        "Used across local volumes",
+        cx,
+    ))
+    .child(
+        Progress::new("disk")
+            .value(used.unwrap_or(0.0) as f32)
+            .color(color)
+            .h(px(6.)),
+    )
+    .child(line("Used", format_bytes(s.disk_used_bytes), cx))
+    .child(line("Free", format_bytes(s.disk_free_bytes), cx))
+    .child(line("Total", format_bytes(s.disk_total_bytes), cx))
+    .into_any_element()
 }
 
 fn system(r: &Readings, cx: &App) -> AnyElement {
     let s = r.stats;
     let identity = &s.details.identity;
     let accent = theme::palette(cx).charts[4];
-    card(IconName::Monitor, "System", accent, None, cx)
-        .child(headline(Some(format_uptime(s.uptime)), "", "Uptime", cx))
-        .child(line(
-            "Load",
-            format!(
-                "{:.2} {:.2} {:.2}",
-                s.load_avg[0], s.load_avg[1], s.load_avg[2]
-            ),
-            cx,
-        ))
-        .child(line(
-            "OS",
-            identity
-                .os_version
-                .clone()
-                .unwrap_or_else(|| identity.platform.clone()),
-            cx,
-        ))
-        .child(line("Arch", identity.architecture.clone(), cx))
-        .into_any_element()
+    card(
+        IconName::Monitor,
+        "System",
+        accent,
+        None,
+        Resource::System,
+        cx,
+    )
+    .child(headline(Some(format_uptime(s.uptime)), "", "Uptime", cx))
+    .child(line(
+        "Load",
+        format!(
+            "{:.2} {:.2} {:.2}",
+            s.load_avg[0], s.load_avg[1], s.load_avg[2]
+        ),
+        cx,
+    ))
+    .child(line(
+        "OS",
+        identity
+            .os_version
+            .clone()
+            .unwrap_or_else(|| identity.platform.clone()),
+        cx,
+    ))
+    .child(line("Arch", identity.architecture.clone(), cx))
+    .into_any_element()
 }
 
 /// Network readings are already per-second rates.
@@ -337,21 +370,28 @@ fn network(r: &Readings, palette: &Palette, cx: &App) -> AnyElement {
         .max()
         .unwrap_or(0)
         .max(1) as f64;
-    card(IconName::Network, "Network", accent, None, cx)
-        .child(headline(Some(rate(s.network_rx_bytes)), "", "Download", cx))
-        .child(line("Upload", rate(s.network_tx_bytes), cx))
-        .child(trend(
-            r.history,
-            move |s| s.received.map(|v| v as f64 / peak * 100.0),
-            accent,
-            r.unavailable,
-        ))
-        .into_any_element()
+    card(
+        IconName::Network,
+        "Network",
+        accent,
+        None,
+        Resource::Network,
+        cx,
+    )
+    .child(headline(Some(rate(s.network_rx_bytes)), "", "Download", cx))
+    .child(line("Upload", rate(s.network_tx_bytes), cx))
+    .child(trend(
+        r.history,
+        move |s| s.received.map(|v| v as f64 / peak * 100.0),
+        accent,
+        r.unavailable,
+    ))
+    .into_any_element()
 }
 
 /// A 0–100 trend over the last two minutes. Missing readings break the line
 /// instead of being drawn as zero.
-fn trend(
+pub fn trend(
     history: &[Sample],
     value: impl Fn(&Sample) -> Option<f64>,
     color: Hsla,

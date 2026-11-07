@@ -30,13 +30,11 @@ Operating-system permissions can restrict process details. Start without adminis
 
 ## Build the development version
 
-Use Node.js 22, Rust 1.88 or newer, and the relevant Tauri platform dependencies. See the [development documentation](https://github.com/Abdenasser/neohtop#development).
+Use Rust 1.88 or newer. On Linux, install the GPUI and tray build dependencies listed in the [development guide](../.github/DEVELOPMENT.md).
 
 ```sh
 git clone https://github.com/Abdenasser/neohtop.git
 cd neohtop
-npm ci
-npm run tauri dev
+cargo run
 ```
 
-[HTML installation guide](https://abdenasser.github.io/neohtop/install.html)

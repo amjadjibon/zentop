@@ -7,26 +7,21 @@ mod native_icons;
 mod preferences;
 mod sampling;
 mod state;
-mod telemetry;
 mod ui;
 
 use gpui_kit::assets::{icon_assets, Assets};
-use gpui_kit::component::TitleBar;
-use gpui_kit::{
-    actions, px, size, App, AppContext, AssetSource, Bounds, KeyBinding, Menu, MenuItem,
-    SharedString, WindowBounds, WindowOptions,
-};
+use gpui_kit::{App, AssetSource, SharedString};
 use std::borrow::Cow;
-use std::sync::Arc;
-
-actions!(neohtop, [Quit]);
 
 // Lucide icons NeoHtop uses beyond the component defaults.
 icon_assets!(
     ExtraIcons,
     [
+        ArrowUpRight,
+        Check,
         Columns3,
         Cpu,
+        Ellipsis,
         Funnel,
         Gpu,
         HardDrive,
@@ -41,6 +36,8 @@ icon_assets!(
         Pin,
         PinOff,
         Play,
+        Power,
+        Settings,
         Timer,
         X
     ]
@@ -66,53 +63,11 @@ impl AssetSource for AppAssets {
 }
 
 fn main() {
-    gpui_kit::application()
-        .with_assets(AppAssets)
-        .run(|cx: &mut App| {
-            gpui_kit::init(cx);
-
-            let (prefs, prefs_error) = preferences::Preferences::open();
-            let analytics = prefs.behavior("usageAnalytics").as_bool().unwrap_or(false);
-            let prefs_error = prefs_error.or_else(|| telemetry::configure(analytics).err());
-            ui::theme::apply(
-                prefs
-                    .appearance("theme")
-                    .as_str()
-                    .unwrap_or(ui::theme::DEFAULT_THEME),
-                cx,
-            );
-
-            cx.bind_keys([KeyBinding::new("cmd-q", Quit, None)]);
-            cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
-            cx.set_menus(vec![Menu {
-                name: "NeoHtop".into(),
-                disabled: false,
-                items: vec![MenuItem::action("Quit NeoHtop", Quit)],
-            }]);
-            // A monitor with no window has nothing to show.
-            cx.on_window_closed(|cx, _| {
-                if cx.windows().is_empty() {
-                    cx.quit();
-                }
-            })
-            .detach();
-
-            let state = Arc::new(state::AppState::new());
-            let options = WindowOptions {
-                window_bounds: Some(WindowBounds::Windowed(Bounds::centered(
-                    None,
-                    size(px(1280.), px(900.)),
-                    cx,
-                ))),
-                window_min_size: Some(size(px(1120.), px(700.))),
-                app_id: Some("com.neohtop.dev".into()),
-                ..TitleBar::window_options()
-            };
-            gpui_kit::open_window(options, cx, |window, cx| {
-                window.set_window_title("NeoHtop");
-                cx.new(|cx| ui::NeoHtop::new(state, prefs, prefs_error, window, cx))
-            })
-            .expect("failed to open the NeoHtop window");
-            cx.activate(true);
-        });
+    let app = gpui_kit::application().with_assets(AppAssets);
+    // Clicking the Dock icon (or relaunching) brings the monitor back.
+    app.on_reopen(ui::open_main);
+    app.run(|cx: &mut App| {
+        gpui_kit::init(cx);
+        ui::init(cx);
+    });
 }

@@ -1,13 +1,13 @@
 //! Process details sheet and the end-process confirmation.
+use super::monitor;
 use super::process_view::{format_bytes, format_mb, format_timestamp, identity, Column, Identity};
-use super::NeoHtop;
 use crate::monitoring::{ProcessInfo, ProcessMonitor};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, WindowExt};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, px, AnyElement, App, Entity, InteractiveElement, IntoElement, ParentElement, SharedString,
+    div, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
 
@@ -15,9 +15,9 @@ const MAX_CHILDREN: usize = 50;
 
 /// Opens the details sheet. It reads the latest frame on every render, so
 /// numbers stay live while it is open.
-pub fn open(root: Entity<NeoHtop>, id: Identity, window: &mut Window, cx: &mut App) {
+pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
     window.open_sheet(cx, move |sheet, _, cx| {
-        let frame = root.read(cx).frame();
+        let frame = monitor::global(cx).read(cx).frame.clone();
         let process = frame
             .as_ref()
             .and_then(|f| f.processes.iter().find(|p| identity(p) == id));
@@ -31,7 +31,6 @@ pub fn open(root: Entity<NeoHtop>, id: Identity, window: &mut Window, cx: &mut A
         };
         let all = &frame.as_ref().expect("frame present").processes;
         let name = p.name.clone();
-        let kill_root = root.clone();
         sheet
             .size(px(460.))
             .title(
@@ -49,15 +48,13 @@ pub fn open(root: Entity<NeoHtop>, id: Identity, window: &mut Window, cx: &mut A
                             .child(format!("PID {} · {}", p.pid, p.user)),
                     ),
             )
-            .child(body(&root, p, all, cx))
+            .child(body(p, all, cx))
             .footer(
                 h_flex().justify_end().w_full().child(
                     Button::new("end-process")
                         .danger()
                         .label("End Process")
-                        .on_click(move |_, window, cx| {
-                            confirm_kill(kill_root.clone(), id, name.clone(), window, cx)
-                        }),
+                        .on_click(move |_, window, cx| confirm_kill(id, name.clone(), window, cx)),
                 ),
             )
     });
@@ -108,28 +105,17 @@ fn section(title: &'static str, cx: &App) -> impl IntoElement {
         .child(title)
 }
 
-fn link(
-    root: &Entity<NeoHtop>,
-    key: SharedString,
-    target: &ProcessInfo,
-    label: String,
-) -> AnyElement {
-    let root = root.clone();
+fn link(key: SharedString, target: &ProcessInfo, label: String) -> AnyElement {
     let id = identity(target);
     Button::new(key)
         .link()
         .small()
         .label(label)
-        .on_click(move |_, window, cx| open(root.clone(), id, window, cx))
+        .on_click(move |_, window, cx| open(id, window, cx))
         .into_any_element()
 }
 
-fn body(
-    root: &Entity<NeoHtop>,
-    p: &ProcessInfo,
-    all: &[ProcessInfo],
-    cx: &App,
-) -> impl IntoElement {
+fn body(p: &ProcessInfo, all: &[ProcessInfo], cx: &App) -> impl IntoElement {
     let parent = all
         .iter()
         .find(|q| q.pid == p.ppid && q.pid != p.pid && q.start_time <= p.start_time);
@@ -157,7 +143,6 @@ fn body(
             "Parent",
             match parent {
                 Some(parent) => link(
-                    root,
                     "parent".into(),
                     parent,
                     format!("{} ({})", parent.name, parent.pid),
@@ -222,7 +207,6 @@ fn body(
                             .enumerate()
                             .map(|(i, child)| {
                                 link(
-                                    root,
                                     format!("child-{i}").into(),
                                     child,
                                     format!("{} ({})", child.name, child.pid),
@@ -253,15 +237,8 @@ fn body(
 }
 
 /// Asks before signalling; the process is re-identified by start time first.
-pub fn confirm_kill(
-    root: Entity<NeoHtop>,
-    id: Identity,
-    name: String,
-    window: &mut Window,
-    cx: &mut App,
-) {
+pub fn confirm_kill(id: Identity, name: String, window: &mut Window, cx: &mut App) {
     window.open_alert_dialog(cx, move |dialog, _, _| {
-        let root = root.clone();
         let name = name.clone();
         dialog
             .title("End process?")
@@ -273,7 +250,8 @@ pub fn confirm_kill(
             .ok_variant(ButtonVariant::Danger)
             .confirm()
             .on_ok(move |_, window, cx| {
-                let state = root.read(cx).state();
+                let monitor = monitor::global(cx);
+                let state = monitor.read(cx).state();
                 let killed = state
                     .sys
                     .lock()
@@ -281,7 +259,7 @@ pub fn confirm_kill(
                     .unwrap_or(false);
                 if killed {
                     window.close_sheet(cx);
-                    root.update(cx, |root, cx| root.refresh_now(cx));
+                    monitor.update(cx, |monitor, _| monitor.refresh_now());
                 } else {
                     window.push_notification(
                         Notification::error(format!(

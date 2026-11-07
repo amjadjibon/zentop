@@ -80,13 +80,13 @@ impl ProcessMonitor {
                 ProcessData {
                     pid: pid.as_u32(),
                     name: process.name().to_string_lossy().into_owned(),
-                    cmd: os_string_vec_to_string_vec(&process.cmd()),
+                    cmd: os_string_vec_to_string_vec(process.cmd()),
                     user_id: process.user_id().map(|uid| uid.to_string()),
                     cpu_usage: process.cpu_usage(),
                     memory: process.memory(),
                     status: process.status(),
                     ppid: process.parent().map(|p| p.as_u32()),
-                    environ: os_string_vec_to_string_vec(&process.environ()),
+                    environ: os_string_vec_to_string_vec(process.environ()),
                     root: process
                         .root()
                         .map(|p| p.to_string_lossy().into_owned())

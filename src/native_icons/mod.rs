@@ -54,6 +54,31 @@ pub fn process_target(sys: &sysinfo::System, request: &IconRequest) -> Option<Pa
         .map(Path::to_path_buf)
 }
 
+/// Resolves icons for observed process identities. Paths come from the sampled
+/// process table only, and the sampling lock is released before icon I/O.
+pub fn resolve_batch(
+    state: &crate::state::AppState,
+    requests: Vec<IconRequest>,
+) -> Vec<((u32, u64), Option<Icon>)> {
+    let targets: Vec<_> = {
+        let Ok(sys) = state.sys.lock() else {
+            return Vec::new();
+        };
+        requests
+            .into_iter()
+            .take(MAX_BATCH)
+            .map(|r| (r, process_target(&sys, &r)))
+            .collect()
+    };
+    let Ok(mut icons) = state.icons.lock() else {
+        return Vec::new();
+    };
+    targets
+        .into_iter()
+        .map(|(r, path)| ((r.pid, r.start_time), path.and_then(|p| icons.resolve(&p))))
+        .collect()
+}
+
 impl IconCache {
     pub fn resolve(&mut self, executable: &Path) -> Option<Icon> {
         #[cfg(target_os = "macos")]
@@ -119,7 +144,7 @@ fn encode_native_icon(path: &Path) -> Option<Icon> {
     }
     // AppKit's bitmap is premultiplied; PNG requires straight alpha.
     #[cfg(target_os = "macos")]
-    for pixel in icon.pixels.chunks_exact_mut(4) {
+    for pixel in icon.pixels.as_chunks_mut::<4>().0 {
         let alpha = u32::from(pixel[3]);
         if alpha > 0 && alpha < 255 {
             for channel in &mut pixel[..3] {

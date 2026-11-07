@@ -33,7 +33,6 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   CARGO_INCREMENTAL: 0
-  NEOHTOP_ANALYTICS_ENDPOINT: ${{ vars.NEOHTOP_ANALYTICS_ENDPOINT }}
 
 jobs:
   quality:
@@ -41,18 +40,12 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - run: npm ci
-      - run: npm run format:check
-      - run: npm run build:site
-      - run: npm run test:release
-      - run: npm run release:check
+      - run: cargo fmt -- --check
+      - run: scripts/release-test.sh
+      - run: scripts/release.sh check-version
 
   build:
     name: Package (${{ matrix.platform }})
@@ -85,10 +78,6 @@ jobs:
             bundles: nsis
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version-file: .nvmrc
-          cache: npm
       - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
@@ -105,9 +94,8 @@ jobs:
             build-essential pkg-config libfontconfig-dev libfreetype-dev \
             libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev \
             libx11-xcb-dev libxcb1-dev libvulkan-dev \
+            libgtk-3-dev libayatana-appindicator3-dev \
             libfuse2 file xdg-utils
-
-      - run: npm ci
 
       - name: Require macOS release credentials
         if: runner.os == 'macOS' && inputs.release
@@ -173,7 +161,7 @@ jobs:
 
       - name: Check AppImage display libraries
         if: runner.os == 'Linux'
-        run: node scripts/release.mjs check-appimage target/packager
+        run: scripts/release.sh check-appimage target/packager
 
       - name: Verify macOS release signature and notarization
         if: runner.os == 'macOS' && inputs.release
@@ -185,7 +173,8 @@ jobs:
           xcrun stapler validate "$BUNDLE_ROOT/NeoHtop.app"
 
       - name: Stage and validate platform packages
-        run: node scripts/release.mjs stage ${{ matrix.platform }} target/packager artifacts
+        shell: bash
+        run: scripts/release.sh stage ${{ matrix.platform }} target/packager artifacts
 
       - uses: actions/upload-artifact@v4
         with:

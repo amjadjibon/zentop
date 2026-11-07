@@ -1,12 +1,14 @@
 # Developing and releasing NeoHtop
 
-Use Rust 1.88 or newer; the desktop app is a single GPUI Kit crate (`src/`, UI in
-`src/ui/`). Compose gpui-component controls with the theme roles in
-`src/ui/theme.rs` before adding custom widgets. Node.js 22 is used for the website
-and release tooling only.
+Use Rust 1.88 or newer. The desktop app is a single GPUI Kit crate: system
+sampling in `src/`, windows in `src/ui/` (main window, Settings, About and the
+menu-bar overview, all observing the shared model in `src/ui/monitor.rs`).
+Compose gpui-component controls with the theme roles in `src/ui/theme.rs` before
+adding custom widgets. Release tooling is plain Bash in `scripts/`.
 
 On Linux, install the GPUI build dependencies first, for example on Ubuntu:
-`libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev`.
+`libfontconfig-dev libfreetype-dev libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev libvulkan-dev libgtk-3-dev libayatana-appindicator3-dev`
+(GTK and AppIndicator power the system-tray icon).
 
 ### Setup
 
@@ -27,10 +29,9 @@ cargo install cargo-generate-rpm --locked
 cargo generate-rpm
 ```
 
-Themes are defined in `site/lib/definitions/themes.ts` and resolved for contrast by
-`site/lib/utils/theme-tokens.js`. After changing either, run
-`npm run export:themes` to regenerate `assets/themes.json`, which the app embeds;
-`npm run test:release` fails if it is out of date.
+Themes live in `assets/themes.json` as resolved semantic roles. `cargo test`
+checks every theme for readable contrast (WCAG AA for text and labels, 3:1 for
+controls and chart colors) on each surface it is used on.
 
 ### Build checks and releases
 
@@ -46,8 +47,8 @@ packages are ad-hoc signed and are not notarized for public distribution.
 
 For a release candidate:
 
-1. Update the version in `package.json`, both root version entries in `package-lock.json`,
-   `Cargo.toml`, and the NeoHtop entry in `Cargo.lock`. Run `npm run release:check` and commit the changes.
+1. Update the version in `Cargo.toml` and run `cargo check` to refresh `Cargo.lock`.
+   Run `scripts/release.sh check-version` and commit the changes.
 2. Push a matching version tag, for example `v1.3.0`. All platform packages are
    built from that tag. A published version cannot be overwritten.
 3. After every build passes, **Draft Release** verifies all nine packages and
@@ -68,72 +69,14 @@ The release uses the scoped `GITHUB_TOKEN`; `PAT_TOKEN` is no longer needed.
 Existing branch-protection rules that require the old **Format Check** job should
 be updated to require **Source checks** and the platform package jobs.
 
-### Code Formatting
-
-We use Prettier for web code and `cargo fmt` for Rust code.
+### Code Formatting and Checks
 
 ```bash
-# Format all files
-npm run format
-
-# Check formatting without making changes
-npm run format:check
+cargo fmt
+cargo clippy
+cargo test
+scripts/release-test.sh
 ```
 
-### Pull Requests
-
-Before submitting a PR, ensure:
-
-1. All code is formatted (`npm run format`)
-2. The format check passes (`npm run format:check`)
-3. Your commits follow the project's commit message conventions
-
-### Website and discoverability
-
-GitHub Pages serves the generated static `docs/` directory from `main`. The
-website source is `site/Site.svelte`, with the same shadcn buttons, cards, badges
-and Catppuccin semantic tokens the desktop app's themes are exported from. A small Svelte server
-render produces complete HTML; there is no Svelte client bundle to hydrate.
-Native FAQ disclosures, links and download fallbacks work without JavaScript.
-
-After editing the website source, regenerate all three public pages and CSS:
-
-```bash
-npm run build:site
-npm run test:release
-python3 -m http.server 8765 --bind 127.0.0.1 --directory docs
-```
-
-Open `http://127.0.0.1:8765/`. Commit both the source and generated pages/assets.
-Do not hand-edit generated HTML. `docs/main.js` progressively enhances actual
-published-release download links and copy controls. Website analytics is separate from the desktop relay and does not affect navigation or downloads. Desktop analytics requires its explicit build-time endpoint; see `telemetry/README.md`.
-
-Each public HTML page has a canonical URL, social metadata, structured data,
-and a linked Markdown equivalent. Keep the HTML, Markdown, `llms.txt`, and
-`sitemap.xml` consistent when changing product facts. The site uses local assets,
-system fonts, native FAQ disclosures, and reduced-motion styles. Blocking Google Analytics must not affect downloads or navigation.
-
-`llms.txt` follows a [proposed convention](https://llmstxt.org/), not a search
-ranking guarantee. [Google's AI search guidance](https://developers.google.com/search/docs/appearance/ai-features)
-prioritizes the same useful, crawlable content as ordinary SEO. Submit
-`https://abdenasser.github.io/neohtop/sitemap.xml` in the site's verified Search
-Console property after deployment and monitor indexing there. Ownership
-verification and sitemap submission are account-side actions, not completed by
-this repository.
-
-Robots rules apply at `https://abdenasser.github.io/robots.txt`, the host root.
-A `docs/robots.txt` would be served below `/neohtop/` and would not control
-crawlers. No blocking host-root robots file was present when the site was
-refreshed. Any future host-root rules must keep the public site crawlable; do not
-change unrelated host-wide policy from this project. The sitemap is linked from
-the footer even without a host-root robots declaration.
-
-Run `npm run test:release` to check internal links, metadata, structured data,
-Markdown references, sitemap coverage, and static download fallbacks alongside
-the release and process-tree tests.
-
-### Published website downloads
-
-`docs/release.json` is a small snapshot of an actual published stable release, not a version inferred from the source package. It supplies all installer links during static rendering so downloads work without JavaScript, a successful API call or a fresh browser cache. The live lookup can only advance to a newer stable release; older cached results and partial same-version responses cannot replace verified links.
-
-After publishing a new release, run `npm run refresh:site-release`, then `npm run build:site` and `npm run test:release`, and commit the snapshot and generated website. Website runtime scripts use content-hashed filenames; retain earlier hashed bundles so cached HTML can still load its assets. Homebrew is independently maintained and can still offer an older version.
+Before submitting a pull request, make sure the code is formatted, the tests pass,
+and the app builds and runs on your platform.

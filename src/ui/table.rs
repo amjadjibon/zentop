@@ -271,8 +271,6 @@ impl ProcessTable {
         let id = identity(p);
         let command = p.command.clone();
         let pinned = self.pinned.contains(&command);
-        let root = self.root.clone();
-        let root_kill = self.root.clone();
         let name = p.name.clone();
         h_flex()
             .gap_0p5()
@@ -298,9 +296,7 @@ impl ProcessTable {
                     .icon(IconName::Info)
                     .tooltip("Details")
                     .on_click(move |_, window, cx| {
-                        if let Some(root) = root.upgrade() {
-                            details::open(root, id, window, cx);
-                        }
+                        details::open(id, window, cx);
                     }),
             )
             .child(
@@ -310,9 +306,7 @@ impl ProcessTable {
                     .icon(IconName::X)
                     .tooltip("End process")
                     .on_click(move |_, window, cx| {
-                        if let Some(root) = root_kill.upgrade() {
-                            details::confirm_kill(root, id, name.clone(), window, cx);
-                        }
+                        details::confirm_kill(id, name.clone(), window, cx);
                     }),
             )
             .into_any_element()
@@ -335,28 +329,7 @@ impl ProcessTable {
         cx.spawn(async move |table, cx| {
             let resolved = cx
                 .background_executor()
-                .spawn(async move {
-                    // Paths come from the sampled process table only; release the
-                    // sampling lock before icon I/O.
-                    let targets: Vec<_> = {
-                        let Ok(sys) = state.sys.lock() else {
-                            return Vec::new();
-                        };
-                        requests
-                            .into_iter()
-                            .map(|r| (r, crate::native_icons::process_target(&sys, &r)))
-                            .collect()
-                    };
-                    let Ok(mut icons) = state.icons.lock() else {
-                        return Vec::new();
-                    };
-                    targets
-                        .into_iter()
-                        .map(|(r, path)| {
-                            ((r.pid, r.start_time), path.and_then(|p| icons.resolve(&p)))
-                        })
-                        .collect()
-                })
+                .spawn(async move { crate::native_icons::resolve_batch(&state, requests) })
                 .await;
             let _ = table.update(cx, |table, cx| {
                 for (id, icon) in resolved {
