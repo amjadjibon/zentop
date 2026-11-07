@@ -207,7 +207,7 @@ fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
         ))
         .child(row(
             "Menu-bar overview",
-            "Show the NeoHtop icon in the menu bar or system tray.",
+            "Show the Zentop icon in the menu bar or system tray.",
             Switch::new("menu-bar")
                 .checked(menu_bar)
                 .on_click(move |checked, _, cx| {

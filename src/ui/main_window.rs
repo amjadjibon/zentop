@@ -20,7 +20,7 @@ use gpui_kit::{
 };
 use serde_json::json;
 
-pub struct NeoHtop {
+pub struct Zentop {
     monitor: Entity<Monitor>,
     search_text: String,
     filters: Filters,
@@ -31,7 +31,7 @@ pub struct NeoHtop {
     _subscriptions: Vec<Subscription>,
 }
 
-impl NeoHtop {
+impl Zentop {
     pub fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let monitor = monitor::global(cx);
         let (columns, tree, filters) = {
@@ -248,7 +248,7 @@ impl NeoHtop {
                             div()
                                 .text_sm()
                                 .font_weight(FontWeight::SEMIBOLD)
-                                .child("NeoHtop"),
+                                .child("Zentop"),
                         ),
                 )
                 .child(
@@ -339,7 +339,7 @@ impl NeoHtop {
                                     menu.menu("Settings…", Box::new(OpenSettings))
                                         .menu("Menu-bar Overview", Box::new(ShowOverview))
                                         .separator()
-                                        .menu("About NeoHtop", Box::new(OpenAbout))
+                                        .menu("About Zentop", Box::new(OpenAbout))
                                 }),
                         ),
                 ),
@@ -547,7 +547,7 @@ impl NeoHtop {
     }
 }
 
-impl Render for NeoHtop {
+impl Render for Zentop {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let monitor = self.monitor.read(cx);
         let alert = monitor

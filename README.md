@@ -1,22 +1,22 @@
 <div align="center">
-  <img src="app-icon.png" alt="NeoHtop ghost" width="96" />
-  <h1>NeoHtop</h1>
+  <img src="app-icon.png" alt="Zentop ghost" width="96" />
+  <h1>Zentop</h1>
   <p><strong>Your system. In plain sight.</strong></p>
   <p>A modern, open-source system monitor for macOS, Linux and Windows.<br />Explore processes, understand your graphics card, and keep your whole machine in view.</p>
 
-<a href="https://github.com/Abdenasser/neohtop/releases/latest"><img src="https://img.shields.io/github/v/release/Abdenasser/neohtop?style=flat-square&label=download" alt="Latest release" /></a>
+<a href="https://github.com/Abdenasser/neohtop/releases/latest"><img src="https://img.shields.io/github/v/release/Abdenasser/zentop?style=flat-square&label=download" alt="Latest release" /></a>
 <a href="https://github.com/Abdenasser/neohtop/actions/workflows/build-check.yml"><img src="https://github.com/Abdenasser/neohtop/actions/workflows/build-check.yml/badge.svg" alt="Cross-platform builds" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT license" /></a>
-<a href="https://github.com/Abdenasser/neohtop/stargazers"><img src="https://img.shields.io/github/stars/Abdenasser/neohtop?style=flat-square" alt="GitHub stars" /></a>
+<a href="https://github.com/Abdenasser/neohtop/stargazers"><img src="https://img.shields.io/github/stars/Abdenasser/zentop?style=flat-square" alt="GitHub stars" /></a>
 
-  <p><a href="https://github.com/Abdenasser/neohtop/releases/latest"><strong>Download NeoHtop</strong></a> · <a href="CHANGELOG.md">What’s new</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="docs/usage.md">Desktop guide</a></p>
+  <p><a href="https://github.com/Abdenasser/neohtop/releases/latest"><strong>Download Zentop</strong></a> · <a href="CHANGELOG.md">What’s new</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="docs/usage.md">Desktop guide</a></p>
 </div>
 
-<img src="docs/screenshots/neohtop-desktop.png" alt="NeoHtop in Catppuccin, captured with macOS: CPU, memory and GPU charts, storage, network and processes" width="1280" />
+<img src="docs/screenshots/zentop-desktop.png" alt="Zentop in Catppuccin, captured with macOS: CPU, memory and GPU charts, storage, network and processes" width="1280" />
 
 <p align="center"><sub>Catppuccin, front and center. 23 more themes when you want a change. Free, local, and open source.</sub></p>
 
-## Meet NeoHtop 1.3
+## Meet Zentop 1.3
 
 A fresh desktop experience with more to explore—from the process holding a port to the GPU doing the work.
 
@@ -40,7 +40,7 @@ A fresh desktop experience with more to explore—from the process holding a por
 
 <table>
   <tr>
-    <td width="40%"><img src="docs/screenshots/menubar-overview-system.png" alt="The NeoHtop ghost in the macOS menu bar with its live overview open" width="400" /></td>
+    <td width="40%"><img src="docs/screenshots/menubar-overview-system.png" alt="The Zentop ghost in the macOS menu bar with its live overview open" width="400" /></td>
     <td><h3>Open. Check. Carry on.</h3><p>Your essential readings, without bringing the full app forward.</p><ul><li>CPU, memory, GPU, network and free storage.</li><li>Your five busiest processes, with native icons.</li><li>One click from a process to its inspector.</li><li>Shared pause, sampling interval and theme.</li><li>Optional monitoring after closing the main window.</li></ul><p><a href="docs/usage.md#menu-bar-companion">Explore the companion →</a></p><sub>Real macOS system capture. Also available through the system tray on supported desktops.</sub></td>
   </tr>
 </table>
@@ -66,11 +66,11 @@ Official packages are published on [GitHub Releases](https://github.com/Abdenass
 
 | Platform                  | Packages                                                                                                                                                                                                                                                                                                      |
 | ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **macOS · Apple Silicon** | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/silicon-NeoHtop_1.3.0_aarch64.dmg)                                                                                                                                                                                                       |
-| **macOS · Intel**         | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/intel-NeoHtop_1.3.0_x64.dmg)                                                                                                                                                                                                             |
-| **Windows · x64**         | [Installer](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_x64-setup.exe)                                                                                                                                                                                                       |
-| **Linux · x86_64**        | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_x86_64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_x86_64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_x86_64.AppImage)    |
-| **Linux · ARM64**         | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_aarch64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_aarch64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/NeoHtop_1.3.0_aarch64.AppImage) |
+| **macOS · Apple Silicon** | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/silicon-Zentop_1.3.0_aarch64.dmg)                                                                                                                                                                                                       |
+| **macOS · Intel**         | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/intel-Zentop_1.3.0_x64.dmg)                                                                                                                                                                                                             |
+| **Windows · x64**         | [Installer](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x64-setup.exe)                                                                                                                                                                                                       |
+| **Linux · x86_64**        | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.AppImage)    |
+| **Linux · ARM64**         | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.AppImage) |
 
 [Installation and troubleshooting →](docs/install.md)
 
@@ -81,11 +81,11 @@ Community packages are maintained independently and can update on a different sc
 
 | Platform         | Command                                                                   |
 | ---------------- | ------------------------------------------------------------------------- |
-| Homebrew         | `brew install --cask neohtop`                                             |
-| Arch Linux / AUR | `yay -S neohtop` or `paru -S neohtop`                                     |
-| Fedora / Terra   | `dnf install neohtop` after enabling [Terra](https://terra.fyralabs.com/) |
-| Windows / Scoop  | `scoop bucket add extras`, then `scoop install extras/neohtop`            |
-| Solus            | `eopkg install neohtop`                                                   |
+| Homebrew         | `brew install --cask zentop`                                             |
+| Arch Linux / AUR | `yay -S zentop` or `paru -S zentop`                                     |
+| Fedora / Terra   | `dnf install zentop` after enabling [Terra](https://terra.fyralabs.com/) |
+| Windows / Scoop  | `scoop bucket add extras`, then `scoop install extras/zentop`            |
+| Solus            | `eopkg install zentop`                                                   |
 
 </details>
 
@@ -125,17 +125,17 @@ Optional **GPU %** process columns and filters use **Linux DRM engine accounting
 
 The companion shows CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to inspect it in the main app. It stops polling while hidden. On some Linux desktops, use the tray menu’s **Show overview** command or the app-bar button.
 
-Closing the main window quits by default. Enable **Keep running when the window closes** to continue from the tray. Closing Settings/About leaves monitoring running; **Quit NeoHtop** always exits. Preferences save automatically and migrate from existing local settings.
+Closing the main window quits by default. Enable **Keep running when the window closes** to continue from the tray. Closing Settings/About leaves monitoring running; **Quit Zentop** always exits. Preferences save automatically and migrate from existing local settings.
 
 </details>
 
 ## Build with us
 
-NeoHtop is a native **Rust** app built with **[GPUI Kit](https://gpui-kit.com)** (GPU-accelerated UI from Zed, plus gpui-component), keeping all 24 original themes. Native process icons use platform providers, with Lucide for interface controls.
+Zentop is a native **Rust** app built with **[GPUI Kit](https://gpui-kit.com)** (GPU-accelerated UI from Zed, plus gpui-component), keeping all 24 original themes. Native process icons use platform providers, with Lucide for interface controls.
 
 ```sh
 git clone https://github.com/Abdenasser/neohtop.git
-cd neohtop
+cd zentop
 cargo run
 ```
 
@@ -155,12 +155,12 @@ npm install -g neohtop-cli
 
 ## Free today. Open source at the core.
 
-This release is the free, MIT-licensed desktop app. No account or cloud subscription is required. **NeoHtop Pro is postponed** and is not available to buy or install; no launch date or pricing is announced.
+This release is the free, MIT-licensed desktop app. No account or cloud subscription is required. **Zentop Pro is postponed** and is not available to buy or install; no launch date or pricing is announced.
 
-If NeoHtop earns a place in your setup, [star the project](https://github.com/Abdenasser/neohtop/stargazers), [sponsor development](https://github.com/sponsors/Abdenasser), or [buy Abdenasser a coffee](https://www.buymeacoffee.com/abdenasser).
+If Zentop earns a place in your setup, [star the project](https://github.com/Abdenasser/neohtop/stargazers), [sponsor development](https://github.com/sponsors/Abdenasser), or [buy Abdenasser a coffee](https://www.buymeacoffee.com/abdenasser).
 
-[The story behind NeoHtop](https://www.abdenasser.com/2024/11/06/oh-boy-neohtop/) · [MIT License](LICENSE)
+[The story behind Zentop](https://www.abdenasser.com/2024/11/06/oh-boy-neohtop/) · [MIT License](LICENSE)
 
 ## Privacy
 
-NeoHtop sends nothing. There are no analytics or launch counts, and no network requests; process names, commands, searches and system readings never leave your machine. Earlier versions' optional usage identifier is deleted on first launch.
+Zentop sends nothing. There are no analytics or launch counts, and no network requests; process names, commands, searches and system readings never leave your machine.

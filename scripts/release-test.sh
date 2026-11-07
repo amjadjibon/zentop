@@ -20,8 +20,8 @@ expect_fail() {
 fixture() {
   local root="$WORK/$1"
   mkdir -p "$root"
-  printf '[package]\nname = "neohtop"\nversion = "%s"\n' "$2" >"$root/Cargo.toml"
-  printf '[[package]]\nname = "neohtop"\nversion = "%s"\n' "${3:-$2}" >"$root/Cargo.lock"
+  printf '[package]\nname = "zentop"\nversion = "%s"\n' "$2" >"$root/Cargo.toml"
+  printf '[[package]]\nname = "zentop"\nversion = "%s"\n' "${3:-$2}" >"$root/Cargo.lock"
   echo "$root"
 }
 
@@ -34,10 +34,10 @@ expect_fail "invalid versions are rejected" "Invalid release version" env RELEAS
 # Windows staging picks the installer, never the portable binary.
 packager="$WORK/packager"
 mkdir -p "$packager"
-echo installer >"$packager/NeoHtop_1.4.0_x64-setup.exe"
-echo portable >"$packager/NeoHtop.exe"
+echo installer >"$packager/Zentop_1.4.0_x64-setup.exe"
+echo portable >"$packager/Zentop.exe"
 if out=$(RELEASE_ROOT="$root" "$RELEASE" stage windows-x86_64 "$packager" "$WORK/staged") &&
-  [[ "$out" == "NeoHtop_1.4.0_x64-setup.exe" && "$(cat "$WORK/staged/$out")" == installer ]]; then
+  [[ "$out" == "Zentop_1.4.0_x64-setup.exe" && "$(cat "$WORK/staged/$out")" == installer ]]; then
   pass "Windows staging selects the installer"
 else
   fail "Windows staging selects the installer"
@@ -48,9 +48,9 @@ expect_fail "ambiguous packages are rejected" "found 2" env RELEASE_ROOT="$root"
 # The manifest requires every platform and records verifiable hashes.
 artifacts="$WORK/artifacts"
 mkdir -p "$artifacts"
-for name in NeoHtop_1.4.0_x86_64.AppImage NeoHtop_1.4.0_x86_64.deb NeoHtop_1.4.0_x86_64.rpm \
-  NeoHtop_1.4.0_aarch64.AppImage NeoHtop_1.4.0_aarch64.deb NeoHtop_1.4.0_aarch64.rpm \
-  intel-NeoHtop_1.4.0_x64.dmg silicon-NeoHtop_1.4.0_aarch64.dmg NeoHtop_1.4.0_x64-setup.exe; do
+for name in Zentop_1.4.0_x86_64.AppImage Zentop_1.4.0_x86_64.deb Zentop_1.4.0_x86_64.rpm \
+  Zentop_1.4.0_aarch64.AppImage Zentop_1.4.0_aarch64.deb Zentop_1.4.0_aarch64.rpm \
+  intel-Zentop_1.4.0_x64.dmg silicon-Zentop_1.4.0_aarch64.dmg Zentop_1.4.0_x64-setup.exe; do
   echo "package $name" >"$artifacts/$name"
 done
 expect_ok "a complete set produces a manifest" env RELEASE_ROOT="$root" GITHUB_SHA=abc "$RELEASE" manifest "$artifacts" v1.4.0
@@ -64,10 +64,10 @@ if grep -q '"commit": "abc"' "$artifacts/release-manifest.json" && [[ $(grep -o 
 else
   fail "manifest lists all nine packages and the commit"
 fi
-echo stale >"$artifacts/NeoHtop_old_version.exe"
-expect_fail "unexpected packages are rejected" "Unexpected: NeoHtop_old_version.exe" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
-rm "$artifacts/NeoHtop_old_version.exe" "$artifacts/intel-NeoHtop_1.4.0_x64.dmg"
-expect_fail "missing packages are rejected" "Missing: intel-NeoHtop_1.4.0_x64.dmg" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
+echo stale >"$artifacts/Zentop_old_version.exe"
+expect_fail "unexpected packages are rejected" "Unexpected: Zentop_old_version.exe" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
+rm "$artifacts/Zentop_old_version.exe" "$artifacts/intel-Zentop_1.4.0_x64.dmg"
+expect_fail "missing packages are rejected" "Missing: intel-Zentop_1.4.0_x64.dmg" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
 
 # The real project is internally consistent.
 expect_ok "repository versions agree" "$RELEASE" check-version

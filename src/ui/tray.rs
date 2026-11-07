@@ -24,7 +24,7 @@ struct Tray {
 }
 impl Global for Tray {}
 
-/// Whether closing the last window should leave NeoHtop running in the tray.
+/// Whether closing the last window should leave Zentop running in the tray.
 pub fn keeps_running(cx: &App) -> bool {
     let m = monitor::global(cx).read(cx);
     cx.global::<Tray>().enabled && m.behavior_bool("keepRunning")
@@ -80,15 +80,15 @@ fn build() -> Result<tray_icon::TrayIcon, String> {
     let menu = Menu::new();
     menu.append_items(&[
         &MenuItem::with_id(SHOW_OVERVIEW, "Show Overview", true, None),
-        &MenuItem::with_id(OPEN_MAIN, "Open NeoHtop", true, None),
+        &MenuItem::with_id(OPEN_MAIN, "Open Zentop", true, None),
         &PredefinedMenuItem::separator(),
-        &MenuItem::with_id(QUIT, "Quit NeoHtop", true, None),
+        &MenuItem::with_id(QUIT, "Quit Zentop", true, None),
     ])
     .map_err(|e| e.to_string())?;
     TrayIconBuilder::new()
         .with_icon(ghost()?)
         .with_icon_as_template(true)
-        .with_tooltip("NeoHtop — system overview")
+        .with_tooltip("Zentop — system overview")
         .with_menu(Box::new(menu))
         .with_menu_on_left_click(false)
         .build()
@@ -108,7 +108,7 @@ fn set_enabled(enabled: bool, cx: &mut App) -> bool {
             true
         }
         Err(error) => {
-            eprintln!("NeoHtop: menu-bar icon unavailable: {error}");
+            eprintln!("Zentop: menu-bar icon unavailable: {error}");
             false
         }
     }
@@ -120,10 +120,10 @@ fn set_enabled(enabled: bool, cx: &mut App) -> bool {
     if tray.linux.is_none() {
         let (sender, receiver) = std::sync::mpsc::channel::<bool>();
         let spawned = std::thread::Builder::new()
-            .name("neohtop-tray".into())
+            .name("zentop-tray".into())
             .spawn(move || {
                 if gtk::init().is_err() {
-                    eprintln!("NeoHtop: GTK is unavailable, so there is no tray icon.");
+                    eprintln!("Zentop: GTK is unavailable, so there is no tray icon.");
                     return;
                 }
                 let mut icon: Option<tray_icon::TrayIcon> = None;
@@ -131,7 +131,7 @@ fn set_enabled(enabled: bool, cx: &mut App) -> bool {
                     while let Ok(enabled) = receiver.try_recv() {
                         icon = if enabled {
                             build()
-                                .map_err(|e| eprintln!("NeoHtop: tray unavailable: {e}"))
+                                .map_err(|e| eprintln!("Zentop: tray unavailable: {e}"))
                                 .ok()
                         } else {
                             None

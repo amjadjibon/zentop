@@ -1,12 +1,12 @@
-# Install NeoHtop Desktop
+# Install Zentop Desktop
 
-Official desktop binaries are on the [latest published GitHub release](https://github.com/Abdenasser/neohtop/releases/latest). Choose the package for your platform and CPU architecture. Version 1.3.0 includes the refreshed UI, GPU diagnostics, process families, local-port search and menu-bar companion. Older releases differ. NeoHtop Pro is postponed and is not available.
+Official desktop binaries are on the [latest published GitHub release](https://github.com/Abdenasser/neohtop/releases/latest). Choose the package for your platform and CPU architecture. Version 1.3.0 includes the refreshed UI, GPU diagnostics, process families, local-port search and menu-bar companion. Older releases differ. Zentop Pro is postponed and is not available.
 
 ## macOS
 
-Choose the Apple Silicon DMG for an M-series Mac, or the Intel DMG for an Intel-based Mac. Check Apple menu → About This Mac for the chip or processor. Open the DMG, drag NeoHtop to Applications, and launch it.
+Choose the Apple Silicon DMG for an M-series Mac, or the Intel DMG for an Intel-based Mac. Check Apple menu → About This Mac for the chip or processor. Open the DMG, drag Zentop to Applications, and launch it.
 
-Community alternative: `brew install --cask neohtop`. The Homebrew cask is maintained separately and may update on a different schedule. If macOS cannot verify a download, verify its source and consult release notes. Do not disable Gatekeeper as a routine installation step.
+Community alternative: `brew install --cask zentop`. The Homebrew cask is maintained separately and may update on a different schedule. If macOS cannot verify a download, verify its source and consult release notes. Do not disable Gatekeeper as a routine installation step.
 
 ## Windows
 
@@ -34,7 +34,7 @@ Use Rust 1.88 or newer. On Linux, install the GPUI and tray build dependencies l
 
 ```sh
 git clone https://github.com/Abdenasser/neohtop.git
-cd neohtop
+cd zentop
 cargo run
 ```
 

@@ -1,8 +1,8 @@
 [Desktop Entry]
 Type=Application
-Name=NeoHtop
+Name=Zentop
 Comment=A cross-platform system monitor
-Exec=NeoHtop
-Icon=neohtop
+Exec=Zentop
+Icon=zentop
 Categories=System;Monitor;
 Terminal=false

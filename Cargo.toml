@@ -1,5 +1,5 @@
 [package]
-name = "neohtop"
+name = "zentop"
 version = "1.3.0"
 description = "A cross-platform system monitor"
 authors = ["Abdenasser"]
@@ -7,7 +7,7 @@ edition = "2021"
 rust-version = "1.88"
 
 [[bin]]
-name = "NeoHtop"
+name = "Zentop"
 path = "src/main.rs"
 
 [dependencies]
@@ -50,8 +50,8 @@ windows = { version = "0.62.2", features = ["Win32_Graphics_Dxgi", "Win32_Graphi
 
 # Installers: `cargo packager --release` (https://github.com/crabnebula-dev/cargo-packager).
 [package.metadata.packager]
-product-name = "NeoHtop"
-identifier = "com.neohtop.dev"
+product-name = "Zentop"
+identifier = "com.zentop.app"
 category = "Utility"
 out-dir = "target/packager"
 icons = [
@@ -68,10 +68,10 @@ minimum-system-version = "10.15"
 
 # RPMs: `cargo generate-rpm` after a release build (cargo-packager has no RPM format).
 [package.metadata.generate-rpm]
-name = "neohtop"
+name = "zentop"
 license = "MIT"
 assets = [
-  { source = "target/release/NeoHtop", dest = "/usr/bin/NeoHtop", mode = "755" },
-  { source = "assets/neohtop.desktop", dest = "/usr/share/applications/neohtop.desktop", mode = "644" },
-  { source = "assets/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/neohtop.png", mode = "644" },
+  { source = "target/release/Zentop", dest = "/usr/bin/Zentop", mode = "755" },
+  { source = "assets/zentop.desktop", dest = "/usr/share/applications/zentop.desktop", mode = "644" },
+  { source = "assets/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/zentop.png", mode = "644" },
 ]

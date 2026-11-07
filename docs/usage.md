@@ -1,6 +1,6 @@
-# Using NeoHtop v1.3.0
+# Using Zentop v1.3.0
 
-NeoHtop is a free, open-source local system monitor for macOS, Linux, and Windows. No account, cloud subscription, or background agent is required. Pro is postponed and is not available.
+Zentop is a free, open-source local system monitor for macOS, Linux, and Windows. No account, cloud subscription, or background agent is required. Pro is postponed and is not available.
 
 ## Find the process you need
 
@@ -27,7 +27,7 @@ GPU support is driver dependent: macOS IORegistry statistics; Linux AMD sysfs an
 
 ## Menu-bar companion
 
-Open the ghost icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no NeoHtop window is open.
+Open the ghost icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no Zentop window is open.
 
 Linux tray behavior varies with the desktop; use **Show overview** in the tray menu or **View → Menu-bar Overview** if clicking the icon does not open it.
 
@@ -35,7 +35,7 @@ Linux tray behavior varies with the desktop; use **Show overview** in the tray m
 
 Open **Settings** from the application menu or **⌘, / Ctrl+,**. General holds the refresh interval, tray icon and keep-running choice. Changes are saved automatically in the app configuration directory and synchronize across windows. Existing preferences carry over; save failures are shown in Settings.
 
-The default is to quit when the main window closes. Enable **Keep running when the window closes** to continue through the tray; this requires the tray icon. **Quit NeoHtop** always exits. Closing Settings or About leaves monitoring running.
+The default is to quit when the main window closes. Enable **Keep running when the window closes** to continue through the tray; this requires the tray icon. **Quit Zentop** always exits. Closing Settings or About leaves monitoring running.
 
 Settings → Appearance and the title-bar palette menu share all 24 original themes; a change applies to every open window at once.
 
@@ -45,4 +45,4 @@ Use the [official release](https://github.com/Abdenasser/neohtop/releases/latest
 
 ## Privacy
 
-NeoHtop sends nothing. There are no analytics or launch counts, and no network requests; everything it reads stays on your machine.
+Zentop sends nothing. There are no analytics or launch counts, and no network requests; everything it reads stays on your machine.

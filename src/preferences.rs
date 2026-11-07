@@ -82,10 +82,18 @@ fn load(path: &Path, legacy: Option<&Value>) -> Result<Option<Value>, String> {
     }
     Ok(Some(config))
 }
-/// Same location Tauri used (`<config dir>/com.neohtop.dev`), so existing
-/// installations keep their settings.
 fn config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("com.neohtop.dev"))
+    dirs::config_dir().map(|dir| dir.join("com.zentop.app"))
+}
+
+/// Settings saved by NeoHtop, the app's former name. They seed Zentop's own
+/// file on first launch; the old folder is only ever read, never changed, so
+/// an installed NeoHtop keeps working alongside Zentop.
+fn legacy_settings() -> Option<Value> {
+    let path = dirs::config_dir()?
+        .join("com.neohtop.dev")
+        .join("settings.json");
+    serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
 /// The persisted preferences file and its validated contents.
@@ -98,11 +106,6 @@ impl Preferences {
     /// Loads saved settings, writing defaults on first launch. A missing config
     /// directory or unreadable file falls back to defaults and reports why.
     pub fn open() -> (Self, Option<String>) {
-        // Earlier releases stored an optional analytics identifier here. Nothing
-        // is sent anymore, so do not keep it around.
-        if let Some(dir) = config_dir() {
-            let _ = fs::remove_file(dir.join("usage-id"));
-        }
         let Some(path) = config_dir().map(|dir| dir.join("settings.json")) else {
             return (
                 Self {
@@ -112,7 +115,8 @@ impl Preferences {
                 Some("Settings location unavailable; changes will not be saved.".into()),
             );
         };
-        match load(&path, Some(&defaults())) {
+        let seed = legacy_settings().unwrap_or_else(defaults);
+        match load(&path, Some(&seed)) {
             Ok(config) => (
                 Self {
                     path: Some(path),
@@ -196,7 +200,7 @@ mod tests {
     }
     #[test]
     fn saved_settings_win_over_legacy_and_failed_save_keeps_original() {
-        let dir = std::env::temp_dir().join(format!("neohtop-preferences-{}", std::process::id()));
+        let dir = std::env::temp_dir().join(format!("zentop-preferences-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
         assert!(load(&path, None).unwrap().is_none());

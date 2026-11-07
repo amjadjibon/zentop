@@ -1,8 +1,8 @@
-# NeoHtop Desktop vs NeoHtop CLI
+# Zentop Desktop vs NeoHtop CLI
 
 These are separate MIT-licensed open-source applications. Both support macOS, Linux, and Windows and monitor local processes. The desktop app does not require the CLI, and the CLI install does not install the desktop app.
 
-| Aspect        | NeoHtop Desktop                                                       | NeoHtop CLI                                                      |
+| Aspect        | Zentop Desktop                                                       | NeoHtop CLI                                                      |
 | ------------- | --------------------------------------------------------------------- | ---------------------------------------------------------------- |
 | Interface     | Graphical desktop window                                              | Terminal user interface                                          |
 | Technology    | Rust and GPUI Kit                                                     | Go and the Charm ecosystem                                       |
@@ -13,7 +13,7 @@ These are separate MIT-licensed open-source applications. Both support macOS, Li
 
 Pick Desktop for a visual process table, search, filters, pinning, and themes. Pick CLI for keyboard-driven monitoring inside your shell. Feature sets and releases differ; do not assume parity.
 
-NeoHtop Pro is postponed and is not available. No scope, price or launch date is announced. Both applications remain independent open-source local monitors.
+Zentop Pro is postponed and is not available. No scope, price or launch date is announced. Both applications remain independent open-source local monitors.
 
 - [Desktop repository](https://github.com/Abdenasser/neohtop)
 - [Desktop releases](https://github.com/Abdenasser/neohtop/releases/latest)

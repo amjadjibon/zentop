@@ -1,4 +1,4 @@
-# Developing and releasing NeoHtop
+# Developing and releasing Zentop
 
 Use Rust 1.88 or newer. The desktop app is a single GPUI Kit crate: system
 sampling in `src/`, windows in `src/ui/` (main window, Settings, About and the
@@ -62,7 +62,7 @@ Tagged macOS builds require the existing repository secrets `MACOS_CERTIFICATE`
 repository variable `APPLE_SIGNING_IDENTITY` overrides the current Developer ID
 identity. Tagged builds fail if credentials are missing or signature/notarization
 checks fail. Preview builds and pull requests do not need signing credentials.
-Windows packages are NSIS installers, named `NeoHtop_<version>_x64-setup.exe`;
+Windows packages are NSIS installers, named `Zentop_<version>_x64-setup.exe`;
 Windows code signing is not configured by this workflow.
 
 The release uses the scoped `GITHUB_TOKEN`; `PAT_TOKEN` is no longer needed.

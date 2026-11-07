@@ -118,7 +118,7 @@ mod tests {
     #[test]
     fn amd_fixture_deduplicates_cards_and_preserves_missing_counters() {
         use std::os::unix::fs::symlink;
-        let root = std::env::temp_dir().join(format!("neohtop-gpu-fixture-{}", std::process::id()));
+        let root = std::env::temp_dir().join(format!("zentop-gpu-fixture-{}", std::process::id()));
         let pci = root.join("0000:01:00.0");
         let drm = root.join("drm");
         let driver = root.join("amdgpu");

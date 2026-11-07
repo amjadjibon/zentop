@@ -20,13 +20,13 @@ die() {
 packages_for() {
   case "$1" in
     linux-x86_64)
-      echo ".AppImage:NeoHtop_VERSION_x86_64.AppImage .deb:NeoHtop_VERSION_x86_64.deb .rpm:NeoHtop_VERSION_x86_64.rpm" ;;
+      echo ".AppImage:Zentop_VERSION_x86_64.AppImage .deb:Zentop_VERSION_x86_64.deb .rpm:Zentop_VERSION_x86_64.rpm" ;;
     linux-aarch64)
-      echo ".AppImage:NeoHtop_VERSION_aarch64.AppImage .deb:NeoHtop_VERSION_aarch64.deb .rpm:NeoHtop_VERSION_aarch64.rpm" ;;
-    macos-x86_64) echo ".dmg:intel-NeoHtop_VERSION_x64.dmg" ;;
-    macos-aarch64) echo ".dmg:silicon-NeoHtop_VERSION_aarch64.dmg" ;;
+      echo ".AppImage:Zentop_VERSION_aarch64.AppImage .deb:Zentop_VERSION_aarch64.deb .rpm:Zentop_VERSION_aarch64.rpm" ;;
+    macos-x86_64) echo ".dmg:intel-Zentop_VERSION_x64.dmg" ;;
+    macos-aarch64) echo ".dmg:silicon-Zentop_VERSION_aarch64.dmg" ;;
     # An installer, not the portable binary.
-    windows-x86_64) echo "-setup.exe:NeoHtop_VERSION_x64-setup.exe" ;;
+    windows-x86_64) echo "-setup.exe:Zentop_VERSION_x64-setup.exe" ;;
     *) return 1 ;;
   esac
 }
@@ -43,7 +43,7 @@ file_size() {
 check_version() {
   local tag="${1:-}" cargo lock
   cargo=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$ROOT/Cargo.toml")
-  lock=$(awk '/^name = "neohtop"$/{getline; gsub(/version = "|"/,""); print; exit}' "$ROOT/Cargo.lock")
+  lock=$(awk '/^name = "zentop"$/{getline; gsub(/version = "|"/,""); print; exit}' "$ROOT/Cargo.lock")
   [[ -n "$cargo" && "$cargo" == "$lock" ]] || die "Versions differ (Cargo.toml, Cargo.lock): ${cargo:-?}, ${lock:-?}"
   [[ "$cargo" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
     die "Invalid release version: $cargo"
@@ -147,7 +147,7 @@ upload_draft() {
     local prerelease=()
     [[ "$version" == *-* ]] && prerelease=(--prerelease)
     gh release create "$tag" --draft --verify-tag --target "$GITHUB_SHA" \
-      --title "NeoHtop v$version" "${prerelease[@]}" \
+      --title "Zentop v$version" "${prerelease[@]}" \
       --notes "Built from $GITHUB_SHA.
 
 All five platform builds passed. Checksums and a build manifest are attached.

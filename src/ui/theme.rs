@@ -1,4 +1,4 @@
-//! NeoHtop palettes applied to the gpui-component theme.
+//! Zentop palettes applied to the gpui-component theme.
 //!
 //! `assets/themes.json` is the palette source: each theme's semantic roles,
 //! already resolved for contrast (text and controls meet WCAG AA against the
@@ -81,7 +81,7 @@ pub fn preview(name: &str) -> Option<Preview> {
     })
 }
 
-/// Colors NeoHtop paints itself, beyond the component theme.
+/// Colors Zentop paints itself, beyond the component theme.
 #[derive(Clone, Copy)]
 pub struct Palette {
     pub card: Hsla,

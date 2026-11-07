@@ -1,5 +1,5 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
-//! NeoHtop - a modern system monitor built with GPUI Kit.
+//! Zentop - a modern system monitor built with GPUI Kit.
 
 mod gpu;
 mod monitoring;
@@ -13,7 +13,7 @@ use gpui_kit::assets::{icon_assets, Assets};
 use gpui_kit::{App, AssetSource, SharedString};
 use std::borrow::Cow;
 
-// Lucide icons NeoHtop uses beyond the component defaults.
+// Lucide icons Zentop uses beyond the component defaults.
 icon_assets!(
     ExtraIcons,
     [

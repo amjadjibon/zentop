@@ -169,8 +169,8 @@ jobs:
         env:
           BUNDLE_ROOT: target/packager
         run: |
-          codesign --verify --deep --strict --verbose=2 "$BUNDLE_ROOT/NeoHtop.app"
-          xcrun stapler validate "$BUNDLE_ROOT/NeoHtop.app"
+          codesign --verify --deep --strict --verbose=2 "$BUNDLE_ROOT/Zentop.app"
+          xcrun stapler validate "$BUNDLE_ROOT/Zentop.app"
 
       - name: Stage and validate platform packages
         shell: bash

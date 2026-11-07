@@ -1,6 +1,6 @@
 //! The process table: a virtualized `DataTable` over the latest frame.
 use super::process_view::{self, identity, Column, Filters, Identity, Query, Sort, TreeRow};
-use super::{details, theme, NeoHtop};
+use super::{details, theme, Zentop};
 use crate::native_icons::{Icon, IconRequest, MAX_BATCH};
 use crate::sampling::Frame;
 use crate::state::AppState;
@@ -39,7 +39,7 @@ impl Row {
 
 pub struct ProcessTable {
     state: Arc<AppState>,
-    root: WeakEntity<NeoHtop>,
+    root: WeakEntity<Zentop>,
     frame: Option<Arc<Frame>>,
     search: String,
     filters: Filters,
@@ -59,7 +59,7 @@ pub struct ProcessTable {
 impl ProcessTable {
     pub fn new(
         state: Arc<AppState>,
-        root: WeakEntity<NeoHtop>,
+        root: WeakEntity<Zentop>,
         columns: Vec<Column>,
         tree: bool,
     ) -> Self {

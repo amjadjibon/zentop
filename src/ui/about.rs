@@ -28,7 +28,7 @@ impl Render for About {
                         div()
                             .text_2xl()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child("NeoHtop"),
+                            .child("Zentop"),
                     )
                     .child(
                         div()

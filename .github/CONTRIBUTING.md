@@ -1,6 +1,6 @@
-# Contributing to NeoHtop
+# Contributing to Zentop
 
-Thank you for considering contributing to NeoHtop! We welcome contributions from the community.
+Thank you for considering contributing to Zentop! We welcome contributions from the community.
 
 ## How to Contribute
 

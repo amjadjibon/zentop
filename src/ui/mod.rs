@@ -1,4 +1,4 @@
-//! NeoHtop windows: the main monitor, Settings, About and the menu-bar overview.
+//! Zentop windows: the main monitor, Settings, About and the menu-bar overview.
 mod about;
 mod companion;
 mod details;
@@ -17,12 +17,12 @@ use gpui_kit::{
     actions, px, size, AnyWindowHandle, App, AppContext, Bounds, Global, KeyBinding, Menu,
     MenuItem, OsAction, Pixels, Size, WeakEntity, Window, WindowBounds, WindowOptions,
 };
-use main_window::NeoHtop;
+use main_window::Zentop;
 use std::sync::{Arc, LazyLock};
 use std::time::{Duration, Instant};
 
 actions!(
-    neohtop,
+    zentop,
     [
         Quit,
         OpenSettings,
@@ -48,7 +48,7 @@ pub const REPOSITORY: &str = "https://github.com/Abdenasser/neohtop";
 /// Open windows, so each kind is reused instead of duplicated.
 #[derive(Default)]
 struct Windows {
-    main: Option<(AnyWindowHandle, WeakEntity<NeoHtop>)>,
+    main: Option<(AnyWindowHandle, WeakEntity<Zentop>)>,
     settings: Option<AnyWindowHandle>,
     about: Option<AnyWindowHandle>,
     overview: Option<AnyWindowHandle>,
@@ -91,14 +91,14 @@ pub fn init(cx: &mut App) {
     });
     cx.set_menus(vec![
         Menu {
-            name: "NeoHtop".into(),
+            name: "Zentop".into(),
             disabled: false,
             items: vec![
-                MenuItem::action("About NeoHtop", OpenAbout),
+                MenuItem::action("About Zentop", OpenAbout),
                 MenuItem::separator(),
                 MenuItem::action("Settings…", OpenSettings),
                 MenuItem::separator(),
-                MenuItem::action("Quit NeoHtop", Quit),
+                MenuItem::action("Quit Zentop", Quit),
             ],
         },
         Menu {
@@ -132,7 +132,7 @@ pub fn init(cx: &mut App) {
             name: "Window".into(),
             disabled: false,
             items: vec![
-                MenuItem::action("Show NeoHtop", ShowMain),
+                MenuItem::action("Show Zentop", ShowMain),
                 MenuItem::action("Minimize", Minimize),
                 MenuItem::action("Close Window", CloseWindow),
             ],
@@ -163,7 +163,7 @@ fn window_options(size: Size<Pixels>, min: Option<Size<Pixels>>, cx: &App) -> Wi
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::centered(None, size, cx))),
         window_min_size: min,
-        app_id: Some("com.neohtop.dev".into()),
+        app_id: Some("com.zentop.app".into()),
         ..TitleBar::window_options()
     }
 }
@@ -185,11 +185,11 @@ pub fn open_main(cx: &mut App) {
         cx,
     );
     match gpui_kit::open_window(options, cx, |window, cx| {
-        window.set_window_title("NeoHtop");
-        cx.new(|cx| NeoHtop::new(window, cx))
+        window.set_window_title("Zentop");
+        cx.new(|cx| Zentop::new(window, cx))
     }) {
         Ok((handle, view)) => cx.global_mut::<Windows>().main = Some((handle, view.downgrade())),
-        Err(error) => eprintln!("NeoHtop: could not open the main window: {error}"),
+        Err(error) => eprintln!("Zentop: could not open the main window: {error}"),
     }
     cx.activate(true);
 }
@@ -210,7 +210,7 @@ pub fn open_settings(cx: &mut App) {
     }
     let options = window_options(size(px(760.), px(600.)), Some(size(px(640.), px(480.))), cx);
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
-        window.set_window_title("NeoHtop Settings");
+        window.set_window_title("Zentop Settings");
         cx.new(|cx| settings::Settings::new(window, cx))
     }) {
         cx.global_mut::<Windows>().settings = Some(handle);
@@ -227,7 +227,7 @@ pub fn open_about(cx: &mut App) {
     let mut options = window_options(size(px(420.), px(440.)), None, cx);
     options.is_resizable = false;
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
-        window.set_window_title("About NeoHtop");
+        window.set_window_title("About Zentop");
         cx.new(|_| about::About)
     }) {
         cx.global_mut::<Windows>().about = Some(handle);

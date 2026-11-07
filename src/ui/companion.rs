@@ -117,7 +117,7 @@ pub fn show(anchor: Option<Anchor>, cx: &mut App) {
         focus: true,
         show: true,
         window_background: WindowBackgroundAppearance::Transparent,
-        app_id: Some("com.neohtop.dev".into()),
+        app_id: Some("com.zentop.app".into()),
         ..Default::default()
     };
     if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
@@ -323,7 +323,7 @@ impl Render for Overview {
                                     div()
                                         .text_sm()
                                         .font_weight(FontWeight::SEMIBOLD)
-                                        .child("NeoHtop"),
+                                        .child("Zentop"),
                                 )
                                 .child(
                                     h_flex()
@@ -431,7 +431,7 @@ impl Render for Overview {
                                 .primary()
                                 .small()
                                 .flex_1()
-                                .label("Open NeoHtop")
+                                .label("Open Zentop")
                                 .on_click(|_, _, cx| cx.defer(super::open_main)),
                         )
                         .child(
@@ -447,7 +447,7 @@ impl Render for Overview {
                                 .ghost()
                                 .small()
                                 .icon(IconName::Power)
-                                .tooltip("Quit NeoHtop")
+                                .tooltip("Quit Zentop")
                                 .on_click(|_, _, cx| cx.quit()),
                         ),
                 ),
