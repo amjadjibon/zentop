@@ -2,7 +2,7 @@
 use super::monitor::{self, Monitor};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
 use super::table::ProcessList;
-use super::{stats, theme, OpenAbout, OpenSettings, Quit, ShowOverview, SMALL_ICON};
+use super::{stats, theme, OpenAbout, OpenSettings, Quit, ShowOverview};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
@@ -14,8 +14,8 @@ use gpui_kit::component::popover::Popover;
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizable, TitleBar};
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, img, px, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, Render, SharedString, Styled, Subscription, Window,
+    div, px, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement, IntoElement,
+    ParentElement, Render, SharedString, Styled, Subscription, Window,
 };
 use serde_json::json;
 
@@ -213,121 +213,101 @@ impl Zentop {
         } else {
             theme::palette(cx).running
         };
+        // gpui-kit's default height and left inset fit the macOS window controls.
         let title_bar = TitleBar::new()
-            .pl(px(96.))
-            .h(px(48.))
             .bg(theme::palette(cx).card)
             .border_b_1()
             .border_color(cx.theme().border);
         title_bar.child(
-            h_flex()
-                .w_full()
-                .pr_3()
-                // Leave room for the macOS window controls drawn over the title bar.
-                .justify_between()
-                .child(
-                    h_flex()
-                        .gap_2()
-                        .child(img(SMALL_ICON.clone()).size_5())
-                        .child(
-                            div()
-                                .text_sm()
-                                .font_weight(FontWeight::SEMIBOLD)
-                                .child("Zentop"),
-                        ),
-                )
-                .child(
-                    h_flex()
-                        .gap_1()
-                        .child(
-                            h_flex()
-                                .mr_2()
-                                .gap_1p5()
-                                .text_xs()
-                                .text_color(cx.theme().muted_foreground)
-                                .child(div().size_1p5().rounded_full().bg(status_color))
-                                .child(if paused {
-                                    "Paused".to_string()
-                                } else {
-                                    format!("Live · {}s", sampling::interval(rate) as f64 / 1000.0)
-                                }),
-                        )
-                        .child(
-                            Button::new("pause")
-                                .ghost()
-                                .small()
-                                .icon(if paused {
-                                    IconName::Play
-                                } else {
-                                    IconName::Pause
-                                })
-                                .tooltip(if paused {
-                                    "Resume updates"
-                                } else {
-                                    "Pause updates"
-                                })
-                                .on_click(move |_, _, cx| {
-                                    pause_monitor.update(cx, |m, cx| m.set_paused(!paused, cx))
-                                }),
-                        )
-                        .child(
-                            Button::new("overview")
-                                .ghost()
-                                .small()
-                                .icon(IconName::PanelsTopLeft)
-                                .tooltip("Menu-bar overview")
-                                .on_click(|_, window, cx| {
-                                    window.dispatch_action(Box::new(ShowOverview), cx)
-                                }),
-                        )
-                        .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
-                        .child(
-                            Popover::new("theme-picker")
-                                .open(self.theme_picker.read(cx).open)
-                                .on_open_change({
-                                    let picker = self.theme_picker.clone();
-                                    move |open, _, cx| {
-                                        picker.update(cx, |this, cx| {
-                                            this.open = *open;
-                                            cx.notify();
-                                        })
-                                    }
-                                })
-                                .trigger(
-                                    Button::new("theme")
-                                        .ghost()
-                                        .small()
-                                        .icon(IconName::Palette)
-                                        .tooltip(format!(
-                                            "Theme: {}",
-                                            theme::label(monitor.theme_name())
-                                        )),
-                                )
-                                .content(move |_, _, _| theme_picker.clone()),
-                        )
-                        .child(
-                            Button::new("more")
-                                .ghost()
-                                .small()
-                                .icon(IconName::Ellipsis)
-                                .tooltip("More")
-                                .dropdown_menu(|menu, _, _| {
-                                    menu.menu("Settings…", Box::new(OpenSettings))
-                                        .separator()
-                                        .menu("About Zentop", Box::new(OpenAbout))
-                                        .item(PopupMenuItem::new("Check for updates…").on_click(
-                                            |_, _, cx| {
-                                                cx.open_url(&format!(
-                                                    "{}/releases",
-                                                    super::REPOSITORY
-                                                ))
-                                            },
-                                        ))
-                                        .separator()
-                                        .menu("Quit Zentop", Box::new(Quit))
-                                }),
-                        ),
-                ),
+            h_flex().w_full().pr_3().justify_end().child(
+                h_flex()
+                    .gap_1()
+                    .child(
+                        h_flex()
+                            .mr_2()
+                            .gap_1p5()
+                            .text_xs()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(div().size_1p5().rounded_full().bg(status_color))
+                            .child(if paused {
+                                "Paused".to_string()
+                            } else {
+                                format!("Live · {}s", sampling::interval(rate) as f64 / 1000.0)
+                            }),
+                    )
+                    .child(
+                        Button::new("pause")
+                            .ghost()
+                            .small()
+                            .icon(if paused {
+                                IconName::Play
+                            } else {
+                                IconName::Pause
+                            })
+                            .tooltip(if paused {
+                                "Resume updates"
+                            } else {
+                                "Pause updates"
+                            })
+                            .on_click(move |_, _, cx| {
+                                pause_monitor.update(cx, |m, cx| m.set_paused(!paused, cx))
+                            }),
+                    )
+                    .child(
+                        Button::new("overview")
+                            .ghost()
+                            .small()
+                            .icon(IconName::PanelsTopLeft)
+                            .tooltip("Menu-bar overview")
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(ShowOverview), cx)
+                            }),
+                    )
+                    .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))
+                    .child(
+                        Popover::new("theme-picker")
+                            .open(self.theme_picker.read(cx).open)
+                            .on_open_change({
+                                let picker = self.theme_picker.clone();
+                                move |open, _, cx| {
+                                    picker.update(cx, |this, cx| {
+                                        this.open = *open;
+                                        cx.notify();
+                                    })
+                                }
+                            })
+                            .trigger(
+                                Button::new("theme")
+                                    .ghost()
+                                    .small()
+                                    .icon(IconName::Palette)
+                                    .tooltip(format!(
+                                        "Theme: {}",
+                                        theme::label(monitor.theme_name())
+                                    )),
+                            )
+                            .content(move |_, _, _| theme_picker.clone()),
+                    )
+                    .child(
+                        Button::new("more")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Ellipsis)
+                            .tooltip("More")
+                            .dropdown_menu(|menu, _, _| {
+                                menu.menu("Settings…", Box::new(OpenSettings))
+                                    .separator()
+                                    .menu("About Zentop", Box::new(OpenAbout))
+                                    .item(PopupMenuItem::new("Check for updates…").on_click(
+                                        |_, _, cx| {
+                                            cx.open_url(&format!("{}/releases", super::REPOSITORY))
+                                        },
+                                    ))
+                                    .separator()
+                                    .menu("Quit Zentop", Box::new(Quit))
+                            }),
+                    ),
+            ),
         )
     }
 
