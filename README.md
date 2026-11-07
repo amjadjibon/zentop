@@ -1,166 +1,104 @@
 <div align="center">
   <img src="app-icon.png" alt="Zentop icon: an open ensō ring with a glowing dot" width="96" />
   <h1>Zentop</h1>
-  <p><strong>Your system. In plain sight.</strong></p>
-  <p>A modern, open-source system monitor for macOS, Linux and Windows.<br />Explore processes, understand your graphics card, and keep your whole machine in view.</p>
+  <p><strong>A calm, native system monitor.</strong></p>
+  <p>See every process, understand your graphics card, and keep your whole machine in view on macOS, Linux and Windows.<br />Built in Rust with GPU-accelerated UI. Nothing leaves your machine.</p>
 
-<a href="https://github.com/Abdenasser/neohtop/releases/latest"><img src="https://img.shields.io/github/v/release/Abdenasser/zentop?style=flat-square&label=download" alt="Latest release" /></a>
-<a href="https://github.com/Abdenasser/neohtop/actions/workflows/build-check.yml"><img src="https://github.com/Abdenasser/neohtop/actions/workflows/build-check.yml/badge.svg" alt="Cross-platform builds" /></a>
+<a href="https://github.com/amjadjibon/zentop/releases/latest"><img src="https://img.shields.io/github/v/release/amjadjibon/zentop?style=flat-square&label=release" alt="Latest release" /></a>
+<a href="https://github.com/amjadjibon/zentop/actions/workflows/build-check.yml"><img src="https://github.com/amjadjibon/zentop/actions/workflows/build-check.yml/badge.svg" alt="Cross-platform builds" /></a>
 <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-blue?style=flat-square" alt="MIT license" /></a>
-<a href="https://github.com/Abdenasser/neohtop/stargazers"><img src="https://img.shields.io/github/stars/Abdenasser/zentop?style=flat-square" alt="GitHub stars" /></a>
 
-  <p><a href="https://github.com/Abdenasser/neohtop/releases/latest"><strong>Download Zentop</strong></a> · <a href="CHANGELOG.md">What’s new</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="docs/usage.md">Desktop guide</a></p>
+  <p><a href="docs/install.md"><strong>Install</strong></a> · <a href="docs/usage.md">User guide</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="CHANGELOG.md">Changelog</a></p>
 </div>
 
-<img src="docs/screenshots/zentop-desktop.png" alt="Zentop in Catppuccin, captured with macOS: CPU, memory and GPU charts, storage, network and processes" width="1280" />
+<img src="docs/screenshots/zentop-desktop.png" alt="Zentop in Catppuccin on macOS: CPU, memory, GPU, storage, system and network cards above the process list" width="1280" />
 
-<p align="center"><sub>Catppuccin, front and center. 23 more themes when you want a change. Free, local, and open source.</sub></p>
+## What it does
 
-## Meet Zentop 1.3
-
-A fresh desktop experience with more to explore—from the process holding a port to the GPU doing the work.
-
-- **Go beyond a flat process list.** Expand process families, see their combined CPU and RAM, and keep matching children in context while you search.
-- **See your graphics card.** GPU utilization, memory and driver-reported diagnostics sit alongside CPU, RAM, storage, system and network readings.
-- **Keep the essentials in your menu bar.** A compact companion shows live resources and your busiest processes. Jump straight into an inspector without hunting through the table.
-- **Put a name to the process.** Native app icons when the system can provide them; a quiet placeholder when it can’t.
-- **Find what owns a port.** Type `:3000` or `port:443`. Socket scans run only when you need them.
-- **Keep the themes you love.** All **24 themes**, each checked for readable contrast, with a visual gallery in Settings.
-
-[Read the complete v1.3.0 changelog →](CHANGELOG.md)
+- **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
+- **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
+- **Six live resource cards.** CPU (per core), memory, GPU, storage, system load and network, each with a two-minute trend you can hover or step through with the arrow keys, and a detail sheet one click away.
+- **Your graphics card, in view.** Utilization, memory, temperature, power and clocks wherever the driver exposes them.
+- **A menu-bar companion.** Live readings and your five busiest processes in a small popup from the menu bar or system tray. Optionally keep monitoring after the main window closes.
+- **Native icons and 24 themes.** Real app icons where the system has them; 24 color themes, each checked for readable contrast.
+- **Private by design.** No analytics, no accounts, no network requests.
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/cpu-details.jpg" alt="CPU details with a utilization chart and per-core activity" /><br /><strong>Go deeper from every resource card.</strong><br /><sub>CPU cores, memory breakdowns, graphics adapters, mounted volumes, system identity and network interfaces.</sub></td>
-    <td width="50%"><img src="docs/screenshots/themes.jpg" alt="Appearance settings showing the light and dark theme gallery" /><br /><strong>Your setup, your atmosphere.</strong><br /><sub>Dark, light, colorful, retro and accessible palettes. The same theme follows you across app windows.</sub></td>
+    <td width="50%"><img src="docs/screenshots/process-details.png" alt="Process details for Finder: CPU and memory, process information, parent, command and children" /><br /><strong>Inspect any process.</strong><br /><sub>Resources, identity, parent and child processes, command line and environment, plus a confirmed end-process action.</sub></td>
+    <td width="50%"><img src="docs/screenshots/chart-inspection.png" alt="Resource cards with hover tooltips showing the time and value of a sample" /><br /><strong>Read the history.</strong><br /><sub>Hover a chart, or focus it and use the arrow keys, to read any sample from the last two minutes.</sub></td>
   </tr>
-</table>
-
-## A whole monitor in your menu bar.
-
-<table>
   <tr>
-    <td width="40%"><img src="docs/screenshots/menubar-overview-system.png" alt="The Zentop icon in the macOS menu bar with its live overview open" width="400" /></td>
-    <td><h3>Open. Check. Carry on.</h3><p>Your essential readings, without bringing the full app forward.</p><ul><li>CPU, memory, GPU, network and free storage.</li><li>Your five busiest processes, with native icons.</li><li>One click from a process to its inspector.</li><li>Shared pause, sampling interval and theme.</li><li>Optional monitoring after closing the main window.</li></ul><p><a href="docs/usage.md#menu-bar-companion">Explore the companion →</a></p><sub>Real macOS system capture. Also available through the system tray on supported desktops.</sub></td>
+    <td width="50%"><img src="docs/screenshots/filters.png" alt="Search and filters shown as removable chips above the process list" /><br /><strong>Narrow it down.</strong><br /><sub>Search terms and filters appear as chips you can remove one at a time, or clear together.</sub></td>
+    <td width="50%"><img src="docs/screenshots/menubar-overview.png" alt="The menu-bar overview with CPU, memory and GPU, network, storage and the busiest processes" width="300" /><br /><strong>Check without switching.</strong><br /><sub>The menu-bar overview shares its readings, pause state and theme with the main window.</sub></td>
   </tr>
 </table>
 
-## Less hunting. More understanding.
+## Install
 
-| What you’re looking for           | Where to start                                                                |
-| --------------------------------- | ----------------------------------------------------------------------------- |
-| A process eating CPU or RAM       | Sort the table, filter by usage, pin it, or open its inspector.               |
-| What belongs to an app            | Switch to **Tree** and expand its process family.                             |
-| The server holding your dev port  | Search **`:3000`** or **`port:443`**. A bare number still finds a PID.        |
-| GPU load and memory               | Open **Graphics** from the GPU card; select an adapter on multi-GPU machines. |
-| A sudden resource spike           | Inspect the CPU, memory, GPU or network chart with the pointer or keyboard.   |
-| Traffic on a particular interface | Open **Network**, search interfaces, or include inactive ones.                |
-| A quick check between tasks       | Open the ring icon in the **menu bar/system tray**.                               |
-| Your preferred monitoring pace    | Open **Settings → General** and choose a refresh interval.                    |
-
-The charts keep roughly two minutes of history in memory. Pause, inspect and resume from the app bar or companion; both windows share the same sample and monitoring state.
-
-## Download
-
-Official packages are published on [GitHub Releases](https://github.com/Abdenasser/neohtop/releases/latest), with SHA-256 checksums and a build manifest.
-
-| Platform                  | Packages                                                                                                                                                                                                                                                                                                      |
-| ------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **macOS · Apple Silicon** | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/silicon-Zentop_1.3.0_aarch64.dmg)                                                                                                                                                                                                       |
-| **macOS · Intel**         | [DMG](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/intel-Zentop_1.3.0_x64.dmg)                                                                                                                                                                                                             |
-| **Windows · x64**         | [Installer](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x64-setup.exe)                                                                                                                                                                                                       |
-| **Linux · x86_64**        | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_x86_64.AppImage)    |
-| **Linux · ARM64**         | [deb](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.deb) · [rpm](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.rpm) · [AppImage](https://github.com/Abdenasser/neohtop/releases/download/v1.3.0/Zentop_1.3.0_aarch64.AppImage) |
-
-[Installation and troubleshooting →](docs/install.md)
-
-<details>
-<summary><strong>Prefer a community package manager?</strong></summary>
-
-Community packages are maintained independently and can update on a different schedule from official releases.
-
-| Platform         | Command                                                                   |
-| ---------------- | ------------------------------------------------------------------------- |
-| Homebrew         | `brew install --cask zentop`                                             |
-| Arch Linux / AUR | `yay -S zentop` or `paru -S zentop`                                     |
-| Fedora / Terra   | `dnf install zentop` after enabling [Terra](https://terra.fyralabs.com/) |
-| Windows / Scoop  | `scoop bucket add extras`, then `scoop install extras/zentop`            |
-| Solus            | `eopkg install zentop`                                                   |
-
-</details>
-
-## A few details worth knowing
-
-<details>
-<summary><strong>Search, filters and process families</strong></summary>
-
-Search names, commands and PIDs. Commas match any term; regular expressions work too: `node, python`, `d$`, or `^kernel`. Use **Filters** to combine CPU, GPU engine activity, RAM, runtime and status conditions. Clear active conditions in one action.
-
-Tree mode keeps parent context around matches and pages whole families together. Family CPU can exceed 100% across cores; summed resident RAM can double-count shared pages. List mode keeps individual process readings. **View** controls columns, and the bottom bar controls page size.
-
-</details>
-
-<details>
-<summary><strong>GPU support depends on your platform and driver</strong></summary>
-
-| Platform | Driver sources                                                                  |
-| -------- | ------------------------------------------------------------------------------- |
-| macOS    | IORegistry utilization and available Apple silicon shared-memory/core data.     |
-| Linux    | AMD amdgpu sysfs and NVIDIA NVML; DRM inventory for other adapters.             |
-| Windows  | NVIDIA NVML; DXGI inventory and reported dedicated capacity for other adapters. |
-
-Temperature, power, clock and other counters appear only where exposed. Unsupported or unreadable values stay unavailable. Shared GPU memory on Apple silicon is already part of system RAM.
-
-Optional **GPU %** process columns and filters use **Linux DRM engine accounting**. They need a baseline and can exceed 100% across engines; they are different from the device’s normalized utilization. Collection runs only when the column or filter is enabled. Socket visibility also depends on OS permissions; the app does not request elevation automatically.
-
-</details>
-
-<details>
-<summary><strong>Settings, shortcuts and the menu-bar companion</strong></summary>
-
-- **⌘F / Ctrl+F:** focus process search.
-- **⌘, / Ctrl+,:** open Settings. General holds refresh/tray behavior; Appearance holds themes.
-- **Escape:** clear search when focused, or dismiss an open detail sheet.
-- **Chart arrow keys:** inspect recorded samples.
-
-The companion shows CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to inspect it in the main app. It stops polling while hidden. On some Linux desktops, use the tray menu’s **Show overview** command or the app-bar button.
-
-Closing the main window quits by default. Enable **Keep running when the window closes** to continue from the tray. Closing Settings/About leaves monitoring running; **Quit Zentop** always exits. Preferences save automatically and migrate from existing local settings.
-
-</details>
-
-## Build with us
-
-Zentop is a native **Rust** app built with **[GPUI Kit](https://gpui-kit.com)** (GPU-accelerated UI from Zed, plus gpui-component), keeping all 24 original themes. Native process icons use platform providers, with Lucide for interface controls.
+Zentop has no published release yet. Build it from source:
 
 ```sh
-git clone https://github.com/Abdenasser/neohtop.git
+git clone https://github.com/amjadjibon/zentop.git
 cd zentop
-cargo run
+cargo run --release
 ```
 
-Use **Rust 1.88+**. On Linux, install the GPUI build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb and Vulkan headers). Node.js 22 is only needed for the website and release tooling.
+You need **Rust 1.88+**. On Linux, first install the GPUI and tray build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb, Vulkan, GTK 3 and AppIndicator headers); the [development guide](.github/DEVELOPMENT.md) lists the exact packages.
 
-[Development and release guide](.github/DEVELOPMENT.md) · [Contributing](.github/CONTRIBUTING.md) · [Report a bug](https://github.com/Abdenasser/neohtop/issues)
+Installers (macOS `.dmg`, Windows setup `.exe`, Linux `.deb`, `.rpm` and AppImage) are built by CI with cargo-packager and will be attached to [GitHub Releases](https://github.com/amjadjibon/zentop/releases) once published. See the [installation guide](docs/install.md).
 
-## Prefer your terminal?
+### Coming from NeoHtop?
 
-Meet [**NeoHtop CLI**](https://github.com/Abdenasser/neohtop-cli), the separate Go/Charm companion with process trees, CPU sparklines, memory bars, filters and themes.
+Zentop imports your NeoHtop preferences (refresh rate, columns, view and menu-bar options) the first time it starts. It never changes NeoHtop's files, so both apps can stay installed side by side.
 
-```sh
-npm install -g neohtop-cli
-```
+## Quick tour
 
-[Desktop vs CLI →](docs/desktop-vs-cli.md)
+| You want to…                     | Do this                                                                  |
+| -------------------------------- | ------------------------------------------------------------------------ |
+| Find what is eating CPU or RAM   | Sort a column, add a filter, pin the process or open its details.        |
+| See everything an app runs       | Switch to **Tree** and expand its family.                                |
+| Find the server on your dev port | Search **`:3000`** or **`port:443`**. A bare number still matches a PID. |
+| Check GPU load and memory        | Open **Graphics** from the GPU card and pick an adapter.                 |
+| Look back at a spike             | Hover a chart, or click it and use the arrow keys.                       |
+| Glance at the system mid-task    | Click the ring icon in the menu bar or system tray.                      |
+| Change the pace or the look      | **Settings** (⌘, / Ctrl+,) for the refresh interval and themes.          |
 
-## Free today. Open source at the core.
+Shortcuts: **⌘F / Ctrl+F** search · **⌘, / Ctrl+,** Settings · **⌘W** close window · **⌘Q / Ctrl+Q** quit.
 
-This release is the free, MIT-licensed desktop app. No account or cloud subscription is required. **Zentop Pro is postponed** and is not available to buy or install; no launch date or pricing is announced.
+More in the [user guide](docs/usage.md).
 
-If Zentop earns a place in your setup, [star the project](https://github.com/Abdenasser/neohtop/stargazers), [sponsor development](https://github.com/sponsors/Abdenasser), or [buy Abdenasser a coffee](https://www.buymeacoffee.com/abdenasser).
+<details>
+<summary><strong>GPU support by platform</strong></summary>
 
-[The story behind Zentop](https://www.abdenasser.com/2024/11/06/oh-boy-neohtop/) · [MIT License](LICENSE)
+| Platform | Sources                                                                       |
+| -------- | ----------------------------------------------------------------------------- |
+| macOS    | IORegistry utilization and Apple silicon shared-memory and core data.         |
+| Linux    | AMD amdgpu sysfs and NVIDIA NVML; DRM inventory for other adapters.           |
+| Windows  | NVIDIA NVML; DXGI inventory and reported dedicated memory for other adapters. |
+
+Counters such as temperature, power and clock appear only where the driver exposes them; missing values stay "Unavailable" rather than showing zero. The optional per-process **GPU %** column and filter use Linux DRM engine accounting.
+
+</details>
 
 ## Privacy
 
-Zentop sends nothing. There are no analytics or launch counts, and no network requests; process names, commands, searches and system readings never leave your machine.
+Zentop sends nothing. There are no analytics, launch counts or update checks; process names, commands, searches and system readings never leave your machine. "Check for updates" simply opens the releases page in your browser.
+
+## Development
+
+Zentop is a single Rust crate built with [GPUI Kit](https://gpui-kit.com) (Zed's GPU-accelerated UI framework plus gpui-component). System sampling lives in `src/`, the windows in `src/ui/`, and themes in `assets/themes.json`.
+
+```sh
+cargo run          # debug build
+cargo test         # unit tests, including theme contrast checks
+cargo clippy --all-targets -- -D warnings
+```
+
+See the [development and release guide](.github/DEVELOPMENT.md) and [contributing notes](.github/CONTRIBUTING.md). Report bugs on [GitHub Issues](https://github.com/amjadjibon/zentop/issues).
+
+## Credits
+
+Zentop is a fork of [**NeoHtop**](https://github.com/Abdenasser/neohtop) by [Abdenasser](https://github.com/Abdenasser), rebuilt as a native GPUI application with a new name and identity. Its features, themes and much of its design come from NeoHtop. Thank you.
+
+Released under the [MIT License](LICENSE); the original NeoHtop copyright notice is retained.

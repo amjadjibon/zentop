@@ -1,40 +1,68 @@
-# Install Zentop Desktop
+# Install Zentop
 
-Official desktop binaries are on the [latest published GitHub release](https://github.com/Abdenasser/neohtop/releases/latest). Choose the package for your platform and CPU architecture. Version 1.3.0 includes the refreshed UI, GPU diagnostics, process families, local-port search and menu-bar companion. Older releases differ. Zentop Pro is postponed and is not available.
+Zentop has no published release yet, so for now you build it from source. When releases are published, installers will appear on the [GitHub Releases page](https://github.com/amjadjibon/zentop/releases).
 
-## macOS
+## Build from source
 
-Choose the Apple Silicon DMG for an M-series Mac, or the Intel DMG for an Intel-based Mac. Check Apple menu → About This Mac for the chip or processor. Open the DMG, drag Zentop to Applications, and launch it.
+You need [Rust](https://rustup.rs) 1.88 or newer.
 
-Community alternative: `brew install --cask zentop`. The Homebrew cask is maintained separately and may update on a different schedule. If macOS cannot verify a download, verify its source and consult release notes. Do not disable Gatekeeper as a routine installation step.
+```sh
+git clone https://github.com/amjadjibon/zentop.git
+cd zentop
+cargo run --release
+```
 
-## Windows
+The binary is written to `target/release/Zentop` (`Zentop.exe` on Windows).
 
-Download the x64 .exe from the published release. A filename ending in `-setup.exe` indicates an installer; run it and follow the prompts. Older releases may provide a portable .exe, which you can keep and run in a folder you control. Consult release notes for requirements.
+### Linux build dependencies
 
-## Linux
+GPUI and the system-tray icon need development headers. On Ubuntu or Debian:
 
-Run `uname -m`: `x86_64` means x64 and `aarch64` means ARM64. Older releases may not provide both architectures.
+```sh
+sudo apt install build-essential pkg-config libfontconfig-dev libfreetype-dev \
+  libwayland-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxcb1-dev \
+  libvulkan-dev libgtk-3-dev libayatana-appindicator3-dev
+```
 
-- Debian/Ubuntu: choose .deb and use the distribution's package installer.
-- Fedora or compatible RPM distributions: choose .rpm and install it with the distribution's package manager.
-- AppImage: make the downloaded file executable in its Properties and open it. System libraries and possibly FUSE are still required; an AppImage is not compatible with every Linux distribution.
+Other distributions ship the same libraries under similar names.
+
+### Build installers
+
+[cargo-packager](https://github.com/crabnebula-dev/cargo-packager) builds the platform installers into `target/packager`:
+
+```sh
+cargo install cargo-packager --locked
+cargo build --release
+cargo packager --release            # .app/.dmg, setup .exe, .deb, AppImage
+
+cargo install cargo-generate-rpm --locked
+cargo generate-rpm                  # .rpm (Linux)
+```
+
+## Packages (once released)
+
+| Platform              | Package                                      |
+| --------------------- | -------------------------------------------- |
+| macOS · Apple Silicon | `silicon-Zentop_<version>_aarch64.dmg`       |
+| macOS · Intel         | `intel-Zentop_<version>_x64.dmg`             |
+| Windows · x64         | `Zentop_<version>_x64-setup.exe`             |
+| Linux · x86_64        | `.deb`, `.rpm` and `.AppImage` for `x86_64`  |
+| Linux · ARM64         | `.deb`, `.rpm` and `.AppImage` for `aarch64` |
+
+Each release includes `SHA256SUMS` and a `release-manifest.json` so you can verify downloads.
+
+- **macOS:** open the DMG and drag Zentop to Applications. Unsigned preview builds need a right-click → Open the first time; don't disable Gatekeeper.
+- **Windows:** run the setup `.exe`.
+- **Linux:** run `uname -m` to check your architecture (`x86_64` or `aarch64`), then install the `.deb` or `.rpm` with your package manager, or make the AppImage executable and run it. AppImages still need FUSE and common system libraries.
+
+## Coming from NeoHtop
+
+The first time Zentop starts, it imports your NeoHtop preferences (refresh rate, columns, view and menu-bar options). It never changes NeoHtop's files, so both apps can stay installed. Themes chosen inside NeoHtop are not imported; pick one in **Settings → Appearance**.
 
 ## Troubleshooting
 
-For glibc errors or a blank Linux window, check your distribution version, package type, and release notes. Version 1.3.0 uses an Ubuntu 22.04 build baseline and checks AppImages for bundled host Wayland libraries. Older releases may not contain these fixes. An appropriate native package may be another option.
+- **Blank window on Linux:** check that Vulkan drivers are installed for your GPU (`vulkaninfo` should list a device).
+- **No tray icon on Linux:** some desktops hide AppIndicator icons; use **View → Menu-bar Overview** instead.
+- **Missing process details:** the operating system hides some details of other users' processes. Zentop does not ask for administrator rights.
 
-Operating-system permissions can restrict process details. Start without administrator privileges and consult platform-specific repository guidance before granting elevated access.
-
-[Report issues](https://github.com/Abdenasser/neohtop/issues) with app version, operating system, CPU architecture, package type, error text, and reproduction steps. Redact credentials and private command-line arguments.
-
-## Build the development version
-
-Use Rust 1.88 or newer. On Linux, install the GPUI and tray build dependencies listed in the [development guide](../.github/DEVELOPMENT.md).
-
-```sh
-git clone https://github.com/Abdenasser/neohtop.git
-cd zentop
-cargo run
-```
-
+Report problems on [GitHub Issues](https://github.com/amjadjibon/zentop/issues) with your OS, CPU architecture, how you installed Zentop, any error text and steps to reproduce. Remove private command lines and environment variables first.

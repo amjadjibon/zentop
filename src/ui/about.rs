@@ -33,7 +33,7 @@ impl Render for About {
                                         div()
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
-                                            .child("Zentop · by Abdenasser"),
+                                            .child("by Amjad Hossain · based on NeoHtop by Abdenasser"),
                                     ),
                             )
                             .child(div().flex_1())

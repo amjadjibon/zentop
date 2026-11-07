@@ -1,33 +1,47 @@
-# Zentop desktop screenshots
+# Zentop screenshots
 
-The v1.3.0 desktop interface on macOS. Desktop screenshots are filtered to a few common processes; resource readings are examples from a local machine, not benchmarks. GPU readings and platform chrome vary by operating system and driver.
+Captured on macOS with the default Catppuccin theme. Readings come from a real machine and are examples, not benchmarks; GPU details and window chrome vary by platform and driver.
 
-## Dark appearance
+## Main window
 
-![Zentop desktop with resource charts and a filtered process list](desktop-dark.jpg)
+Resource cards with two-minute trends above the process list. The Actions column stays pinned on the right.
 
-## Menu-bar companion
+![Zentop main window](zentop-desktop.png)
 
-![The real Zentop menu-bar icon and its open overview, captured by macOS without a cursor](menubar-overview-system.png)
+## Chart inspection
 
-## Light appearance
+Hover a chart, or focus it and use the arrow keys, to read the time and value of any sample.
 
-![Zentop desktop using GitHub Light](desktop-light.jpg)
+![Charts showing hover tooltips](chart-inspection.png)
 
-## Resource details
+## Search and filters
 
-![CPU details with per-core activity and short utilization history](cpu-details.jpg)
+Active search terms and filters appear as removable chips, with a clear-all action and an empty state when nothing matches.
 
-## Local-port search
+![Filter chips and the no-matches state](filters.png)
 
-![An explicit local-port query finding a temporary local HTTP listener](port-search.jpg)
+## Process details
+
+![Process details sheet for Finder](process-details.png)
+
+## Network details
+
+![Network detail sheet with rates, totals and interfaces](network-details.png)
+
+## Theme picker
+
+![The searchable theme picker](theme-picker.png)
+
+## Menu-bar overview
+
+![The menu-bar overview popup](menubar-overview.png)
 
 ## Settings
 
-![General settings for refresh cadence, menu-bar icon and close behavior](settings.jpg)
+![General settings](settings.png)
 
-## All 24 themes
+## About
 
-![Appearance settings with the searchable theme gallery](themes.jpg)
+![About Zentop](about.png)
 
-See the [desktop usage guide](../usage.md) for workflows, shortcuts and driver limitations. [Download Zentop](https://github.com/Abdenasser/neohtop/releases/latest).
+See the [user guide](../usage.md) for workflows, shortcuts and platform notes.

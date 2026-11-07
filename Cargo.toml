@@ -1,10 +1,12 @@
 [package]
 name = "zentop"
 version = "1.3.0"
-description = "A cross-platform system monitor"
-authors = ["Abdenasser"]
+description = "A calm, native, cross-platform system monitor"
+authors = ["Amjad Hossain"]
 edition = "2021"
 rust-version = "1.88"
+license = "MIT"
+repository = "https://github.com/amjadjibon/zentop"
 
 [[bin]]
 name = "Zentop"

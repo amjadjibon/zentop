@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Zentop now lives at [amjadjibon/zentop](https://github.com/amjadjibon/zentop), credited as a fork of NeoHtop by Abdenasser. README, guides and screenshots describe Zentop.
 - Rename the app to **Zentop** (bundle identifier `com.zentop.app`). Settings from NeoHtop are imported on first launch; the old NeoHtop settings folder is left untouched.
 - New app icon and menu-bar glyph: an open ensō ring with a dot in its gap. Sources live in `assets/brand/`.
 - Rebuild the desktop app natively in Rust with GPUI Kit, replacing Tauri, Svelte and the webview. All windows (monitor, Settings, About and the menu-bar overview) share one sampling loop and one settings file; existing settings carry over.

@@ -1,6 +1,6 @@
-# Using Zentop v1.3.0
+# Using Zentop
 
-Zentop is a free, open-source local system monitor for macOS, Linux, and Windows. No account, cloud subscription, or background agent is required. Pro is postponed and is not available.
+Zentop is a free, open-source system monitor for macOS, Linux and Windows. It runs entirely on your machine: no account, no cloud service and no background agent.
 
 ## Find the process you need
 
@@ -10,7 +10,7 @@ Use **⌘F** (macOS) or **Ctrl+F** to focus search. Search by name, command, or 
 
 Choose **List** for individual processes or **Tree** for families. Tree search retains parents and expands matching branches; family CPU and RAM continue to include hidden descendants. CPU may exceed 100% across cores, and shared pages can overlap in summed family RAM. Expanded families stay together when paging.
 
-Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table.
+Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
 
 ## Explore resources
 
@@ -39,9 +39,9 @@ The default is to quit when the main window closes. Enable **Keep running when t
 
 Settings → Appearance and the title-bar palette menu share all 24 original themes; a change applies to every open window at once.
 
-## Downloads and support
+## Installing and support
 
-Use the [official release](https://github.com/Abdenasser/neohtop/releases/latest) and [installation guide](install.md). Include OS, architecture, app version, package type and reproduction steps in [bug reports](https://github.com/Abdenasser/neohtop/issues). Redact private command lines, environment variables and identifiers before sharing diagnostics or screenshots.
+See the [installation guide](install.md). Include OS, architecture, app version, package type and reproduction steps in [bug reports](https://github.com/amjadjibon/zentop/issues). Redact private command lines, environment variables and identifiers before sharing diagnostics or screenshots.
 
 ## Privacy
 

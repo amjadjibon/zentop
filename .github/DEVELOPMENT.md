@@ -56,11 +56,11 @@ For a release candidate:
 4. Install and launch the packages on their supported operating systems, review
    the release notes, then publish the draft from GitHub when ready.
 
-Tagged macOS builds require the existing repository secrets `MACOS_CERTIFICATE`
+Tagged macOS builds require the repository secrets `MACOS_CERTIFICATE`
 (base64-encoded Developer ID `.p12`), `MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`,
-`APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`. The optional
-repository variable `APPLE_SIGNING_IDENTITY` overrides the current Developer ID
-identity. Tagged builds fail if credentials are missing or signature/notarization
+`APPLE_PASSWORD` (an app-specific password), and `APPLE_TEAM_ID`, plus the
+repository variable `APPLE_SIGNING_IDENTITY` naming your Developer ID
+Application identity. Tagged builds fail if credentials are missing or signature/notarization
 checks fail. Preview builds and pull requests do not need signing credentials.
 Windows packages are NSIS installers, named `Zentop_<version>_x64-setup.exe`;
 Windows code signing is not configured by this workflow.

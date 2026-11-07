@@ -51,7 +51,7 @@ pub static APP_ICON: LazyLock<Arc<gpui_kit::Image>> =
 pub static SMALL_ICON: LazyLock<Arc<gpui_kit::Image>> =
     LazyLock::new(|| png(include_bytes!("../../assets/icons/32x32.png")));
 
-pub const REPOSITORY: &str = "https://github.com/Abdenasser/neohtop";
+pub const REPOSITORY: &str = "https://github.com/amjadjibon/zentop";
 
 /// Open windows, so each kind is reused instead of duplicated.
 #[derive(Default)]
