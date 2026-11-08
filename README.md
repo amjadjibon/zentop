@@ -17,6 +17,7 @@
 
 - **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
 - **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
+- **Explore disk usage.** Open DiskTree in the GUI or TUI for a nested treemap, category colors, Size/Files/Age modes, hidden/apparent-size controls and a read-only marked review list. See the [DiskTree guide](docs/disktree.md).
 - **Six live resource cards.** CPU (per core), memory, GPU, storage, system load and network, each with a two-minute trend you can hover or step through with the arrow keys, and a detail sheet one click away.
 - **Your graphics card, in view.** Utilization, memory, temperature, power and clocks wherever the driver exposes them.
 - **A menu-bar companion.** Live readings and your five busiest processes in a small popup from the menu bar or system tray. Optionally keep monitoring after the main window closes.
@@ -108,5 +109,7 @@ See the [development and release guide](.github/DEVELOPMENT.md) and [contributin
 ## Credits
 
 Zentop is a fork of [**NeoHtop**](https://github.com/Abdenasser/neohtop) by [Abdenasser](https://github.com/Abdenasser). It replaces NeoHtop's Tauri and Svelte webview with a native Rust app built on GPUI. Its features, themes and much of its design come from NeoHtop. Thank you.
+
+The DiskTree feature reuses selected treemap, classification, formatting and native UI components from [tobi/disktree](https://github.com/tobi/disktree) by Tobi Lütke, under its [MIT license](licenses/disktree-MIT.md). The copied components and exact source revision are listed in the [core provenance](crates/zentop-core/src/disktree/upstream/UPSTREAM.md) and [UI provenance](crates/zentop-gui/src/ui/disktree/upstream/UPSTREAM.md). Zentop’s shared scanner feeds separate native and terminal adapters.
 
 Zentop is released under the [MIT License](LICENSE). NeoHtop's MIT license and copyright notice are kept in [licenses/neohtop-MIT.md](licenses/neohtop-MIT.md).

@@ -19,7 +19,7 @@ Use each card’s arrow to open a detailed sheet. CPU, memory, GPU and network h
 - **CPU:** average utilization, individual logical cores, and hardware identity. Process CPU can exceed the 100% scale of a single core.
 - **Memory:** used RAM, actual free pages, swap and breakdowns exposed by the OS. “Not in use” on the overview means total minus used and differs from strictly free pages.
 - **Graphics:** select an adapter and inspect utilization, memory, temperature, core count, power and core clock where the driver exposes them. Apple silicon shared GPU memory is already part of system RAM.
-- **Storage:** capacity and mounted volumes. Unknown/zero capacity stays unavailable. This is capacity monitoring, not a cleaner or duplicate finder.
+- **Storage:** capacity and mounted volumes. Unknown/zero capacity stays unavailable. **Open DiskTree…** opens the read-only [DiskTree treemap](disktree.md) for directory-level usage.
 - **System:** OS/build, CPU architecture, uptime and load averages. Load average is not CPU percentage.
 - **Network:** received/sent rates, totals and interface details. Interfaces with traffic are listed first. New/reset counters stay unavailable until a valid rate baseline exists. This is network I/O monitoring, not a firewall or packet inspector.
 
@@ -75,6 +75,12 @@ for that terminal session; they do not change GUI preferences. Process
 termination and clipboard buttons remain GUI features. The TUI needs an
 interactive terminal; use the CLI for redirected output. Both apps support
 `--help` and `--version`.
+
+## Disk usage treemap
+
+Open **View → DiskTree…** in the GUI, press **d** in the terminal monitor, or run
+`cargo run -p zentop-tui -- --disk /path/to/folder`. The [DiskTree guide](disktree.md)
+covers navigation, modes, marked review and partial-scan limits.
 
 ## Installing and support
 

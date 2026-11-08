@@ -78,6 +78,33 @@ TUI renderer tests cover all palettes, narrow terminals and sheets. For a
 deterministic cell/color capture, set `ZENTOP_TUI_CAPTURE=/tmp/zentop-capture`
 and run `cargo test -p zentop-tui dashboard_has_six_desktop_cards_and_controls`.
 
+### DiskTree implementation
+
+`zentop-core/src/disktree` owns metadata-only scanning, hard-link accounting,
+category/review heuristics, cancellation, scan limits and squarified layout.
+Both `zentop-gui/src/ui/disktree.rs` and `zentop-tui/src/disktree.rs` use that
+model. `zentop-core/src/disktree/upstream` contains only the copied upstream
+geometry, pure classification/reclaim lookup and formatting components, with
+MIT notices and a pinned provenance record. The TUI corrects for the approximately 2:1 terminal-cell aspect ratio.
+The GUI draws a clipped canvas with a matching hit map and an explicit full
+height inside its horizontal flex container. Its `disktree/upstream` directory
+contains the copied painter, palette, widget primitives and adapted selection,
+review and insight panels, with separate MIT provenance. Zentop supplies theme
+tokens and the current GPUI API adapter.
+
+For scan performance, run `cargo run --release -p zentop-core --example
+disktree_scan -- /path/to/folder 5`. The CSV separates filesystem scan time from
+view construction and records counts/totals to detect incomplete comparisons.
+The worker pool is bounded to eight threads with 128-entry batches and a bounded
+result channel; the coordinator alone mutates the tree and enforces caps.
+
+Tests create disposable filesystem fixtures and check accounting, symlink and
+hard-link behavior, incomplete scans, marks, filters and area conservation.
+`ZENTOP_TUI_CAPTURE=/tmp/zentop-capture cargo test -p zentop-tui disktree`
+exports a deterministic cell/color fixture for visual checks. For native GUI verification, check Storage → Open DiskTree, folder
+selection, visible tiles, navigation and review.
+See [the user guide](../docs/disktree.md) for controls and scope.
+
 ### Tests and releases
 
 CI covers macOS only. **Test** (`.github/workflows/test.yml`) runs on pull
