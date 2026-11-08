@@ -1,5 +1,6 @@
 //! Interactive terminal frontend backed by the shared monitoring crate.
 mod app;
+mod disktree;
 mod sampler;
 mod theme;
 mod ui;
@@ -19,6 +20,12 @@ struct Args {
     /// Initial palette from the GUI theme collection
     #[arg(long, default_value = "catppuccin")]
     theme: String,
+    /// Open DiskTree and scan this directory
+    #[arg(long, value_name = "PATH")]
+    disk: Option<std::path::PathBuf>,
+    /// Print the MIT notice for the reused DiskTree components
+    #[arg(long)]
+    disk_license: bool,
 }
 
 struct RestoreTerminal;
@@ -40,12 +47,19 @@ fn main() -> ExitCode {
 }
 
 fn run(args: Args) -> io::Result<()> {
+    if args.disk_license {
+        println!("{}", zentop_core::disktree::LICENSE);
+        return Ok(());
+    }
     if !io::stdin().is_terminal() || !io::stdout().is_terminal() {
         return Err(io::Error::other(
             "an interactive terminal is required; use zentop-cli for reports",
         ));
     }
     let mut app = app::App::new(args.interval, &args.theme)?;
+    if let Some(path) = args.disk {
+        app.disk.open(path);
+    }
     // Also restore after partial initialization failures. Ratatui installs a panic hook.
     let _restore = RestoreTerminal;
     let mut terminal = ratatui::try_init()?;

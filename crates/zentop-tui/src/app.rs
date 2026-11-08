@@ -33,6 +33,7 @@ pub enum Effect {
 }
 
 pub struct App {
+    pub disk: crate::disktree::DiskTree,
     pub snapshot: Option<Snapshot>,
     pub error: Option<String>,
     pub sort: Sort,
@@ -65,6 +66,7 @@ impl App {
             .position(|t| t.name == theme_name)
             .ok_or_else(|| io::Error::other(format!("Unknown theme: {theme_name}")))?;
         Ok(Self {
+            disk: crate::disktree::DiskTree::default(),
             snapshot: None,
             error: None,
             sort: Sort::default(),
@@ -108,6 +110,9 @@ impl App {
         let mut dirty = true;
         let mut demand = (false, false);
         loop {
+            if self.disk.tick() {
+                dirty = true;
+            }
             match sampler.readings.try_recv() {
                 Ok(Ok(snapshot)) if snapshot.paused == self.paused => {
                     let selected = self.selected_identity();
@@ -232,6 +237,9 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Effect::Quit;
         }
+        if self.disk.active {
+            return self.disk.key(key);
+        }
         if self.searching {
             match key.code {
                 KeyCode::Enter => self.searching = false,
@@ -270,6 +278,9 @@ impl App {
         let mut preserve = true;
         match key.code {
             KeyCode::Char('q') => return Effect::Quit,
+            KeyCode::Char('d') => {
+                self.disk.open(std::env::current_dir().unwrap_or_default());
+            }
             KeyCode::Char('/') => self.searching = true,
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.searching = true

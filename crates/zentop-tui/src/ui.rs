@@ -42,6 +42,10 @@ fn block<'a>(title: impl Into<Line<'a>>, theme: &Theme) -> Block<'a> {
 
 pub fn draw(app: &mut App, frame: &mut Frame) {
     let theme = app.theme().clone();
+    if app.disk.active {
+        app.disk.draw(frame, &theme);
+        return;
+    }
     let area = frame.area();
     frame.render_widget(
         Block::default().style(Style::default().bg(theme.background).fg(theme.foreground)),
@@ -162,7 +166,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
             if app.searching {
                 "Type a name, command, PID, regex or :port · Enter apply · Esc clear".into()
             } else {
-                "↑↓ scroll  Enter inspect  Space pin  p pause  1–6 resources  ? help  q quit".into()
+                "↑↓ scroll  Enter inspect  Space pin  p pause  1–6 resources  d DiskTree  ? help  q quit".into()
             }
         });
     frame.render_widget(
@@ -622,6 +626,7 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
                 "f              Filters: enable rules, adjust thresholds and status",
                 "v              Choose table columns",
                 "p              Pause/resume sampling",
+                "d              Open DiskTree for the current directory",
                 ",              Settings: refresh interval",
                 "T              Next theme (all 24 desktop palettes)",
                 "x              Clear search and filters",
