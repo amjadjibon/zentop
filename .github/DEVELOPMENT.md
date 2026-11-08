@@ -5,12 +5,11 @@ Use Rust 1.88 or newer. Zentop is a Cargo workspace:
 - `crates/zentop-core`: system/process/GPU monitoring, sampling and history; no GPUI dependency.
 - `crates/zentop-gui`: the GPUI Kit desktop app, icons and preferences. All windows
   observe `src/ui/monitor.rs` within this crate.
-- `crates/zentop-tui`: terminal frontend scaffold.
-- `crates/zentop-cli`: command-line frontend scaffold.
+- `crates/zentop-tui`: Ratatui terminal monitor; Clap arguments and a background sampler.
+- `crates/zentop-cli`: Clap system/process reports with text and JSON output.
 
 The GUI is the default member, preserving `cargo run` at the repository root.
-The TUI and CLI currently support only scaffold messages, `--help` and `--version`;
-frontend features can build on `zentop-core`. Core tests can run independently
+Both terminal frontends use `zentop-core` without pulling in desktop dependencies. Core tests can run independently
 with `cargo test -p zentop-core`, without desktop build dependencies.
 
 Compose gpui-component controls with the theme roles in
@@ -46,6 +45,38 @@ cargo install cargo-generate-rpm --locked
 Themes live in `assets/themes.json` as resolved semantic roles. `cargo test --workspace`
 checks every theme for readable contrast (WCAG AA for text and labels, 3:1 for
 controls and chart colors) on each surface it is used on.
+
+### Terminal frontends
+
+```bash
+cargo run -p zentop-cli -- system
+cargo run -p zentop-cli -- processes --sort cpu --limit 20
+cargo run -p zentop-cli -- processes --sort memory --json
+cargo run -p zentop-tui -- --interval 3000
+```
+
+Both apps use Clap for help, version and argument validation. CLI defaults to
+`system` and waits 1.5 seconds between observations so CPU/network rates have a
+baseline. `--json` works before or after a subcommand. Process reports export
+PID, name, CPU, RAM and status; they do not dump environment variables.
+
+The TUI uses Ratatui with its Crossterm backend and requires an interactive
+terminal. It mirrors the six desktop resource cards, List/Tree process views,
+search, filters, pins, columns and inspection sheets. Terminal shortcuts are in
+[the user guide](../docs/usage.md#terminal-apps). `--theme` selects any palette
+from `assets/themes.json`; press `T` to cycle. Choices last for the terminal
+session and do not write GUI preferences.
+
+Shared process presentation rules live in `zentop-core/src/process_view.rs`.
+The GUI re-exports them, so search syntax, filter comparisons, family ownership
+and CPU/RAM aggregation are identical. Sampling runs on a worker thread with
+pause, interval and on-demand GPU/port commands and a bounded snapshot queue.
+Terminal state is restored on exit, errors and panics through Ratatui's hook.
+CPU/network rates use a warmup observation; missing chart samples remain gaps.
+
+TUI renderer tests cover all palettes, narrow terminals and sheets. For a
+deterministic cell/color capture, set `ZENTOP_TUI_CAPTURE=/tmp/zentop-capture`
+and run `cargo test -p zentop-tui dashboard_has_six_desktop_cards_and_controls`.
 
 ### Tests and releases
 

@@ -4,6 +4,8 @@ Zentop is a fork of [NeoHtop](https://github.com/Abdenasser/neohtop) 1.3.0, rebu
 
 ## Unreleased
 
+- Bring the GUI layout and 24 palettes to the TUI, with six resource cards, trends, shared search/filter/tree rules, pins, configurable columns, pause/settings and process/resource inspectors.
+- Add Clap-based CLI system/process reports with JSON output and a Ratatui terminal monitor with live CPU/RAM readings, process sorting and scrolling.
 - Split the app into a Cargo workspace with shared `zentop-core`, the existing `zentop-gui` desktop app, and `zentop-tui` / `zentop-cli` frontend scaffolds.
 - Copy buttons for a process's PID, name, command, path, ports and environment variables, for network interface names, and for version and system information (System details and About), ready to paste into a bug report.
 - Process details show the ports a process listens on, with protocol and whether each is reachable from other machines or only this computer.

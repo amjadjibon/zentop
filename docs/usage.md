@@ -39,6 +39,43 @@ The default is to quit when the main window closes. Enable **Keep running when t
 
 Settings → Appearance and the title-bar palette menu share all 24 original themes; a change applies to every open window at once.
 
+## Terminal apps
+
+Run `cargo run -p zentop-cli -- system` for a system summary, or
+`cargo run -p zentop-cli -- processes --sort memory --limit 10` for a process list.
+Add `--json` for machine-readable output. Reports take two observations, 1.5
+seconds apart, to establish CPU and network rates.
+
+Run `cargo run -p zentop-tui` for a terminal dashboard with the GUI's six
+resource cards: CPU, Memory, GPU, Storage, System and Network. Wide terminals
+show one row of cards; narrower terminals wrap them or show a compact summary.
+CPU, RAM, GPU and network cards include two-minute trends with gaps for missing
+readings. Press **1–6** for resource details.
+
+- **/** or **Ctrl+F**: search by name, command, PID, regular expression or `:port`.
+  Enter keeps the search; Esc clears it. **x** clears search and filters.
+- **f**: filters. Up/down chooses a rule; Space enables it; left/right adjusts
+  the threshold; **o** changes the comparison. The last row chooses a status.
+- **t**: List/Tree; left/right collapses/expands families. Tree totals and search
+  follow the same rules as the GUI, including app-owned helpers on macOS.
+- **Space**: pin/unpin a command. **Enter** opens process details; **e** reveals
+  environment values in that sheet. Port collection runs only for port searches
+  or an open process sheet; paused port lookups ask you to resume.
+- **c / m**: sort by CPU/RAM. **[ / ]** chooses a sort column; **r** reverses it.
+  **v** chooses columns; narrow terminals hide columns that do not fit.
+- **p**: pause/resume sampling. **,** opens interval settings. **T** cycles all
+  24 GUI palettes. **?** lists shortcuts.
+- **Up/down** or **j/k**: scroll. **q** or **Ctrl+C** quits; in a sheet, **q** or
+  **Esc** closes the sheet first.
+
+`cargo run -p zentop-tui -- --interval 5000 --theme dracula` starts with a
+five-second interval and the Dracula palette. Intervals range from 1500 to
+30000 milliseconds. TUI pins, filters, columns, interval and theme choices last
+for that terminal session; they do not change GUI preferences. Process
+termination and clipboard buttons remain GUI features. The TUI needs an
+interactive terminal; use the CLI for redirected output. Both apps support
+`--help` and `--version`.
+
 ## Installing and support
 
 See the [installation guide](install.md). Include OS, architecture, app version, package type and reproduction steps in [bug reports](https://github.com/amjadjibon/zentop/issues). Redact private command lines, environment variables and identifiers before sharing diagnostics or screenshots.

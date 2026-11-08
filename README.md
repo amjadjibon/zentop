@@ -89,15 +89,16 @@ Zentop is a Cargo workspace. The desktop app uses [GPUI Kit](https://gpui-kit.co
 | --- | --- |
 | `crates/zentop-core` | Shared monitoring, GPU observations and sampling; no GUI dependencies. |
 | `crates/zentop-gui` | Existing native app, windows, icons, themes and preferences. |
-| `crates/zentop-tui` | Terminal frontend scaffold. |
-| `crates/zentop-cli` | Command-line frontend scaffold. |
+| `crates/zentop-tui` | GUI-style resource cards, List/Tree views, search, filters, pins and inspectors. |
+| `crates/zentop-cli` | Clap commands for system and process reports, including JSON. |
 
-The GUI is the default workspace member, so `cargo run` still opens Zentop. CLI and TUI currently provide only scaffold messages, help and version flags. Themes remain in `assets/themes.json`.
+The GUI is the default workspace member, so `cargo run` still opens Zentop. CLI and TUI share the monitoring core and use Clap for argument parsing. Both interfaces use the 24 palettes in `assets/themes.json`.
 
 ```sh
 cargo run          # GUI debug build
-cargo run -p zentop-cli -- --help
-cargo run -p zentop-tui -- --help
+cargo run -p zentop-cli -- system
+cargo run -p zentop-cli -- processes --sort memory --limit 10 --json
+cargo run -p zentop-tui -- --interval 3000 --theme catppuccin
 cargo test --workspace # all crates, including theme contrast checks
 cargo clippy --workspace --all-targets -- -D warnings
 ```
