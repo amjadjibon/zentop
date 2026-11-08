@@ -2,6 +2,7 @@
 mod about;
 mod companion;
 mod details;
+mod disktree;
 mod main_window;
 mod monitor;
 mod process_view;
@@ -27,6 +28,7 @@ actions!(
         Quit,
         OpenSettings,
         OpenAbout,
+        OpenDiskTree,
         ShowOverview,
         ShowMain,
         ViewList,
@@ -59,6 +61,7 @@ struct Windows {
     main: Option<(AnyWindowHandle, WeakEntity<Zentop>)>,
     settings: Option<AnyWindowHandle>,
     about: Option<AnyWindowHandle>,
+    disktree: Option<AnyWindowHandle>,
     overview: Option<AnyWindowHandle>,
     /// A tray click that dismissed the overview must not immediately reopen it.
     overview_closed_at: Option<Instant>,
@@ -74,6 +77,8 @@ pub fn init(cx: &mut App) {
 
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
+        KeyBinding::new("cmd-shift-d", OpenDiskTree, None),
+        KeyBinding::new("ctrl-shift-d", OpenDiskTree, None),
         KeyBinding::new("cmd-f", FocusSearch, None),
         KeyBinding::new("ctrl-f", FocusSearch, None),
         KeyBinding::new("cmd-,", OpenSettings, None),
@@ -85,6 +90,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &Quit, cx: &mut App| cx.quit());
     cx.on_action(|_: &OpenSettings, cx: &mut App| open_settings(cx));
     cx.on_action(|_: &OpenAbout, cx: &mut App| open_about(cx));
+    cx.on_action(|_: &OpenDiskTree, cx: &mut App| open_disktree(cx));
     cx.on_action(|_: &ShowOverview, cx: &mut App| companion::show(None, cx));
     cx.on_action(|_: &ShowMain, cx: &mut App| open_main(cx));
     cx.on_action(|_: &ViewList, cx: &mut App| set_view(false, cx));
@@ -134,6 +140,7 @@ pub fn init(cx: &mut App) {
             items: vec![
                 MenuItem::action("Process List", ViewList),
                 MenuItem::action("Process Tree", ViewTree),
+                MenuItem::action("DiskTree…", OpenDiskTree),
                 MenuItem::separator(),
                 MenuItem::action("Menu-bar Overview", ShowOverview),
             ],
@@ -289,4 +296,24 @@ fn recently_closed_overview(cx: &App) -> bool {
     cx.global::<Windows>()
         .overview_closed_at
         .is_some_and(|t| t.elapsed() < Duration::from_millis(250))
+}
+
+/// Open the native disk usage treemap without starting a scan until a folder is chosen.
+pub fn open_disktree(cx: &mut App) {
+    if focus(cx.global::<Windows>().disktree, cx) {
+        cx.activate(true);
+        return;
+    }
+    let options = window_options(
+        size(px(1440.), px(960.)),
+        Some(size(px(900.), px(640.))),
+        cx,
+    );
+    if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
+        window.set_window_title("Zentop DiskTree");
+        cx.new(|cx| disktree::DiskTree::new(window, cx))
+    }) {
+        cx.global_mut::<Windows>().disktree = Some(handle);
+    }
+    cx.activate(true);
 }

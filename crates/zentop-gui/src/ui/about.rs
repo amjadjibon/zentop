@@ -1,9 +1,10 @@
 //! Desktop version and upstream links. Opening releases is user initiated.
 use super::{copy_button, monitor, system_summary, APP_ICON, REPOSITORY};
 use gpui_kit::component::button::{Button, ButtonVariants};
-use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, TitleBar};
+use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, TitleBar, WindowExt};
 use gpui_kit::{
-    div, img, px, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window,
+    div, img, px, Context, FontWeight, InteractiveElement, IntoElement, ParentElement, Render,
+    StatefulInteractiveElement, Styled, Window,
 };
 pub struct About;
 
@@ -23,6 +24,10 @@ impl Render for About {
             .child(TitleBar::new())
             .child(
                 v_flex()
+                    .id("about-content")
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_y_scroll()
                     .p_6()
                     .gap_5()
                     .child(
@@ -72,6 +77,32 @@ impl Render for About {
                             .text_xs()
                             .child(div().text_color(cx.theme().muted_foreground).child("Stack"))
                             .child("Rust · GPUI Kit"),
+                    )
+                    .child(
+                        Button::new("disktree-license")
+                            .link()
+                            .small()
+                            .label("DiskTree components · MIT license")
+                            .on_click(|_, window, cx| {
+                                window.open_sheet(cx, |sheet, _, _| {
+                                    sheet
+                                        .title("DiskTree component license")
+                                        .size(px(480.))
+                                        .child(
+                                            v_flex()
+                                                .id("disktree-license-text")
+                                                .max_h(px(240.))
+                                                .overflow_y_scroll()
+                                                .text_sm()
+                                                .gap_1()
+                                                .children(
+                                                    zentop_core::disktree::LICENSE
+                                                        .lines()
+                                                        .map(|line| div().child(line.to_owned())),
+                                                ),
+                                        )
+                                });
+                            }),
                     )
                     .child(
                         Button::new("source")

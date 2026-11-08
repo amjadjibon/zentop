@@ -387,6 +387,13 @@ fn content(
             let volumes = &s.details.volumes;
             v_flex()
                 .gap_2()
+                .child(
+                    Button::new("open-disktree")
+                        .outline()
+                        .label("Open DiskTree…")
+                        .icon(gpui_kit::assets::IconName::HardDrive)
+                        .on_click(|_, _, cx| super::open_disktree(cx)),
+                )
                 .when(volumes.is_empty(), |this| {
                     this.child(note("No volumes reported.", cx))
                 })
