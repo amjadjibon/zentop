@@ -32,11 +32,11 @@ Other distributions ship the same libraries under similar names.
 
 ```sh
 cargo install cargo-packager --locked
-cargo build --release
-cargo packager --release            # .app/.dmg, setup .exe, .deb, AppImage
+cargo build -p zentop-gui --release
+cargo packager -p zentop-gui --release            # .app/.dmg, setup .exe, .deb, AppImage
 
 cargo install cargo-generate-rpm --locked
-cargo generate-rpm                  # .rpm (Linux)
+(cd crates/zentop-gui && cargo generate-rpm) # .rpm (Linux)
 ```
 
 ## Packages (once released)

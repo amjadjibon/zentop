@@ -36,6 +36,12 @@ pub struct GpuProcessMonitor {
     sampled_at: Instant,
 }
 
+impl Default for GpuProcessMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl GpuProcessMonitor {
     /// Creates a monitor, noting whether per-process accounting is possible
     pub fn new() -> Self {

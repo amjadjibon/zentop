@@ -48,7 +48,7 @@ struct Tokens {
 }
 
 static THEMES: LazyLock<Vec<Tokens>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("../../assets/themes.json")).expect("valid themes.json")
+    serde_json::from_str(include_str!("../../../../assets/themes.json")).expect("valid themes.json")
 });
 
 /// Theme names and labels in display order.

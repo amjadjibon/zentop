@@ -20,8 +20,13 @@ expect_fail() {
 fixture() {
   local root="$WORK/$1"
   mkdir -p "$root"
-  printf '[package]\nname = "zentop"\nversion = "%s"\n' "$2" >"$root/Cargo.toml"
-  printf '[[package]]\nname = "zentop"\nversion = "%s"\n' "${3:-$2}" >"$root/Cargo.lock"
+  printf '[workspace.package]\nversion = "%s"\n' "$2" >"$root/Cargo.toml"
+  local package
+  for package in zentop-core zentop-gui zentop-tui zentop-cli; do
+    mkdir -p "$root/crates/$package"
+    printf '[package]\nname = "%s"\nversion.workspace = true\n' "$package" >"$root/crates/$package/Cargo.toml"
+    printf '[[package]]\nname = "%s"\nversion = "%s"\n' "$package" "${3:-$2}" >>"$root/Cargo.lock"
+  done
   echo "$root"
 }
 
@@ -30,6 +35,16 @@ expect_ok "matching versions pass" env RELEASE_ROOT="$root" "$RELEASE" check-ver
 expect_fail "a different tag is rejected" "does not match" env RELEASE_ROOT="$root" "$RELEASE" check-version v9.0.0
 expect_fail "lockfile drift is rejected" "Versions differ" env RELEASE_ROOT="$(fixture drift 1.4.0 1.3.0)" "$RELEASE" check-version
 expect_fail "invalid versions are rejected" "Invalid release version" env RELEASE_ROOT="$(fixture bad 1.4)" "$RELEASE" check-version
+
+# Every crate must stay on the workspace version.
+member_drift=$(fixture member-drift 1.4.0)
+sed 's/version.workspace = true/version = "1.4.0"/' "$member_drift/crates/zentop-tui/Cargo.toml" >"$member_drift/member.tmp"
+mv "$member_drift/member.tmp" "$member_drift/crates/zentop-tui/Cargo.toml"
+expect_fail "independent member versions are rejected" "must inherit" env RELEASE_ROOT="$member_drift" "$RELEASE" check-version
+missing=$(fixture missing-member 1.4.0)
+sed '/name = "zentop-cli"/,$d' "$missing/Cargo.lock" >"$missing/lock.tmp"
+mv "$missing/lock.tmp" "$missing/Cargo.lock"
+expect_fail "missing workspace lock entries are rejected" "Versions differ" env RELEASE_ROOT="$missing" "$RELEASE" check-version
 
 # Windows staging picks the installer, never the portable binary.
 packager="$WORK/packager"

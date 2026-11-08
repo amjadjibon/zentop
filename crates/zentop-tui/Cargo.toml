@@ -1,0 +1,12 @@
+[package]
+name = "zentop-tui"
+description = "Terminal frontend scaffold for Zentop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[dependencies]
+zentop-core.workspace = true

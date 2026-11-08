@@ -1,0 +1,64 @@
+[package]
+name = "zentop-gui"
+description = "A calm, native, cross-platform system monitor"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "Zentop"
+path = "src/main.rs"
+
+[dependencies]
+zentop-core.workspace = true
+gpui-kit = "0.9"
+dirs = "6"
+serde_json.workspace = true
+serde.workspace = true
+sysinfo.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
+regex = "1"
+unicode-normalization = "0.1"
+tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
+
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+file_icon_provider = "=1.0.2"
+png = "0.17"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6.4"
+
+[target.'cfg(target_os = "linux")'.dependencies]
+freedesktop-icons = "0.4"
+gtk = "0.18"
+
+# Installers: `cargo packager --release` (https://github.com/crabnebula-dev/cargo-packager).
+[package.metadata.packager]
+product-name = "Zentop"
+identifier = "com.zentop.app"
+category = "Utility"
+out-dir = "../../target/packager"
+icons = [
+  "../../assets/icons/32x32.png",
+  "../../assets/icons/128x128.png",
+  "../../assets/icons/128x128@2x.png",
+  "../../assets/icons/icon.icns",
+  "../../assets/icons/icon.ico",
+]
+formats = ["app", "dmg", "nsis", "deb", "appimage"]
+
+[package.metadata.packager.macos]
+minimum-system-version = "10.15"
+
+# RPMs: `cargo generate-rpm` after a release build (cargo-packager has no RPM format).
+[package.metadata.generate-rpm]
+name = "zentop"
+license = "MIT"
+assets = [
+  { source = "../../target/release/Zentop", dest = "/usr/bin/Zentop", mode = "755" },
+  { source = "../../assets/zentop.desktop", dest = "/usr/share/applications/zentop.desktop", mode = "644" },
+  { source = "../../assets/icons/128x128.png", dest = "/usr/share/icons/hicolor/128x128/apps/zentop.png", mode = "644" },
+]

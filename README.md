@@ -83,12 +83,23 @@ Zentop sends nothing. There are no analytics, launch counts or update checks; pr
 
 ## Development
 
-Zentop is a single Rust crate built with [GPUI Kit](https://gpui-kit.com) (Zed's GPU-accelerated UI framework plus gpui-component). System sampling lives in `src/`, the windows in `src/ui/`, and themes in `assets/themes.json`.
+Zentop is a Cargo workspace. The desktop app uses [GPUI Kit](https://gpui-kit.com) (Zed's GPU-accelerated UI framework plus gpui-component).
+
+| Crate | Responsibility |
+| --- | --- |
+| `crates/zentop-core` | Shared monitoring, GPU observations and sampling; no GUI dependencies. |
+| `crates/zentop-gui` | Existing native app, windows, icons, themes and preferences. |
+| `crates/zentop-tui` | Terminal frontend scaffold. |
+| `crates/zentop-cli` | Command-line frontend scaffold. |
+
+The GUI is the default workspace member, so `cargo run` still opens Zentop. CLI and TUI currently provide only scaffold messages, help and version flags. Themes remain in `assets/themes.json`.
 
 ```sh
-cargo run          # debug build
-cargo test         # unit tests, including theme contrast checks
-cargo clippy --all-targets -- -D warnings
+cargo run          # GUI debug build
+cargo run -p zentop-cli -- --help
+cargo run -p zentop-tui -- --help
+cargo test --workspace # all crates, including theme contrast checks
+cargo clippy --workspace --all-targets -- -D warnings
 ```
 
 See the [development and release guide](.github/DEVELOPMENT.md) and [contributing notes](.github/CONTRIBUTING.md). Report bugs on [GitHub Issues](https://github.com/amjadjibon/zentop/issues).

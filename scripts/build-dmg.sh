@@ -40,9 +40,9 @@ fi
 
 cd "$ROOT"
 rm -rf target/packager
-cargo build --release --locked --target "$target"
+cargo build -p zentop-gui --release --locked --target "$target"
 export APPLE_SIGNING_IDENTITY="${APPLE_SIGNING_IDENTITY:--}"
-cargo packager --release --target "$target" --formats app
+cargo packager -p zentop-gui --release --target "$target" --formats app
 app=target/packager/Zentop.app
 if [[ "$APPLE_SIGNING_IDENTITY" == "-" ]]; then
   # cargo-packager's ad-hoc signature leaves the bundle unsealed, which macOS

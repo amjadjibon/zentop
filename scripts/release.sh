@@ -43,10 +43,14 @@ file_size() {
 }
 
 check_version() {
-  local tag="${1:-}" cargo lock
-  cargo=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$ROOT/Cargo.toml")
-  lock=$(awk '/^name = "zentop"$/{getline; gsub(/version = "|"/,""); print; exit}' "$ROOT/Cargo.lock")
-  [[ -n "$cargo" && "$cargo" == "$lock" ]] || die "Versions differ (Cargo.toml, Cargo.lock): ${cargo:-?}, ${lock:-?}"
+  local tag="${1:-}" cargo lock package
+  cargo=$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$ROOT/Cargo.toml")
+  for package in zentop-core zentop-gui zentop-tui zentop-cli; do
+    lock=$(awk -v name="$package" '$0 == "name = \"" name "\"" {getline; gsub(/version = "|"/,""); print; exit}' "$ROOT/Cargo.lock")
+    [[ -n "$cargo" && "$cargo" == "$lock" ]] || die "Versions differ (Cargo.toml, Cargo.lock for $package): ${cargo:-?}, ${lock:-?}"
+    grep -q '^version.workspace = true$' "$ROOT/crates/$package/Cargo.toml" ||
+      die "$package must inherit the workspace version"
+  done
   [[ "$cargo" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] ||
     die "Invalid release version: $cargo"
   [[ -z "$tag" || "$tag" == "v$cargo" ]] || die "Tag $tag does not match v$cargo"

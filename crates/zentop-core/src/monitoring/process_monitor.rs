@@ -49,6 +49,12 @@ pub struct ProcessMonitor {
     process_cache: HashMap<(u32, u64), ProcessStaticInfo>,
 }
 
+impl Default for ProcessMonitor {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl ProcessMonitor {
     /// Creates a new process monitor instance
     pub fn new() -> Self {

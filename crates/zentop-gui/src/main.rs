@@ -1,13 +1,12 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 //! Zentop - a modern system monitor built with GPUI Kit.
 
-mod gpu;
-mod monitoring;
 mod native_icons;
 mod preferences;
-mod sampling;
 mod state;
 mod ui;
+
+use zentop_core::{gpu, monitoring, sampling};
 
 use gpui_kit::assets::{icon_assets, Assets};
 use gpui_kit::{App, AssetSource, SharedString};

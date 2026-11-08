@@ -46,10 +46,10 @@ fn png(bytes: &'static [u8]) -> Arc<gpui_kit::Image> {
 
 /// The full app icon, for large placements such as About.
 pub static APP_ICON: LazyLock<Arc<gpui_kit::Image>> =
-    LazyLock::new(|| png(include_bytes!("../../assets/icons/128x128@2x.png")));
+    LazyLock::new(|| png(include_bytes!("../../../../assets/icons/128x128@2x.png")));
 /// The bolder full-bleed variant, legible at title-bar size.
 pub static SMALL_ICON: LazyLock<Arc<gpui_kit::Image>> =
-    LazyLock::new(|| png(include_bytes!("../../assets/icons/32x32.png")));
+    LazyLock::new(|| png(include_bytes!("../../../../assets/icons/32x32.png")));
 
 pub const REPOSITORY: &str = "https://github.com/amjadjibon/zentop";
 

@@ -4,6 +4,7 @@ Zentop is a fork of [NeoHtop](https://github.com/Abdenasser/neohtop) 1.3.0, rebu
 
 ## Unreleased
 
+- Split the app into a Cargo workspace with shared `zentop-core`, the existing `zentop-gui` desktop app, and `zentop-tui` / `zentop-cli` frontend scaffolds.
 - Copy buttons for a process's PID, name, command, path, ports and environment variables, for network interface names, and for version and system information (System details and About), ready to paste into a bug report.
 - Process details show the ports a process listens on, with protocol and whether each is reachable from other machines or only this computer.
 - On macOS, helper processes now count toward the app they work for, such as a webview's WebKit content, GPU and networking processes. Tree view nests them under the app with combined CPU and memory, and process details show a **Process family** total and a **Belongs to** link.
