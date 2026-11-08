@@ -55,10 +55,6 @@ Each release includes `SHA256SUMS` and a `release-manifest.json` so you can veri
 - **Windows:** run the setup `.exe`.
 - **Linux:** run `uname -m` to check your architecture (`x86_64` or `aarch64`), then install the `.deb` or `.rpm` with your package manager, or make the AppImage executable and run it. AppImages still need FUSE and common system libraries.
 
-## Coming from NeoHtop
-
-The first time Zentop starts, it imports your NeoHtop preferences (refresh rate, columns, view and menu-bar options). It never changes NeoHtop's files, so both apps can stay installed. Themes chosen inside NeoHtop are not imported; pick one in **Settings → Appearance**.
-
 ## Troubleshooting
 
 - **Blank window on Linux:** check that Vulkan drivers are installed for your GPU (`vulkaninfo` should list a device).

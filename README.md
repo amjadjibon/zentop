@@ -47,10 +47,6 @@ You need **Rust 1.88+**. On Linux, first install the GPUI and tray build depende
 
 Installers (macOS `.dmg`, Windows setup `.exe`, Linux `.deb`, `.rpm` and AppImage) are built with cargo-packager and will be attached to [GitHub Releases](https://github.com/amjadjibon/zentop/releases) once published. See the [installation guide](docs/install.md).
 
-### Coming from NeoHtop?
-
-Zentop imports your NeoHtop preferences (refresh rate, columns, view and menu-bar options) the first time it starts. It never changes NeoHtop's files, so both apps can stay installed side by side.
-
 ## Quick tour
 
 | You want to…                     | Do this                                                                  |
@@ -98,6 +94,6 @@ See the [development and release guide](.github/DEVELOPMENT.md) and [contributin
 
 ## Credits
 
-Zentop is a fork of [**NeoHtop**](https://github.com/Abdenasser/neohtop) by [Abdenasser](https://github.com/Abdenasser), rebuilt as a native GPUI application with a new name and identity. Its features, themes and much of its design come from NeoHtop. Thank you.
+Zentop is a fork of [**NeoHtop**](https://github.com/Abdenasser/neohtop) by [Abdenasser](https://github.com/Abdenasser). It replaces NeoHtop's Tauri and Svelte webview with a native Rust app built on GPUI. Its features, themes and much of its design come from NeoHtop. Thank you.
 
-Released under the [MIT License](LICENSE); the original NeoHtop copyright notice is retained.
+Zentop is released under the [MIT License](LICENSE). NeoHtop's MIT license and copyright notice are kept in [licenses/neohtop-MIT.md](licenses/neohtop-MIT.md).

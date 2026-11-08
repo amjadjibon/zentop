@@ -789,7 +789,7 @@ mod tests {
         // launchd adopts every helper; the owner says which app each works for.
         let mut ps = vec![
             process(1, 0, "launchd"),
-            process(100, 1, "NeoHtop"),
+            process(100, 1, "Browser"),
             process(101, 1, "WebContent"),
             process(102, 1, "GPU"),
             process(103, 1, "Networking"),

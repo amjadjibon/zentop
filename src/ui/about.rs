@@ -34,8 +34,8 @@ impl Render for About {
                                             .text_xs()
                                             .text_color(cx.theme().muted_foreground)
                                             .child(
-                                                "by Amjad Hossain · based on NeoHtop by Abdenasser",
-                                            ),
+                                            "by Amjad Hossain · a fork of NeoHtop by Abdenasser",
+                                        ),
                                     ),
                             )
                             .child(div().flex_1())

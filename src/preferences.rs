@@ -62,7 +62,9 @@ fn persist(path: &Path, config: &Value) -> Result<(), String> {
         format!("Could not replace settings: {e}")
     })
 }
-fn load(path: &Path, legacy: Option<&Value>) -> Result<Option<Value>, String> {
+/// Reads the settings file, filling gaps with defaults. On first launch the
+/// file doesn't exist yet, so the defaults are saved to it.
+fn load(path: &Path) -> Result<Value, String> {
     let existing = match fs::read(path) {
         Ok(bytes) => Some(
             serde_json::from_slice::<Value>(&bytes)
@@ -71,28 +73,15 @@ fn load(path: &Path, legacy: Option<&Value>) -> Result<Option<Value>, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
         Err(e) => return Err(format!("Could not read settings: {e}")),
     };
-    let Some(source) = existing.as_ref().or(legacy) else {
-        return Ok(None);
-    };
     let mut config = defaults();
-    merge(&mut config, source);
-    if existing.is_none() {
-        persist(path, &config)?;
+    match existing {
+        Some(saved) => merge(&mut config, &saved),
+        None => persist(path, &config)?,
     }
-    Ok(Some(config))
+    Ok(config)
 }
 fn config_dir() -> Option<PathBuf> {
     dirs::config_dir().map(|dir| dir.join("com.zentop.app"))
-}
-
-/// Settings saved by NeoHtop, the app's former name. They seed Zentop's own
-/// file on first launch; the old folder is only ever read, never changed, so
-/// an installed NeoHtop keeps working alongside Zentop.
-fn legacy_settings() -> Option<Value> {
-    let path = dirs::config_dir()?
-        .join("com.neohtop.dev")
-        .join("settings.json");
-    serde_json::from_slice(&fs::read(path).ok()?).ok()
 }
 
 /// The persisted preferences file and its validated contents.
@@ -114,12 +103,11 @@ impl Preferences {
                 Some("Settings location unavailable; changes will not be saved.".into()),
             );
         };
-        let seed = legacy_settings().unwrap_or_else(defaults);
-        match load(&path, Some(&seed)) {
+        match load(&path) {
             Ok(config) => (
                 Self {
                     path: Some(path),
-                    config: config.unwrap_or_else(defaults),
+                    config,
                 },
                 None,
             ),
@@ -166,7 +154,7 @@ mod tests {
     use super::*;
     use serde_json::json;
     #[test]
-    fn legacy_partial_configs_keep_defaults_and_reject_invalid_values() {
+    fn partial_configs_keep_defaults_and_reject_invalid_values() {
         let mut config = defaults();
         merge(
             &mut config,
@@ -199,23 +187,24 @@ mod tests {
         assert_eq!(config["behavior"]["processView"], "tree");
     }
     #[test]
-    fn saved_settings_win_over_legacy_and_failed_save_keeps_original() {
+    fn first_launch_saves_defaults_and_failed_save_keeps_original() {
         let dir = std::env::temp_dir().join(format!("zentop-preferences-{}", std::process::id()));
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("settings.json");
-        assert!(load(&path, None).unwrap().is_none());
-        let config = load(&path, Some(&json!({"behavior":{"refreshRate":5000}})))
-            .unwrap()
-            .unwrap();
-        assert_eq!(load(&path, Some(&defaults())).unwrap().unwrap(), config);
+        assert_eq!(load(&path).unwrap(), defaults());
+        assert!(path.exists());
+        let mut config = defaults();
+        merge(&mut config, &json!({"behavior":{"refreshRate":5000}}));
+        persist(&path, &config).unwrap();
+        assert_eq!(load(&path).unwrap(), config);
         assert!(persist(&dir, &defaults()).is_err());
-        assert_eq!(load(&path, None).unwrap().unwrap(), config);
+        assert_eq!(load(&path).unwrap(), config);
         fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]
-    fn legacy_default_status_is_ignored() {
-        // Retired preference: the status filter is per session, as in NeoHtop.
+    fn retired_default_status_is_ignored() {
+        // Retired preference: the status filter is per session.
         let mut config = defaults();
         merge(
             &mut config,
