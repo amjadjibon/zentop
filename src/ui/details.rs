@@ -3,7 +3,7 @@ use super::monitor;
 use super::process_view::{
     family_parents, format_bytes, format_timestamp, identity, Column, Identity,
 };
-use crate::monitoring::{ProcessInfo, ProcessMonitor};
+use crate::monitoring::{LocalPort, ProcessInfo, ProcessMonitor};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::notification::Notification;
 use gpui_kit::component::progress::Progress;
@@ -13,14 +13,21 @@ use gpui_kit::{
     div, img, px, AnyElement, App, InteractiveElement, IntoElement, ParentElement, SharedString,
     StatefulInteractiveElement, Styled, Window,
 };
-use std::{cell::Cell, collections::HashMap, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    collections::{BTreeMap, HashMap},
+    rc::Rc,
+};
 
 const MAX_CHILDREN: usize = 50;
+
+/// Ports looked up when the sheet opened: `None` until the lookup finishes.
+type Ports = Rc<RefCell<Option<Result<Vec<LocalPort>, String>>>>;
 
 /// Opens the details sheet. It reads the latest frame on every render, so
 /// numbers stay live while it is open.
 pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
-    let icon = Rc::new(std::cell::RefCell::new(None));
+    let icon = Rc::new(RefCell::new(None));
     let resolved_icon = icon.clone();
     let state = monitor::global(cx).read(cx).state();
     cx.spawn(async move |cx| {
@@ -40,6 +47,19 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
             .into_iter()
             .find(|(key, _)| *key == id)
             .and_then(|(_, icon)| icon);
+        cx.update(|cx| cx.refresh_windows());
+    })
+    .detach();
+    // Reading sockets scans every process, so it happens once per sheet
+    // rather than on every sample.
+    let ports: Ports = Rc::new(RefCell::new(None));
+    let found_ports = ports.clone();
+    cx.spawn(async move |cx| {
+        let result = cx
+            .background_executor()
+            .spawn(async move { crate::monitoring::ports_of(id.0) })
+            .await;
+        *found_ports.borrow_mut() = Some(result);
         cx.update(|cx| cx.refresh_windows());
     })
     .detach();
@@ -96,7 +116,7 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
                             ),
                     ),
             )
-            .child(body(p, all, &environment_open, cx))
+            .child(body(p, all, &ports, &environment_open, cx))
     });
 }
 
@@ -164,9 +184,70 @@ fn family_total(
     (cpu, memory, count)
 }
 
+/// Groups sockets into one row per protocol and port, describing where each
+/// accepts connections from: `("TCP 3000", "All interfaces")`.
+fn port_rows(ports: &[LocalPort]) -> Vec<(String, String)> {
+    let mut rows: BTreeMap<(bool, u16), Vec<std::net::IpAddr>> = BTreeMap::new();
+    for port in ports {
+        rows.entry((port.udp, port.address.port()))
+            .or_default()
+            .push(port.address.ip());
+    }
+    rows.into_iter()
+        .map(|((udp, port), ips)| {
+            let reach = if ips.iter().any(|ip| ip.is_unspecified()) {
+                "All interfaces".to_string()
+            } else if ips.iter().all(|ip| ip.is_loopback()) {
+                "This computer only".to_string()
+            } else {
+                ips.iter()
+                    .map(ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            };
+            (format!("{} {port}", if udp { "UDP" } else { "TCP" }), reach)
+        })
+        .collect()
+}
+
+fn ports_card(ports: &Ports, cx: &App) -> impl IntoElement {
+    let note = |text: String| {
+        div()
+            .text_sm()
+            .text_color(cx.theme().muted_foreground)
+            .child(text)
+    };
+    let card = card("Ports", cx);
+    match &*ports.borrow() {
+        None => card.child(note("Checking…".into())),
+        Some(Err(error)) => card.child(note(error.clone())),
+        Some(Ok(found)) if found.is_empty() => card.child(note(
+            "Not listening on any TCP port or bound to any UDP port. \
+             Other users' processes may be hidden without elevated permissions."
+                .into(),
+        )),
+        Some(Ok(found)) => card.children(port_rows(found).into_iter().map(|(port, reach)| {
+            h_flex()
+                .gap_3()
+                .py_2()
+                .border_t_1()
+                .border_color(cx.theme().border)
+                .text_xs()
+                .child(
+                    div()
+                        .w(px(96.))
+                        .font_family(cx.theme().mono_font_family.clone())
+                        .child(port),
+                )
+                .child(div().text_color(cx.theme().muted_foreground).child(reach))
+        })),
+    }
+}
+
 fn body(
     p: &ProcessInfo,
     all: &[ProcessInfo],
+    ports: &Ports,
     environment_open: &Rc<Cell<bool>>,
     cx: &App,
 ) -> impl IntoElement {
@@ -317,6 +398,7 @@ fn body(
                     )),
             ),
         )
+        .child(ports_card(ports, cx))
         .child(
             card("Command & root", cx)
                 .child(field(
@@ -493,4 +575,34 @@ pub fn confirm_kill(id: Identity, name: String, window: &mut Window, cx: &mut Ap
                 true
             })
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn port_rows_merge_addresses_and_describe_reach() {
+        let port = |udp, address: &str| LocalPort {
+            udp,
+            address: address.parse().unwrap(),
+        };
+        let rows = port_rows(&[
+            port(false, "127.0.0.1:3000"),
+            port(false, "[::1]:3000"),
+            port(true, "0.0.0.0:5353"),
+            port(false, "0.0.0.0:443"),
+            port(false, "192.168.1.5:8080"),
+        ]);
+        let rows: Vec<_> = rows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        assert_eq!(
+            rows,
+            [
+                ("TCP 443", "All interfaces"),
+                ("TCP 3000", "This computer only"),
+                ("TCP 8080", "192.168.1.5"),
+                ("UDP 5353", "All interfaces"),
+            ]
+        );
+    }
 }

@@ -10,7 +10,7 @@ Use **⌘F** (macOS) or **Ctrl+F** to focus search. Search by name, command, or 
 
 Choose **List** for individual processes or **Tree** for families. Tree search retains parents and expands matching branches; family CPU and RAM continue to include hidden descendants. CPU may exceed 100% across cores, and shared pages can overlap in summed family RAM. Expanded families stay together when paging.
 
-Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
+Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. The details sheet lists the ports a process listens on (TCP) or has bound (UDP), and whether each accepts connections from other machines or only from this computer; ports are checked when the sheet opens. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
 
 ## Explore resources
 

@@ -4,6 +4,7 @@ Zentop is a fork of [NeoHtop](https://github.com/Abdenasser/neohtop) 1.3.0, rebu
 
 ## Unreleased
 
+- Process details show the ports a process listens on, with protocol and whether each is reachable from other machines or only this computer.
 - On macOS, helper processes now count toward the app they work for, such as a webview's WebKit content, GPU and networking processes. Tree view nests them under the app with combined CPU and memory, and process details show a **Process family** total and a **Belongs to** link.
 - New name, **Zentop**, with its own settings folder and bundle identifier.
 - New app icon and menu-bar glyph: an open ensō ring with a dot in its gap. Sources live in `assets/brand/`.

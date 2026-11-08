@@ -6,7 +6,7 @@
 
 mod gpu_process_monitor;
 mod port_monitor;
-pub use port_monitor::collect_ports_by_pid;
+pub use port_monitor::{collect_ports_by_pid, ports_of, LocalPort};
 mod process_monitor;
 pub use gpu_process_monitor::GpuProcessMonitor;
 mod system_monitor;
