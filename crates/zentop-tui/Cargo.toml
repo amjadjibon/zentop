@@ -1,6 +1,6 @@
 [package]
 name = "zentop-tui"
-description = "Terminal frontend scaffold for Zentop"
+description = "Terminal system monitor for Zentop"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -10,3 +10,7 @@ repository.workspace = true
 
 [dependencies]
 zentop-core.workspace = true
+clap.workspace = true
+ratatui.workspace = true
+serde.workspace = true
+serde_json.workspace = true

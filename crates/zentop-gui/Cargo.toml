@@ -19,8 +19,7 @@ dirs = "6"
 serde_json.workspace = true
 serde.workspace = true
 sysinfo.workspace = true
-chrono = { version = "0.4", default-features = false, features = ["clock", "std"] }
-regex = "1"
+chrono.workspace = true
 unicode-normalization = "0.1"
 tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }
 

@@ -5,5 +5,6 @@
 
 pub mod gpu;
 pub mod monitoring;
+pub mod process_view;
 pub mod sampling;
 pub mod state;
