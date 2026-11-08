@@ -1,11 +1,19 @@
 //! Desktop version and upstream links. Opening releases is user initiated.
-use super::{APP_ICON, REPOSITORY};
+use super::{copy_button, monitor, system_summary, APP_ICON, REPOSITORY};
 use gpui_kit::component::button::{Button, ButtonVariants};
 use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Sizable, TitleBar};
 use gpui_kit::{
     div, img, px, Context, FontWeight, IntoElement, ParentElement, Render, Styled, Window,
 };
 pub struct About;
+
+/// The version plus, once a sample exists, the OS and hardware it runs on.
+fn version_info(cx: &gpui_kit::App) -> String {
+    match &monitor::global(cx).read(cx).frame {
+        Some(frame) => system_summary(&frame.stats.details.identity),
+        None => concat!("Zentop ", env!("CARGO_PKG_VERSION")).into(),
+    }
+}
 impl Render for About {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         v_flex()
@@ -79,10 +87,16 @@ impl Render for About {
                             .border_t_1()
                             .border_color(cx.theme().border)
                             .child(
-                                div()
+                                h_flex()
+                                    .gap_1()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child("Desktop version information"),
+                                    .child("Version and system information")
+                                    .child(copy_button(
+                                        "copy-version",
+                                        "version and system information",
+                                        version_info(cx),
+                                    )),
                             )
                             .child(
                                 Button::new("updates")

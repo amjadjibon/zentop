@@ -543,12 +543,21 @@ fn content(
         Resource::System => {
             v_flex()
                 .gap_2()
-                .child(heading(
-                    identity
-                        .os_version
-                        .clone()
-                        .unwrap_or_else(|| "Operating system unavailable".into()),
-                ))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .child(heading(
+                            identity
+                                .os_version
+                                .clone()
+                                .unwrap_or_else(|| "Operating system unavailable".into()),
+                        ))
+                        .child(super::copy_button(
+                            "copy-system",
+                            "system information",
+                            super::system_summary(identity),
+                        )),
+                )
                 .child(rows(
                     vec![
                         ("Uptime", format_uptime(s.uptime)),
@@ -721,10 +730,16 @@ fn content(
                         .border_1()
                         .border_color(cx.theme().border)
                         .child(
-                            div()
+                            h_flex()
+                                .gap_1()
                                 .text_sm()
                                 .font_family(cx.theme().mono_font_family.clone())
-                                .child(i.name.clone()),
+                                .child(i.name.clone())
+                                .child(super::copy_button(
+                                    SharedString::from(format!("copy-interface-{}", i.name)),
+                                    "interface name",
+                                    i.name.clone(),
+                                )),
                         )
                         .child(
                             div()

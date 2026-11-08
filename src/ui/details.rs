@@ -1,8 +1,8 @@
 //! Process details sheet and the end-process confirmation.
-use super::monitor;
 use super::process_view::{
     family_parents, format_bytes, format_timestamp, identity, Column, Identity,
 };
+use super::{copy_button, monitor};
 use crate::monitoring::{LocalPort, ProcessInfo, ProcessMonitor};
 use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::notification::Notification;
@@ -109,10 +109,12 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
                                     .child(p.name.clone()),
                             )
                             .child(
-                                div()
+                                h_flex()
+                                    .gap_1()
                                     .text_xs()
                                     .text_color(cx.theme().muted_foreground)
-                                    .child(format!("PID {} · {}", p.pid, p.status)),
+                                    .child(format!("PID {} · {}", p.pid, p.status))
+                                    .child(copy_button("copy-pid", "PID", p.pid.to_string())),
                             ),
                     ),
             )
@@ -146,6 +148,34 @@ fn field(label: &'static str, value: impl IntoElement, cx: &App) -> impl IntoEle
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
+        )
+        .child(value)
+}
+
+/// A field whose value can be copied with a button beside its label.
+fn copy_field(
+    label: &'static str,
+    value: impl IntoElement,
+    copy: String,
+    cx: &App,
+) -> impl IntoElement {
+    v_flex()
+        .min_w_0()
+        .gap_1()
+        .text_sm()
+        .child(
+            h_flex()
+                .gap_1()
+                .text_xs()
+                .text_color(cx.theme().muted_foreground)
+                .child(label)
+                .when(!copy.is_empty(), |d| {
+                    d.child(copy_button(
+                        SharedString::from(format!("copy-{label}")),
+                        &label.to_lowercase(),
+                        copy,
+                    ))
+                }),
         )
         .child(value)
 }
@@ -186,7 +216,7 @@ fn family_total(
 
 /// Groups sockets into one row per protocol and port, describing where each
 /// accepts connections from: `("TCP 3000", "All interfaces")`.
-fn port_rows(ports: &[LocalPort]) -> Vec<(String, String)> {
+fn port_rows(ports: &[LocalPort]) -> Vec<(u16, String, String)> {
     let mut rows: BTreeMap<(bool, u16), Vec<std::net::IpAddr>> = BTreeMap::new();
     for port in ports {
         rows.entry((port.udp, port.address.port()))
@@ -205,7 +235,11 @@ fn port_rows(ports: &[LocalPort]) -> Vec<(String, String)> {
                     .collect::<Vec<_>>()
                     .join(", ")
             };
-            (format!("{} {port}", if udp { "UDP" } else { "TCP" }), reach)
+            (
+                port,
+                format!("{} {port}", if udp { "UDP" } else { "TCP" }),
+                reach,
+            )
         })
         .collect()
 }
@@ -226,21 +260,33 @@ fn ports_card(ports: &Ports, cx: &App) -> impl IntoElement {
              Other users' processes may be hidden without elevated permissions."
                 .into(),
         )),
-        Some(Ok(found)) => card.children(port_rows(found).into_iter().map(|(port, reach)| {
-            h_flex()
-                .gap_3()
-                .py_2()
-                .border_t_1()
-                .border_color(cx.theme().border)
-                .text_xs()
-                .child(
-                    div()
-                        .w(px(96.))
-                        .font_family(cx.theme().mono_font_family.clone())
-                        .child(port),
-                )
-                .child(div().text_color(cx.theme().muted_foreground).child(reach))
-        })),
+        Some(Ok(found)) => card.children(port_rows(found).into_iter().enumerate().map(
+            |(i, (number, port, reach))| {
+                h_flex()
+                    .gap_3()
+                    .py_2()
+                    .border_t_1()
+                    .border_color(cx.theme().border)
+                    .text_xs()
+                    .child(
+                        div()
+                            .w(px(96.))
+                            .font_family(cx.theme().mono_font_family.clone())
+                            .child(port),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .text_color(cx.theme().muted_foreground)
+                            .child(reach),
+                    )
+                    .child(copy_button(
+                        SharedString::from(format!("copy-port-{i}")),
+                        "port",
+                        number.to_string(),
+                    ))
+            },
+        )),
     }
 }
 
@@ -345,7 +391,7 @@ fn body(
                     .grid()
                     .grid_cols(2)
                     .gap_4()
-                    .child(field("Name", p.name.clone(), cx))
+                    .child(copy_field("Name", p.name.clone(), p.name.clone(), cx))
                     .child(field("User", p.user.clone(), cx))
                     .child(field(
                         "Session ID",
@@ -401,7 +447,7 @@ fn body(
         .child(ports_card(ports, cx))
         .child(
             card("Command & root", cx)
-                .child(field(
+                .child(copy_field(
                     "Command",
                     div()
                         .id("command-block")
@@ -419,9 +465,10 @@ fn body(
                         } else {
                             p.command.clone()
                         }),
+                    p.command.clone(),
                     cx,
                 ))
-                .child(field(
+                .child(copy_field(
                     "Root",
                     div()
                         .text_xs()
@@ -431,6 +478,7 @@ fn body(
                         } else {
                             p.root.clone()
                         }),
+                    p.root.clone(),
                     cx,
                 )),
         )
@@ -489,16 +537,27 @@ fn body(
                 ),
         )
         .child(
-            Button::new("environment-toggle")
-                .outline()
-                .label(format!(
-                    "Environment variables ({}) {}",
-                    p.environ.len(),
-                    if environment_open.get() { "⌃" } else { "⌄" }
-                ))
-                .on_click(move |_, _, cx| {
-                    toggle.set(!toggle.get());
-                    cx.refresh_windows();
+            h_flex()
+                .gap_2()
+                .child(
+                    Button::new("environment-toggle")
+                        .outline()
+                        .label(format!(
+                            "Environment variables ({}) {}",
+                            p.environ.len(),
+                            if environment_open.get() { "⌃" } else { "⌄" }
+                        ))
+                        .on_click(move |_, _, cx| {
+                            toggle.set(!toggle.get());
+                            cx.refresh_windows();
+                        }),
+                )
+                .when(!p.environ.is_empty(), |d| {
+                    d.child(copy_button(
+                        "copy-environment",
+                        "environment variables",
+                        p.environ.join("\n"),
+                    ))
                 }),
         )
         .when(environment_open.get(), |d| {
@@ -594,7 +653,10 @@ mod tests {
             port(false, "0.0.0.0:443"),
             port(false, "192.168.1.5:8080"),
         ]);
-        let rows: Vec<_> = rows.iter().map(|(a, b)| (a.as_str(), b.as_str())).collect();
+        let rows: Vec<_> = rows
+            .iter()
+            .map(|(_, a, b)| (a.as_str(), b.as_str()))
+            .collect();
         assert_eq!(
             rows,
             [

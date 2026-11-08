@@ -253,6 +253,33 @@ fn set_view(tree: bool, cx: &mut App) {
     open_main(cx);
 }
 
+/// A small icon button that copies `value` and briefly shows a check mark.
+/// `what` names the value for the tooltip and screen readers ("Copy PID").
+pub(crate) fn copy_button(
+    id: impl Into<gpui_kit::ElementId>,
+    what: &str,
+    value: impl Into<gpui_kit::SharedString>,
+) -> gpui_kit::component::clipboard::Clipboard {
+    let label = format!("Copy {what}");
+    gpui_kit::component::clipboard::Clipboard::new(id)
+        .value(value)
+        .tooltip(label.clone())
+        .accessibility_label(label)
+}
+
+/// Zentop's version and the machine it runs on, for bug reports.
+pub(crate) fn system_summary(identity: &crate::monitoring::SystemIdentity) -> String {
+    let unknown = || "Unavailable".to_string();
+    format!(
+        "Zentop {}\nOS: {}\nKernel: {}\nArchitecture: {}\nProcessor: {}",
+        env!("CARGO_PKG_VERSION"),
+        identity.os_version.clone().unwrap_or_else(unknown),
+        identity.kernel_version.clone().unwrap_or_else(unknown),
+        identity.architecture,
+        identity.cpu_model.clone().unwrap_or_else(unknown),
+    )
+}
+
 /// Opens a process's details in the main window, from the overview.
 fn show_process(id: process_view::Identity, cx: &mut App) {
     with_main(cx, move |window, cx| details::open(id, window, cx));
