@@ -36,21 +36,35 @@ Themes live in `assets/themes.json` as resolved semantic roles. `cargo test`
 checks every theme for readable contrast (WCAG AA for text and labels, 3:1 for
 controls and chart colors) on each surface it is used on.
 
-### Releases
+### Tests and releases
 
-There is no CI; build and check releases locally on each platform.
+CI covers macOS only. **Test** (`.github/workflows/test.yml`) runs on pull
+requests and pushes to `main`: formatting, the release-script tests, the version
+check, Clippy and `cargo test`.
 
-1. Update the version in `Cargo.toml` and run `cargo check` to refresh `Cargo.lock`.
-   Run `scripts/release.sh check-version` and commit the changes.
-2. Before packaging, run `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings`,
-   `cargo test` and `scripts/release-test.sh`.
-3. Build packages on each platform: `scripts/build-dmg.sh` on macOS (ad-hoc signed;
-   export the `APPLE_*` signing variables to sign and notarize), or
-   `cargo packager --release` on Windows and Linux. On Linux, also run
-   `cargo generate-rpm`, then `scripts/release.sh check-appimage target/packager`
-   to make sure the AppImage doesn't bundle the host's Wayland libraries (issue #203).
-4. Install and launch each package on its operating system before publishing a
-   GitHub release.
+**Release** (`.github/workflows/release.yml`) runs the tests, then builds the
+Apple silicon DMG. Other platforms aren't built or released by CI. To release:
+
+1. Update the version in `Cargo.toml`, run `cargo check` to refresh `Cargo.lock`,
+   then run `scripts/release.sh check-version` and commit.
+2. Push a matching tag, for example `git tag v1.4.0 && git push origin v1.4.0`.
+   The DMG, `SHA256SUMS` and `release-manifest.json` are attached to a
+   draft GitHub release. A published release is never overwritten.
+3. Install and launch the DMG, review the notes, then publish the draft.
+
+Running **Release** by hand on a branch builds a preview DMG, downloadable from
+the run's artifacts, without making a release.
+
+macOS packages are ad-hoc signed unless the repository has the secrets
+`MACOS_CERTIFICATE` (a base64-encoded Developer ID `.p12`),
+`MACOS_CERTIFICATE_PASSWORD`, `APPLE_ID`, `APPLE_PASSWORD` (an app-specific
+password) and `APPLE_TEAM_ID`, plus the variable `APPLE_SIGNING_IDENTITY`. With
+them, the app is signed and notarized.
+
+To build locally, use `scripts/build-dmg.sh` on macOS, or
+`cargo packager --release` on Windows and Linux (plus `cargo generate-rpm` and
+`scripts/release.sh check-appimage target/packager` on Linux, which makes sure the
+AppImage doesn't bundle the host's Wayland libraries; see issue #203).
 
 ### Code Formatting and Checks
 

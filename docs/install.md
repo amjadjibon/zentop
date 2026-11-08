@@ -41,19 +41,9 @@ cargo generate-rpm                  # .rpm (Linux)
 
 ## Packages (once released)
 
-| Platform              | Package                                      |
-| --------------------- | -------------------------------------------- |
-| macOS · Apple Silicon | `silicon-Zentop_<version>_aarch64.dmg`       |
-| macOS · Intel         | `intel-Zentop_<version>_x64.dmg`             |
-| Windows · x64         | `Zentop_<version>_x64-setup.exe`             |
-| Linux · x86_64        | `.deb`, `.rpm` and `.AppImage` for `x86_64`  |
-| Linux · ARM64         | `.deb`, `.rpm` and `.AppImage` for `aarch64` |
+GitHub Releases ship one package: `silicon-Zentop_<version>_aarch64.dmg`, for Macs with Apple silicon. On other platforms, build from source as above. Each release includes `SHA256SUMS` and a `release-manifest.json` so you can verify the download.
 
-Each release includes `SHA256SUMS` and a `release-manifest.json` so you can verify downloads.
-
-- **macOS:** open the DMG and drag Zentop to Applications. Unsigned preview builds need a right-click → Open the first time; don't disable Gatekeeper.
-- **Windows:** run the setup `.exe`.
-- **Linux:** run `uname -m` to check your architecture (`x86_64` or `aarch64`), then install the `.deb` or `.rpm` with your package manager, or make the AppImage executable and run it. AppImages still need FUSE and common system libraries.
+Open the DMG and drag Zentop to Applications. Builds that aren't notarized need a right-click → Open the first time; don't disable Gatekeeper.
 
 ## Troubleshooting
 

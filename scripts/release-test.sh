@@ -45,29 +45,25 @@ fi
 echo stale >"$packager/stale_x64-setup.exe"
 expect_fail "ambiguous packages are rejected" "found 2" env RELEASE_ROOT="$root" "$RELEASE" stage windows-x86_64 "$packager" "$WORK/staged2"
 
-# The manifest requires every platform and records verifiable hashes.
+# The manifest requires every released package and records verifiable hashes.
 artifacts="$WORK/artifacts"
 mkdir -p "$artifacts"
-for name in Zentop_1.4.0_x86_64.AppImage Zentop_1.4.0_x86_64.deb Zentop_1.4.0_x86_64.rpm \
-  Zentop_1.4.0_aarch64.AppImage Zentop_1.4.0_aarch64.deb Zentop_1.4.0_aarch64.rpm \
-  intel-Zentop_1.4.0_x64.dmg silicon-Zentop_1.4.0_aarch64.dmg Zentop_1.4.0_x64-setup.exe; do
-  echo "package $name" >"$artifacts/$name"
-done
+echo package >"$artifacts/silicon-Zentop_1.4.0_aarch64.dmg"
 expect_ok "a complete set produces a manifest" env RELEASE_ROOT="$root" GITHUB_SHA=abc "$RELEASE" manifest "$artifacts" v1.4.0
 if (cd "$artifacts" && { command -v sha256sum >/dev/null && sha256sum -c SHA256SUMS || shasum -a 256 -c SHA256SUMS; }) >/dev/null 2>&1; then
   pass "checksums verify independently"
 else
   fail "checksums verify independently"
 fi
-if grep -q '"commit": "abc"' "$artifacts/release-manifest.json" && [[ $(grep -o '"sha256"' "$artifacts/release-manifest.json" | wc -l) -eq 9 ]]; then
-  pass "manifest lists all nine packages and the commit"
+if grep -q '"commit": "abc"' "$artifacts/release-manifest.json" && [[ $(grep -o '"sha256"' "$artifacts/release-manifest.json" | wc -l) -eq 1 ]]; then
+  pass "manifest lists the package and the commit"
 else
-  fail "manifest lists all nine packages and the commit"
+  fail "manifest lists the package and the commit"
 fi
 echo stale >"$artifacts/Zentop_old_version.exe"
 expect_fail "unexpected packages are rejected" "Unexpected: Zentop_old_version.exe" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
-rm "$artifacts/Zentop_old_version.exe" "$artifacts/intel-Zentop_1.4.0_x64.dmg"
-expect_fail "missing packages are rejected" "Missing: intel-Zentop_1.4.0_x64.dmg" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
+rm "$artifacts/Zentop_old_version.exe" "$artifacts/silicon-Zentop_1.4.0_aarch64.dmg"
+expect_fail "missing packages are rejected" "Missing: silicon-Zentop_1.4.0_aarch64.dmg" env RELEASE_ROOT="$root" "$RELEASE" manifest "$artifacts" v1.4.0
 
 # The real project is internally consistent.
 expect_ok "repository versions agree" "$RELEASE" check-version

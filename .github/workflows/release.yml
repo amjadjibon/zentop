@@ -1,0 +1,110 @@
+name: Release
+
+# A version tag (v1.2.3) builds the Apple silicon DMG and attaches it to a
+# draft GitHub release. Running it by hand on a branch builds a preview DMG,
+# downloadable from the run's artifacts.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Check the version matches the tag
+        env:
+          RELEASE_TAG: ${{ github.ref_type == 'tag' && github.ref_name || '' }}
+        run: scripts/release.sh check-version "$RELEASE_TAG"
+      - name: Refuse to change a published release
+        if: github.ref_type == 'tag'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if draft=$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null) && [ "$draft" != "true" ]; then
+            echo "::error::This version is already published. Bump the version and tag again."
+            exit 1
+          fi
+
+  test:
+    needs: preflight
+    uses: ./.github/workflows/test.yml
+
+  package:
+    name: Build the DMG (Apple silicon)
+    needs: test
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: release
+          cache-on-failure: true
+
+      # scripts/build-dmg.sh builds, signs, packs and stages the DMG. With the
+      # MACOS_CERTIFICATE secret set it signs with that Developer ID and
+      # notarizes; without it the app is ad-hoc signed.
+      - name: Build the DMG
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.MACOS_CERTIFICATE }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MACOS_CERTIFICATE_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+        run: |
+          if [ -n "$APPLE_CERTIFICATE" ]; then
+            for name in APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID SIGNING_IDENTITY; do
+              [ -n "${!name}" ] || { echo "::error::MACOS_CERTIFICATE is set but $name is missing"; exit 1; }
+            done
+            export APPLE_SIGNING_IDENTITY="$SIGNING_IDENTITY"
+          else
+            unset APPLE_CERTIFICATE APPLE_CERTIFICATE_PASSWORD APPLE_ID APPLE_PASSWORD APPLE_TEAM_ID
+            echo "::warning::No Apple signing secrets; the DMG is ad-hoc signed and not notarized."
+          fi
+          scripts/build-dmg.sh aarch64
+          if [ -n "${APPLE_SIGNING_IDENTITY:-}" ]; then
+            xcrun stapler validate target/packager/Zentop.app
+          fi
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: packages-macos-aarch64
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 14
+
+  draft:
+    name: Draft GitHub release
+    if: github.ref_type == 'tag'
+    needs: package
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: packages-*
+          merge-multiple: true
+          path: artifacts
+      - name: Check the DMG, write checksums and upload the draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: scripts/release.sh upload-draft artifacts "$GITHUB_REF_NAME"

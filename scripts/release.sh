@@ -30,7 +30,9 @@ packages_for() {
     *) return 1 ;;
   esac
 }
-PLATFORMS="linux-x86_64 linux-aarch64 macos-x86_64 macos-aarch64 windows-x86_64"
+# Platforms a GitHub release ships. Other platforms can still be built and
+# staged locally.
+PLATFORMS="macos-aarch64"
 
 sha256() {
   if command -v sha256sum >/dev/null; then sha256sum "$1" | cut -d' ' -f1; else shasum -a 256 "$1" | cut -d' ' -f1; fi
@@ -150,7 +152,7 @@ upload_draft() {
       --title "Zentop v$version" "${prerelease[@]}" \
       --notes "Built from $GITHUB_SHA.
 
-All five platform builds passed. Checksums and a build manifest are attached.
+The Apple silicon DMG, its checksum and a build manifest are attached.
 
 Review the packages and release notes before publishing."
   fi
