@@ -4,12 +4,12 @@ version: 1.0
 date_created: 2026-11-09
 last_updated: 2026-11-09
 owner: Zentop
-status: 'In progress'
+status: 'Completed'
 tags: [feature]
 ---
 # Resource alerts and saved monitoring views
 
-![Status: In progress](https://img.shields.io/badge/status-In%20progress-yellow)
+![Status: Completed](https://img.shields.io/badge/status-Completed-brightgreen)
 
 Implement the shared design in DESIGN.md and expose both features in GUI and TUI.
 
@@ -26,7 +26,7 @@ Implement the shared design in DESIGN.md and expose both features in GUI and TUI
 - [x] TASK-002: Add GUI alert settings/history and toolbar view management.
 - [x] TASK-003: Add TUI alert and saved-view sheets with captured name entry.
 - [x] TASK-004: Test timing, invalid data, persistence and restore behavior; document controls.
-- [ ] TASK-005: Run workspace tests, formatting and Clippy; review and commit.
+- [x] TASK-005: Run workspace tests, formatting and Clippy; review and commit.
 
 **Completion criteria**: Both frontends support save/load/delete and alert configuration;
 core tests verify timing and bounded state; workspace tests, formatting and Clippy pass.
