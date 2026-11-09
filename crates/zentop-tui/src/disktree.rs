@@ -25,16 +25,6 @@ pub struct DiskTree {
 fn rgb(rgb: [u8; 3]) -> Color {
     Color::Rgb(rgb[0], rgb[1], rgb[2])
 }
-fn blend(base: Color, color: [u8; 3], amount: f32) -> Color {
-    let base = if let Color::Rgb(r, g, b) = base {
-        [r, g, b]
-    } else {
-        [24, 24, 37]
-    };
-    rgb(std::array::from_fn(|i| {
-        (base[i] as f32 * (1. - amount) + color[i] as f32 * amount) as u8
-    }))
-}
 impl DiskTree {
     pub fn open(&mut self, path: PathBuf) {
         self.active = true;
@@ -216,6 +206,8 @@ impl DiskTree {
     }
 
     pub fn draw(&mut self, frame: &mut Frame, theme: &Theme) {
+        let palette = theme.disktree_palette();
+        let now = std::time::SystemTime::now();
         let area = frame.area();
         frame.render_widget(
             Block::default().style(Style::default().bg(theme.background).fg(theme.foreground)),
@@ -261,25 +253,31 @@ impl DiskTree {
             ]),
             header,
         );
-        let legend_spans = if self
+        let legend_spans: Vec<_> = if self
             .session
             .view
             .as_ref()
             .is_some_and(|v| v.options.metric == Metric::Age)
         {
-            vec![
-                Span::raw("Age: "),
-                Span::styled("This week  ", Style::default().fg(rgb([94, 196, 147]))),
-                Span::styled("This month  ", Style::default().fg(rgb([97, 187, 205]))),
-                Span::styled("This year  ", Style::default().fg(rgb([174, 125, 220]))),
-                Span::styled("Older  ", Style::default().fg(rgb([212, 151, 102]))),
-            ]
+            std::iter::once(Span::raw("Age: "))
+                .chain(
+                    disk::palette::AGE_LABELS
+                        .into_iter()
+                        .enumerate()
+                        .map(|(i, label)| {
+                            Span::styled(
+                                format!("{label}  "),
+                                Style::default().fg(rgb(palette.age(i))),
+                            )
+                        }),
+                )
+                .collect()
         } else {
             Category::ALL
                 .into_iter()
                 .flat_map(|c| {
                     [
-                        Span::styled("■ ", Style::default().fg(rgb(c.rgb()))),
+                        Span::styled("■ ", Style::default().fg(rgb(palette.category(c)))),
                         Span::raw(format!("{}  ", c.label())),
                     ]
                 })
@@ -329,11 +327,17 @@ impl DiskTree {
                     parent = view.tree.nodes[id].parent;
                 }
                 let color = if marked {
-                    [230, 150, 110]
+                    palette.danger
+                } else if view.options.metric == Metric::Age {
+                    palette.age(disk::palette::age_bucket(node.modified, now))
                 } else {
-                    view.color(tile.id)
+                    palette.category(node.category)
                 };
-                let background = blend(theme.card, color, 0.22 + tile.depth.min(5) as f32 * 0.035);
+                let background = rgb(if marked {
+                    palette.marked_fill()
+                } else {
+                    palette.fill(color, tile.depth)
+                });
                 let hatched = view.hatched(tile.id);
                 let pattern: Vec<Line> = (0..rect.height)
                     .map(|y| {
@@ -366,22 +370,15 @@ impl DiskTree {
                     .title(Line::styled(
                         title,
                         Style::default()
-                            .fg(if selected {
-                                theme.primary
-                            } else {
-                                theme.foreground
-                            })
+                            .fg(theme.foreground)
                             .add_modifier(if selected {
                                 Modifier::BOLD
                             } else {
                                 Modifier::empty()
                             }),
                     ));
-                let paragraph = Paragraph::new(pattern).style(
-                    Style::default()
-                        .bg(background)
-                        .fg(blend(background, color, 0.15)),
-                );
+                let paragraph = Paragraph::new(pattern)
+                    .style(Style::default().bg(background).fg(theme.muted_foreground));
                 if rect.width >= 6 && rect.height >= 2 {
                     frame.render_widget(paragraph.block(border), rect);
                 } else {
@@ -480,7 +477,7 @@ impl DiskTree {
                     plain(&n.name.to_string_lossy()),
                     disk::format_size(view.bytes[id])
                 ),
-                Style::default().fg(rgb(n.category.rgb())),
+                Style::default().fg(rgb(theme.disktree_palette().category(n.category))),
             ));
             lines.push(Line::from(
                 n.review.map_or("Review before removing", Review::hint),
@@ -728,6 +725,56 @@ mod tests {
             ..DiskTree::default()
         }
     }
+    #[test]
+    fn every_theme_keeps_tile_labels_readable_and_uses_shared_age_bands() {
+        use disk::palette::{contrast_ratio, AGE_LABELS};
+        for theme in crate::theme::load().unwrap() {
+            let palette = theme.disktree_palette();
+            for accent in Category::ALL
+                .map(|c| palette.category(c))
+                .into_iter()
+                .chain((0..AGE_LABELS.len()).map(|i| palette.age(i)))
+            {
+                for depth in 0..8 {
+                    assert!(
+                        contrast_ratio(palette.foreground, palette.fill(accent, depth)) >= 4.5,
+                        "{} depth {depth}",
+                        theme.name
+                    );
+                }
+            }
+            assert!(
+                contrast_ratio(palette.foreground, palette.marked_fill()) >= 4.5,
+                "{} marks",
+                theme.name
+            );
+            let mut disk = fixture();
+            disk.session.view.as_mut().unwrap().options.metric = Metric::Age;
+            let mut terminal = Terminal::new(TestBackend::new(160, 54)).unwrap();
+            terminal.draw(|f| disk.draw(f, &theme)).unwrap();
+            let text: String = terminal
+                .backend()
+                .buffer()
+                .content
+                .iter()
+                .map(|c| c.symbol())
+                .collect();
+            for label in AGE_LABELS {
+                assert!(text.contains(label), "{} missing {label}", theme.name);
+            }
+            assert!(
+                terminal
+                    .backend()
+                    .buffer()
+                    .content
+                    .iter()
+                    .any(|c| c.bg == rgb(palette.fill(palette.age(0), 2))),
+                "{} missing themed recent tile",
+                theme.name
+            );
+        }
+    }
+
     #[test]
     fn treemap_and_review_render_at_all_sizes() {
         let mut disk = fixture();

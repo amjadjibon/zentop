@@ -24,6 +24,7 @@ pub struct Theme {
     pub danger: Hsla,
     pub font: SharedString,
     pub border: Hsla,
+    pub colors: zentop_core::disktree::palette::Palette,
 }
 impl Theme {
     pub fn from(cx: &App) -> Self {
@@ -46,6 +47,15 @@ impl Theme {
             danger: palette.danger,
             font: t.font_family.clone(),
             border: t.border,
+            colors: zentop_core::disktree::palette::Palette {
+                card: rgb(palette.card),
+                foreground: rgb(t.foreground),
+                muted: rgb(t.muted_foreground),
+                primary: rgb(t.primary),
+                warning: rgb(palette.warning),
+                danger: rgb(palette.danger),
+                charts: palette.charts.map(rgb),
+            },
         }
     }
     pub fn hover_fill(&self) -> Hsla {
@@ -53,25 +63,6 @@ impl Theme {
     }
     pub fn divider(&self) -> Hsla {
         self.border
-    }
-    #[cfg(test)]
-    fn fixture(appearance: ThemeAppearance) -> Self {
-        let dark = matches!(appearance, ThemeAppearance::Dark);
-        let c = |value| gpui_kit::rgb(value).into();
-        Self {
-            appearance,
-            background: c(if dark { 0x1e1e2e } else { 0xfafafa }),
-            foreground: c(if dark { 0xcdd6f4 } else { 0x202030 }),
-            bright: c(if dark { 0xcdd6f4 } else { 0x202030 }),
-            secondary: c(0x8890a0),
-            inset: c(if dark { 0x181825 } else { 0xf3f3f3 }),
-            surface: c(if dark { 0x232333 } else { 0xeaeaea }),
-            accent: c(0x89b4fa),
-            warning: c(0xf9c457),
-            danger: c(0xf38ba8),
-            font: "monospace".into(),
-            border: c(0x505160),
-        }
     }
 }
 pub trait ActiveDiskTheme {
@@ -92,4 +83,9 @@ fn keycap(keys: impl Into<SharedString>, cx: &App) -> Div {
         .text_size(scale::text::CAPTION)
         .text_color(theme.bright)
         .child(keys.into())
+}
+
+pub fn rgb(color: Hsla) -> [u8; 3] {
+    let c = color.to_rgb();
+    [c.r, c.g, c.b].map(|v| (v.clamp(0., 1.) * 255.).round() as u8)
 }

@@ -16,7 +16,7 @@ use gpui_kit::{
 };
 use std::{cell::RefCell, path::PathBuf, rc::Rc, sync::atomic::Ordering, time::Duration};
 use upstream::treemap_view::{self, Filtered, Label, Mosaic, TileDeco};
-use upstream::{palette, widgets, Theme};
+use upstream::{widgets, Theme};
 use zentop_core::disktree::{self as disk, Metric, Session, Tile};
 
 pub struct DiskTree {
@@ -533,11 +533,10 @@ impl DiskTree {
                                 depth: tile.depth as u32,
                                 category: node.category,
                                 age_bucket: (view.options.metric == Metric::Age).then(|| {
-                                    let days = node
-                                        .modified
-                                        .and_then(|t| t.elapsed().ok())
-                                        .map_or(i64::MAX, |d| (d.as_secs() / 86400) as i64);
-                                    palette::age_bucket(days)
+                                    disk::palette::age_bucket(
+                                        node.modified,
+                                        std::time::SystemTime::now(),
+                                    )
                                 }),
                                 reclaimable: view.hatched(tile.id),
                                 filtered,

@@ -33,6 +33,10 @@ pub struct Theme {
     pub chart_5: Color,
     #[serde(deserialize_with = "color")]
     pub status_running: Color,
+    #[serde(deserialize_with = "color")]
+    pub yellow: Color,
+    #[serde(deserialize_with = "color")]
+    pub destructive: Color,
 }
 
 fn color<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Color, D::Error> {
@@ -46,4 +50,29 @@ pub fn load() -> io::Result<Vec<Theme>> {
         return Err(io::Error::other("No themes available"));
     }
     Ok(themes)
+}
+
+impl Theme {
+    pub fn disktree_palette(&self) -> zentop_core::disktree::palette::Palette {
+        let rgb = |color| match color {
+            Color::Rgb(r, g, b) => [r, g, b],
+            _ => [0, 0, 0],
+        };
+        zentop_core::disktree::palette::Palette {
+            card: rgb(self.card),
+            foreground: rgb(self.foreground),
+            muted: rgb(self.muted_foreground),
+            primary: rgb(self.primary),
+            warning: rgb(self.yellow),
+            danger: rgb(self.destructive),
+            charts: [
+                self.chart_1,
+                self.chart_2,
+                self.chart_3,
+                self.chart_4,
+                self.chart_5,
+            ]
+            .map(rgb),
+        }
+    }
 }

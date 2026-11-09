@@ -4,6 +4,7 @@ Zentop is a fork of [NeoHtop](https://github.com/Abdenasser/neohtop) 1.3.0, rebu
 
 ## Unreleased
 
+- Unify GUI and TUI DiskTree colors with Zentop theme tokens, shared age bands and contrast-aware tile fills.
 - Add a read-only DiskTree explorer to the GUI and TUI, inspired by tobi/disktree: shared background scanning, nested treemaps, category/age colors, filters, hidden/apparent-size controls, depth, marked review and explicit partial-scan reporting.
 - Bring the GUI layout and 24 palettes to the TUI, with six resource cards, trends, shared search/filter/tree rules, pins, configurable columns, pause/settings and process/resource inspectors.
 - Add Clap-based CLI system/process reports with JSON output and a Ratatui terminal monitor with live CPU/RAM readings, process sorting and scrolling.

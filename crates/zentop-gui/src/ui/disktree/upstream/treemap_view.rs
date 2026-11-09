@@ -151,7 +151,7 @@ impl Colors {
             hover_border: theme.bright.opacity(0.55),
             selected_border: palette::highlight(theme),
             marked_border: theme.danger,
-            marked_label: theme.danger,
+            marked_label: theme.foreground,
             warning: theme.warning,
             hatch: palette::hatch(theme),
             fill: CATEGORIES
@@ -165,7 +165,10 @@ impl Colors {
             age: (0..palette::AGE_BUCKETS.len())
                 .map(|bucket| ladder(&|depth| palette::age_fill(theme, bucket, depth)))
                 .collect(),
-            marked_fill: palette::mix(theme.inset, theme.danger, 0.16),
+            marked_fill: {
+                let [r, g, b] = theme.colors.marked_fill();
+                gpui_kit::rgb((u32::from(r) << 16) | (u32::from(g) << 8) | u32::from(b)).into()
+            },
             inset: theme.inset,
         }
     }

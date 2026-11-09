@@ -13,9 +13,13 @@ Only the required presentation components are included:
   The upstream `Mosaic`/`Label`/view projection records are adapted to Zentop's
   bounded flat-node layout, with narrow gaps between siblings and a canvas
   content mask. Hover and selection listeners remain in Zentop.
-- `palette.rs`: category and age fills, accents, highlight, hatch, label colors,
-  RGB mixing and their seven upstream tests. The unused action-text color helper
-  is excluded. Tests use a local theme fixture.
+- `palette.rs`: retains upstream hatch and RGB-mixing helpers. The category/age
+  fill and accent functions now adapt Zentop's shared semantic palette instead
+  of the upstream fixed hue/HSL formulas. Selection uses Zentop's primary role;
+  labels use the full-contrast foreground. Age boundaries and an explicit unknown
+  band live in `zentop-core::disktree::palette`, shared with the TUI. The original
+  seven fixed-hue tests were replaced with shared boundary tests and regression
+  coverage for tile-label contrast and age rendering across all 24 themes.
 - `widgets.rs`: breadcrumb, eyebrow, figure, size measure, bar, row, chip,
   percentage, meter, key hint, color swatch and hatch swatch components.
 - `scale.rs`: only the spacing, type and size tokens these components use,

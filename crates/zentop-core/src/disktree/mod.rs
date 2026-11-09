@@ -1,5 +1,6 @@
 //! Read-only disk usage scanning and frontend-independent treemap navigation.
 mod layout;
+pub mod palette;
 mod scan;
 pub use layout::{layout, Rect, Tile};
 pub use scan::{scan, Progress, ScanJob, ScanOptions};
@@ -24,19 +25,6 @@ impl Category {
         Self::Cache,
         Self::Other,
     ];
-    pub fn rgb(self) -> [u8; 3] {
-        match self {
-            Self::Code => [112, 151, 224],
-            Self::AgentScratch => [212, 151, 102],
-            Self::Toolchain => [94, 196, 147],
-            Self::Synced => [97, 187, 205],
-            Self::Git => [210, 116, 151],
-            Self::Media => [174, 125, 220],
-            Self::Documents => [161, 170, 190],
-            Self::Cache => [211, 188, 100],
-            Self::Other => [123, 138, 167],
-        }
-    }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Review {
@@ -287,22 +275,6 @@ impl View {
                 self.tree.nodes[*id].allocated
             })
         })
-    }
-    pub fn color(&self, id: usize) -> [u8; 3] {
-        if self.options.metric != Metric::Age {
-            return self.tree.nodes[id].category.rgb();
-        }
-        match self.tree.nodes[id]
-            .modified
-            .and_then(|t| SystemTime::now().duration_since(t).ok())
-            .map(|d| d.as_secs() / 86400)
-        {
-            Some(0..=7) => [94, 196, 147],
-            Some(8..=30) => [97, 187, 205],
-            Some(31..=365) => [174, 125, 220],
-            Some(_) => [212, 151, 102],
-            None => [123, 138, 167],
-        }
     }
     pub fn hatched(&self, id: usize) -> bool {
         let mut ancestor = Some(id);
