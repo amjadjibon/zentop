@@ -48,4 +48,6 @@ Alert-enabled GUI monitoring continues while windows are hidden; pause still sus
 - OS notification delivery depends on permissions/service availability; error fallback is required.
 
 ## Open Questions
-None. Notification API is available in the workspace's existing notify-rust dependency.
+None. macOS uses UserNotifications with explicit authorization and bounded completion
+waits; other platforms use notify-rust. Unbundled macOS executables retain in-app
+alerts and report desktop delivery as unavailable rather than spoofing another app.

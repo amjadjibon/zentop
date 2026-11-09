@@ -22,10 +22,10 @@ Implement the shared design in DESIGN.md and expose both features in GUI and TUI
 ## 2. Implementation Steps
 ### Phase 1: Shared monitoring features
 **Goal**: Deliver both features through one tested core and consistent frontend adapters.
-- [ ] TASK-001: Implement alert engine, notification worker, validated shared storage and saved view model.
-- [ ] TASK-002: Add GUI alert settings/history and toolbar view management.
-- [ ] TASK-003: Add TUI alert and saved-view sheets with captured name entry.
-- [ ] TASK-004: Test timing, invalid data, persistence and restore behavior; document controls.
+- [x] TASK-001: Implement alert engine, notification worker, validated shared storage and saved view model.
+- [x] TASK-002: Add GUI alert settings/history and toolbar view management.
+- [x] TASK-003: Add TUI alert and saved-view sheets with captured name entry.
+- [x] TASK-004: Test timing, invalid data, persistence and restore behavior; document controls.
 - [ ] TASK-005: Run workspace tests, formatting and Clippy; review and commit.
 
 **Completion criteria**: Both frontends support save/load/delete and alert configuration;
@@ -41,12 +41,19 @@ formatting and Clippy. Commit without Co-authored-by; do not push or open PRs.
 ```
 
 ## 3. Testing
-- [ ] TEST-001: Deterministic alert duration/cooldown/gap/missing-value tests.
-- [ ] TEST-002: Persistence round trips, validation, merged independent saves and failed writes.
-- [ ] TEST-003: TUI save/load/delete/name entry, alerts controls and small-screen rendering.
+- [x] TEST-001: Deterministic alert duration/cooldown/gap/missing-value tests.
+- [x] TEST-002: Persistence round trips, validation, merged independent saves and failed writes.
+- [x] TEST-003: TUI save/load/delete/name entry, alerts controls and small-screen rendering.
 - [ ] TEST-004: GUI compile and native visual check; all workspace checks.
 
 ## 4. Risks & Assumptions
 - RISK-001: OS notification delivery can fail — retain history and show errors.
 - RISK-002: Concurrent frontend writes — file lock, reload and atomic replacement.
 - ASSUMPTION-001: Alert rules are opt-in, with 30s sustain and 5min cooldown defaults.
+
+## Implementation decisions from native QA
+- macOS uses the current UserNotifications API with bounded authorization/submission
+  waits. This replaces legacy bundle-identity overrides that produced an application
+  chooser during QA. Unbundled macOS executables retain in-app alerts/history.
+- `ZENTOP_CONFIG_DIR` supports an isolated QA/portable profile without touching the
+  user's normal settings. No push or PR is part of this local implementation.
