@@ -11,6 +11,8 @@ treemap painter, theme-aware palette, breadcrumbs, selection figures, review
 rows, meters, legend swatches and key-hint widgets. Their source and adaptations
 are listed in the [UI provenance](../crates/zentop-gui/src/ui/disktree/upstream/UPSTREAM.md).
 
+![DiskTree with a generated demo folder, themed header and review sidebar](screenshots/disktree.png)
+
 ## Open it
 
 **GUI:** choose **View → DiskTree…**, press **⌘⇧D / Ctrl+Shift+D**, or open
@@ -33,10 +35,18 @@ In DiskTree, **v** chooses another path; **M** returns to the monitor.
 - **Size:** area represents the measured bytes.
 - **Files:** area represents file counts, including zero-byte files.
 - **Age:** area still represents bytes; color represents the newest write in
-  each subtree. The GUI uses the upstream week/month/six-month/year/older
-  age buckets; the TUI labels its age bands in the legend.
+  each subtree. Both interfaces share the same week/month/six-month/year/older
+  bands and a separate **Unknown** band for missing timestamps. Future writes
+  are treated as recent when the filesystem clock is ahead.
 - Otherwise colors distinguish code, agent scratch, toolchains, synced data,
   git, media, documents, caches and unclassified data.
+- Category accents use the selected Zentop theme's five chart colors, with Git
+  using its destructive role, caches its warning role, and neutral data its
+  muted foreground. Recent age colors begin at the theme's primary color and
+  fade toward muted text for older data. Selection also uses primary; marks use
+  the destructive role. GUI and TUI share the same RGB mapping and depth tinting.
+- Tile fills reduce their tint when needed to keep primary foreground labels
+  at least 4.5:1 against the tile surface, checked across all 24 shipped themes.
 - Diagonal hatching highlights cache/build-output candidates, including their
   descendants. It is a heuristic for review, not a statement that removal is safe.
 - **Hidden files** controls visibility, including whole hidden subtrees. The

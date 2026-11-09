@@ -1,6 +1,8 @@
 # Zentop screenshots
 
-Captured on macOS with the default Catppuccin theme. Readings come from a real machine and are examples, not benchmarks; GPU details and window chrome vary by platform and driver.
+Captured from Zentop v1.3.0 on macOS on November 8, 2026, using the GitHub Light theme and the build at `9c2a8c6`. The DiskTree image was refreshed on November 9 for the shared GUI/TUI theme palette changes. These are native Retina window captures. Monitoring readings come from a real machine and are examples, not benchmarks; GPU details and window chrome vary by platform and driver.
+
+DiskTree scans a generated demo folder containing source, build output, caches, synced files, documents and game data. Its sample files illustrate the interface without exposing personal directories.
 
 ## Main window
 
@@ -22,7 +24,7 @@ Active search terms and filters appear as removable chips, with a clear-all acti
 
 ## Process details
 
-![Process details sheet for Finder](process-details.png)
+![Finder details with CPU, memory, process family, identity and ports](process-details.png)
 
 ## Network details
 
@@ -30,7 +32,9 @@ Active search terms and filters appear as removable chips, with a clear-all acti
 
 ## Theme picker
 
-![The searchable theme picker](theme-picker.png)
+The searchable theme gallery in Settings → Appearance.
+
+![Appearance settings with the searchable theme gallery](theme-picker.png)
 
 ## Menu-bar overview
 
@@ -40,8 +44,16 @@ Active search terms and filters appear as removable chips, with a clear-all acti
 
 ![General settings](settings.png)
 
+## DiskTree
+
+The themed top bar, nested treemap, review-candidate hatching, selection details and disk capacity.
+
+![DiskTree scanning a generated demo folder](disktree.png)
+
 ## About
 
-![About Zentop](about.png)
+Includes the DiskTree components’ MIT license link.
+
+![About Zentop with version and DiskTree license attribution](about.png)
 
 See the [user guide](../usage.md) for workflows, shortcuts and platform notes.

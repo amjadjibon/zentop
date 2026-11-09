@@ -11,7 +11,7 @@
   <p><a href="docs/install.md"><strong>Install</strong></a> · <a href="docs/usage.md">User guide</a> · <a href="docs/screenshots/README.md">Screenshots</a> · <a href="CHANGELOG.md">Changelog</a></p>
 </div>
 
-<img src="docs/screenshots/zentop-desktop.png" alt="Zentop in Catppuccin on macOS: CPU, memory, GPU, storage, system and network cards above the process list" width="1280" />
+<img src="docs/screenshots/zentop-desktop.png" alt="Zentop in GitHub Light on macOS: CPU, memory, GPU, storage, system and network cards above the process list" width="1280" />
 
 ## What it does
 
@@ -26,12 +26,15 @@
 
 <table>
   <tr>
-    <td width="50%"><img src="docs/screenshots/process-details.png" alt="Process details for Finder: CPU and memory, process information, parent, command and children" /><br /><strong>Inspect any process.</strong><br /><sub>Resources, identity, parent and child processes, command line and environment, plus a confirmed end-process action.</sub></td>
+    <td width="50%"><img src="docs/screenshots/process-details.png" alt="Process details for Finder: CPU, memory, process family, process information and ports" /><br /><strong>Inspect any process.</strong><br /><sub>Resources, identity, parent and child processes, command line and environment, plus a confirmed end-process action.</sub></td>
     <td width="50%"><img src="docs/screenshots/chart-inspection.png" alt="Resource cards with hover tooltips showing the time and value of a sample" /><br /><strong>Read the history.</strong><br /><sub>Hover a chart, or focus it and use the arrow keys, to read any sample from the last two minutes.</sub></td>
   </tr>
   <tr>
     <td width="50%"><img src="docs/screenshots/filters.png" alt="Search and filters shown as removable chips above the process list" /><br /><strong>Narrow it down.</strong><br /><sub>Search terms and filters appear as chips you can remove one at a time, or clear together.</sub></td>
     <td width="50%"><img src="docs/screenshots/menubar-overview.png" alt="The menu-bar overview with CPU, memory and GPU, network, storage and the busiest processes" width="300" /><br /><strong>Check without switching.</strong><br /><sub>The menu-bar overview shares its readings, pause state and theme with the main window.</sub></td>
+  </tr>
+  <tr>
+    <td colspan="2"><img src="docs/screenshots/disktree.png" alt="DiskTree in GitHub Light showing its window header, nested demo treemap, selection and review candidates" width="1280" /><br /><strong>See what fills your disk.</strong><br /><sub>Explore nested folders, identify build and cache candidates, and mark paths for read-only review.</sub></td>
   </tr>
 </table>
 
