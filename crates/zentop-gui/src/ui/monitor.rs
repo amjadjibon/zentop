@@ -8,6 +8,10 @@ use gpui_kit::{App, AppContext, Context, Entity, Global, Task};
 use serde_json::{json, Value};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
+use zentop_core::{
+    alerts::{Center, DesktopNotifications, Settings as AlertSettings},
+    monitoring_preferences::{SavedView, Store},
+};
 
 /// How often the loop checks whether a capture is due; captures stay interval-gated.
 const TICK: Duration = Duration::from_millis(250);
@@ -15,6 +19,11 @@ const TICK: Duration = Duration::from_millis(250);
 pub const REFRESH_RATES: [u64; 5] = [2000, 3000, 5000, 10000, 30000];
 
 pub struct Monitor {
+    pub features: Store,
+    pub feature_error: Option<String>,
+    pub alerts: Center,
+    pub notification_error: Option<String>,
+    notifications: DesktopNotifications,
     state: Arc<AppState>,
     prefs: Preferences,
     pub prefs_error: Option<String>,
@@ -68,7 +77,7 @@ impl Monitor {
                         .update(cx, |_, window, _| window.is_visible())
                         .unwrap_or(false)
                 });
-                if visible {
+                if visible || this.features.config.alerts.enabled() {
                     this.poll_job()
                 } else {
                     None
@@ -87,7 +96,13 @@ impl Monitor {
             }
             cx.background_executor().timer(TICK).await;
         });
+        let (features, feature_error) = Store::open();
         Self {
+            features,
+            feature_error,
+            alerts: Center::default(),
+            notification_error: None,
+            notifications: DesktopNotifications::default(),
             state,
             prefs,
             prefs_error,
@@ -104,6 +119,23 @@ impl Monitor {
         }
     }
 
+    pub fn reload_features(&mut self, cx: &mut Context<Self>) {
+        self.feature_error = self.features.reload().err();
+        cx.notify();
+    }
+    pub fn set_alerts(&mut self, settings: AlertSettings, cx: &mut Context<Self>) {
+        self.feature_error = self.features.set_alerts(settings).err();
+        self.alerts.suspend();
+        cx.notify();
+    }
+    pub fn save_view(&mut self, view: SavedView, cx: &mut Context<Self>) {
+        self.feature_error = self.features.save_view(view).err();
+        cx.notify();
+    }
+    pub fn delete_view(&mut self, name: &str, cx: &mut Context<Self>) {
+        self.feature_error = self.features.delete_view(name).err();
+        cx.notify();
+    }
     pub fn state(&self) -> Arc<AppState> {
         self.state.clone()
     }
@@ -146,6 +178,7 @@ impl Monitor {
         if let Ok(mut hub) = self.state.hub.lock() {
             hub.pause(paused);
         }
+        self.alerts.suspend();
         self.paused = paused;
         self.refresh_now();
         cx.notify();
@@ -183,15 +216,42 @@ impl Monitor {
 
     fn apply(&mut self, result: Result<Snapshot, String>, cx: &mut Context<Self>) {
         self.sampling = false;
+        if let Some(result) = self.notifications.poll_result() {
+            self.notification_error = result.err();
+        }
         match result {
-            Ok(snapshot) => {
+            Ok(snapshot) if snapshot.paused == self.paused => {
+                let settings = &self.features.config.alerts;
+                let events = self.alerts.observe(
+                    &snapshot.frame,
+                    !snapshot.paused && snapshot.error.is_none(),
+                    Duration::from_millis(self.refresh_rate()),
+                    settings,
+                    Instant::now(),
+                );
+                if settings.desktop_notifications {
+                    for event in events {
+                        if let Err(error) = self.notifications.send(event.message) {
+                            self.notification_error = Some(error);
+                        }
+                    }
+                }
                 self.paused = snapshot.paused;
                 self.error = snapshot.error;
                 self.port_error = snapshot.port_error;
                 self.history = snapshot.history;
                 self.frame = Some(snapshot.frame);
             }
-            Err(error) => self.error = Some(error),
+            Ok(_) => {
+                // A capture queued before pause/resume must not advance alerts
+                // or restore the previous pause state.
+                self.alerts.suspend();
+                self.refresh_now();
+            }
+            Err(error) => {
+                self.alerts.suspend();
+                self.error = Some(error);
+            }
         }
         cx.notify();
     }

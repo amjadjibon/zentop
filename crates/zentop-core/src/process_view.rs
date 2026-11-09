@@ -1,6 +1,7 @@
 //! Searching, filtering, sorting and grouping processes for the table.
 //! Pure functions so the rules can be tested without a window.
 use crate::monitoring::ProcessInfo;
+use serde::{Deserialize, Serialize};
 use std::cmp::Ordering;
 use std::collections::{HashMap, HashSet};
 
@@ -10,7 +11,8 @@ pub fn identity(process: &ProcessInfo) -> Identity {
     (process.pid, process.start_time)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Column {
     Name,
     Pid,
@@ -188,7 +190,8 @@ pub fn format_timestamp(seconds: u64) -> String {
         .unwrap_or_else(|| "—".into())
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Operator {
     Gt,
     Lt,
@@ -219,7 +222,7 @@ impl Operator {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Rule {
     pub enabled: bool,
     pub operator: Operator,
@@ -270,7 +273,7 @@ impl RuleKind {
 
 pub const STATUSES: [&str; 5] = ["Running", "Sleeping", "Idle", "Stopped", "Zombie"];
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Filters {
     pub cpu: Rule,
     pub gpu: Rule,
@@ -419,7 +422,7 @@ pub fn matches(p: &ProcessInfo, query: &Query, filters: &Filters) -> bool {
     query.matches(p)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Sort {
     pub column: Column,
     pub ascending: bool,

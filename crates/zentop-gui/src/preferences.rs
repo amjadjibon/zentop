@@ -81,7 +81,7 @@ fn load(path: &Path) -> Result<Value, String> {
     Ok(config)
 }
 fn config_dir() -> Option<PathBuf> {
-    dirs::config_dir().map(|dir| dir.join("com.zentop.app"))
+    zentop_core::monitoring_preferences::config_directory()
 }
 
 /// The persisted preferences file and its validated contents.

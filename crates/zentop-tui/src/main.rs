@@ -1,6 +1,7 @@
 //! Interactive terminal frontend backed by the shared monitoring crate.
 mod app;
 mod disktree;
+mod monitoring_features;
 mod sampler;
 mod theme;
 mod ui;
@@ -57,6 +58,7 @@ fn run(args: Args) -> io::Result<()> {
         ));
     }
     let mut app = app::App::new(args.interval, &args.theme)?;
+    app.load_features();
     if let Some(path) = args.disk {
         app.disk.open(path);
     }

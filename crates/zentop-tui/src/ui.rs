@@ -166,9 +166,22 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
             if app.searching {
                 "Type a name, command, PID, regex or :port · Enter apply · Esc clear".into()
             } else {
-                "↑↓ scroll  Enter inspect  Space pin  p pause  1–6 resources  d DiskTree  ? help  q quit".into()
+                "↑↓ scroll  Enter inspect  Space pin  p pause  1–6 resources  d DiskTree  a alerts  b views  ? help  q quit".into()
             }
         });
+    let hint = app
+        .feature_error
+        .as_ref()
+        .or(app.notification_error.as_ref())
+        .map(|e| plain(e))
+        .or_else(|| {
+            app.alerts
+                .history
+                .front()
+                .filter(|e| zentop_core::sampling::now_ms().saturating_sub(e.timestamp) < 60000)
+                .map(|e| format!("Alert: {}  · a history", plain(&e.message)))
+        })
+        .unwrap_or(hint);
     frame.render_widget(
         Paragraph::new(hint).style(Style::default().fg(theme.muted_foreground)),
         footer,
@@ -577,8 +590,10 @@ fn panel_view(app: &mut App, frame: &mut Frame, panel: Panel, theme: &Theme) {
         .iter()
         .enumerate()
         .map(|(i, text)| {
-            let selected =
-                matches!(panel, Panel::Filters | Panel::Columns) && i == app.panel_index + 2;
+            let selected = matches!(
+                panel,
+                Panel::Filters | Panel::Columns | Panel::Alerts | Panel::Views
+            ) && i == app.panel_index + 2;
             Line::from(Span::styled(
                 plain(text),
                 Style::default()
@@ -591,14 +606,32 @@ fn panel_view(app: &mut App, frame: &mut Frame, panel: Panel, theme: &Theme) {
             ))
         })
         .collect();
+    let selectable = matches!(
+        panel,
+        Panel::Filters | Panel::Columns | Panel::Alerts | Panel::Views
+    );
+    let selected_bottom = if selectable {
+        Paragraph::new(
+            text.iter()
+                .take(app.panel_index + 3)
+                .cloned()
+                .collect::<Vec<_>>(),
+        )
+        .wrap(Wrap { trim: false })
+        .line_count(inner.width)
+    } else {
+        0
+    };
     let paragraph = Paragraph::new(text).wrap(Wrap { trim: false });
     let max_scroll = paragraph
         .line_count(inner.width)
         .saturating_sub(inner.height as usize)
         .min(u16::MAX as usize) as u16;
-    let scroll = if matches!(panel, Panel::Filters | Panel::Columns) {
-        (app.panel_index as u16 + 3)
-            .saturating_sub(inner.height)
+    let scroll = if selectable {
+        (selected_bottom
+            .saturating_sub(inner.height as usize)
+            .min(u16::MAX as usize) as u16)
+            .max(app.detail_scroll)
             .min(max_scroll)
     } else {
         app.detail_scroll = app.detail_scroll.min(max_scroll);
@@ -609,6 +642,32 @@ fn panel_view(app: &mut App, frame: &mut Frame, panel: Panel, theme: &Theme) {
 
 fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
     match panel {
+        Panel::Views => {
+            let mut lines = vec![app.view_name.as_ref().map_or_else(|| "↑↓ select · Enter load · n new · u update selected · d delete".into(), |name| format!("Name: {}▏ · Enter save · Esc cancel", plain(name))), "".into()];
+            if app.features.config.views.is_empty() { lines.push("No saved views. Press n to save the current view.".into()); }
+            lines.extend(app.features.config.views.iter().map(|v| format!("{} · {} · {} columns · {} pins", v.name, if v.tree {"Tree"} else {"List"}, v.columns.len(), v.pinned.len())));
+            lines.push("".into()); lines.push("Views include search, filters, sort, columns, List/Tree and pinned commands.".into());
+            lines.push("Shared with the GUI. Saving an existing name replaces it.".into());
+            if let Some(error) = &app.feature_error { lines.push(error.clone()); }
+            ("Saved monitoring views".into(), lines)
+        }
+        Panel::Alerts => {
+            use zentop_core::alerts::Kind;
+            let settings = &app.features.config.alerts;
+            let mut lines = vec!["↑↓ select · Space toggle · ←→ adjust · PgUp/Dn history · x clear history".into(), "".into()];
+            lines.extend(Kind::ALL.into_iter().map(|kind| { let rule = settings.rule(kind); format!("[{}] {} {} {}%", if rule.enabled {"✓"} else {" "}, kind.label(), if kind == Kind::DiskFree {"≤"} else {"≥"}, rule.threshold) }));
+            lines.push(format!("Sustained for: {}s", settings.sustain_secs));
+            lines.push(format!("Repeat cooldown: {}s", settings.cooldown_secs));
+            lines.push(format!("[{}] Also send desktop notifications", if settings.desktop_notifications {"✓"} else {" "}));
+            lines.push("".into()); lines.push("Pause suspends alerts. Disk uses the least-free writable volume.".into());
+            lines.push("Desktop delivery depends on OS notification permissions.".into());
+            lines.push("".into()); lines.push("Recent alerts (this session):".into());
+            if app.alerts.history.is_empty() { lines.push("No alerts yet.".into()); }
+            lines.extend(app.alerts.history.iter().map(|a| format!("{}  {}", view::format_timestamp(a.timestamp/1000), a.message)));
+            if let Some(error) = &app.feature_error { lines.push(error.clone()); }
+            if let Some(error) = &app.notification_error { lines.push(error.clone()); }
+            ("Resource alerts".into(), lines)
+        }
         Panel::Help => (
             "Keyboard shortcuts".into(),
             vec![
@@ -625,6 +684,8 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
                 "r              Reverse sort direction",
                 "f              Filters: enable rules, adjust thresholds and status",
                 "v              Choose table columns",
+                "a              Resource alert rules and history",
+                "b              Saved monitoring views",
                 "p              Pause/resume sampling",
                 "d              Open DiskTree for the current directory",
                 ",              Settings: refresh interval",
@@ -635,7 +696,7 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
                 "",
                 "Tree totals include all descendants, even hidden matches. Shared RAM may overlap.",
                 "CPU can exceed 100% across cores. Missing readings remain unavailable.",
-                "Pins, columns, interval and theme choices last for this terminal session.",
+                "Save pins, columns, search and filters with b. Interval and theme last this session.",
             ]
             .into_iter()
             .map(str::to_owned)

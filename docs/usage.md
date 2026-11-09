@@ -12,6 +12,56 @@ Choose **List** for individual processes or **Tree** for families. Tree search r
 
 Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. The details sheet lists the ports a process listens on (TCP) or has bound (UDP), and whether each accepts connections from other machines or only from this computer; ports are checked when the sheet opens. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
 
+## Saved monitoring views
+
+Set up the process list, then open **Views** in the process toolbar. Enter a name
+and choose **Save current view**. Each saved view restores search, filter rules,
+sorting, visible columns, List/Tree mode and pinned commands. Click its name to
+load it; use **Update view** to replace it with the current setup or **Delete**
+to remove it. Saving the same name replaces it without creating a duplicate;
+names are case-insensitive. Up to 32 views can be saved.
+
+The GUI and TUI share saved views. They contain your search text and pinned
+command lines, so treat the settings file as private. They do not contain
+collected process samples, environment values or saved process IDs. Expansion,
+selection, theme and sampling interval remain separate from a named view.
+
+## Resource alerts
+
+Open **Settings → Alerts** to enable CPU usage, memory usage, or disk free space
+rules. CPU is the average across logical cores; memory is used physical RAM as
+a percentage of total. Disk alerts use the lowest free-space percentage among
+writable mounted volumes, rather than adding overlapping volumes together.
+
+Choose a threshold, a sustained duration, and a repeat cooldown. Defaults are
+90% CPU, 90% used memory and 10% free disk space, held for 30 seconds with a
+five-minute cooldown. All rules and desktop delivery start **off**. Persistent
+breaches can repeat only after the cooldown. Detection follows the sampling
+interval, so short durations may take longer than the selected duration to fire.
+Warm-up CPU readings are ignored. Pauses, errors, missing readings, changes of
+volume, and long sampling gaps restart the waiting period.
+
+Alerts appear briefly in the main window and in **Recent alerts**, which keeps
+the last 50 events in memory for this session. **Also send desktop notifications**
+enables OS delivery; permissions, Focus/Do Not Disturb and desktop services may
+affect it. Delivery errors are shown in the alert sheet without losing history.
+On macOS, desktop delivery requires running the packaged Zentop app bundle;
+unbundled `cargo run` and standalone TUI sessions use in-app alerts/history.
+The packaged app requests notification permission when the first desktop alert
+is sent. Focus settings can suppress banners even after the OS accepts an alert.
+Each running frontend maintains its own recent history and cooldowns.
+
+Enabled rules keep sampling while windows are hidden. **Pause** suspends alerts.
+To continue after closing the main window, also enable **Keep running when the
+window closes**; **Quit** always stops monitoring. Alerts and views are local;
+there is no background service after Zentop exits.
+
+Both frontends use `monitoring.json` beside `settings.json` in Zentop's OS
+configuration directory. Opening the Views or Alerts sheet reloads shared data.
+Failed saves and invalid files are reported and leave saved data untouched.
+For an isolated or portable profile, set `ZENTOP_CONFIG_DIR` to a separate folder
+before launching either frontend.
+
 ## Explore resources
 
 Use each card’s arrow to open a detailed sheet. CPU, memory, GPU and network histories cover roughly two minutes in memory. They are cleared on restart and are not long-term monitoring storage. Gaps indicate paused, missing or delayed readings.
@@ -27,7 +77,7 @@ GPU support is driver dependent: macOS IORegistry statistics; Linux AMD sysfs an
 
 ## Menu-bar companion
 
-Open the Zentop ring icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no Zentop window is open.
+Open the Zentop ring icon in the menu bar/system tray or **View → Menu-bar Overview** for CPU, RAM, GPU, network, free storage and the five busiest processes. Select a process to open its inspector in the main app. The companion and main window share a sample, interval, theme and pause state. Sampling pauses while no Zentop window can show readings, unless a resource alert rule is enabled. Enabled alerts keep sampling while the app is running and windows are hidden.
 
 Linux tray behavior varies with the desktop; use **Show overview** in the tray menu or **View → Menu-bar Overview** if clicking the icon does not open it.
 
@@ -63,6 +113,11 @@ readings. Press **1–6** for resource details.
   or an open process sheet; paused port lookups ask you to resume.
 - **c / m**: sort by CPU/RAM. **[ / ]** chooses a sort column; **r** reverses it.
   **v** chooses columns; narrow terminals hide columns that do not fit.
+- **a**: alert rules and recent history. Up/down selects; Space toggles; left/right
+  adjusts thresholds or timing; PageUp/PageDown scrolls history; **x** clears it.
+- **b**: saved views. **n** creates a named view; Enter saves a typed name or loads
+  the selected view; **u** replaces the selected view with the current setup;
+  **d** deletes it. Esc cancels name entry.
 - **p**: pause/resume sampling. **,** opens interval settings. **T** cycles all
   24 GUI palettes. **?** lists shortcuts.
 - **Up/down** or **j/k**: scroll. **q** or **Ctrl+C** quits; in a sheet, **q** or
@@ -70,8 +125,9 @@ readings. Press **1–6** for resource details.
 
 `cargo run -p zentop-tui -- --interval 5000 --theme dracula` starts with a
 five-second interval and the Dracula palette. Intervals range from 1500 to
-30000 milliseconds. TUI pins, filters, columns, interval and theme choices last
-for that terminal session; they do not change GUI preferences. Process
+30000 milliseconds. TUI changes last for that terminal session unless saved as a named view. Saved
+views and alert rules are shared with the GUI; interval and theme remain local
+to the terminal session. Process
 termination and clipboard buttons remain GUI features. The TUI needs an
 interactive terminal; use the CLI for redirected output. Both apps support
 `--help` and `--version`.

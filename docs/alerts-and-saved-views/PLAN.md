@@ -44,7 +44,7 @@ formatting and Clippy. Commit without Co-authored-by; do not push or open PRs.
 - [x] TEST-001: Deterministic alert duration/cooldown/gap/missing-value tests.
 - [x] TEST-002: Persistence round trips, validation, merged independent saves and failed writes.
 - [x] TEST-003: TUI save/load/delete/name entry, alerts controls and small-screen rendering.
-- [ ] TEST-004: GUI compile and native visual check; all workspace checks.
+- [x] TEST-004: GUI compile and native visual check; all workspace checks.
 
 ## 4. Risks & Assumptions
 - RISK-001: OS notification delivery can fail — retain history and show errors.

@@ -15,7 +15,7 @@ use gpui_kit::component::{h_flex, v_flex, ActiveTheme, Disableable, Icon, Sizabl
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, px, AppContext, Context, Entity, Focusable, FontWeight, InteractiveElement, IntoElement,
-    ParentElement, Render, SharedString, Styled, Subscription, Window,
+    ParentElement, Render, SharedString, StatefulInteractiveElement, Styled, Subscription, Window,
 };
 use serde_json::json;
 
@@ -26,6 +26,7 @@ pub struct Zentop {
     filters: Filters,
     last_sequence: Option<u64>,
     search: Entity<InputState>,
+    view_name: Entity<InputState>,
     thresholds: [Entity<InputState>; 4],
     pub(super) list: ProcessList,
     _subscriptions: Vec<Subscription>,
@@ -51,6 +52,7 @@ impl Zentop {
                 .placeholder("Search processes…")
                 .clean_on_escape()
         });
+        let view_name = cx.new(|cx| InputState::new(window, cx).placeholder("Name this view…"));
         let defaults = Filters::default();
         let thresholds = RuleKind::ALL.map(|kind| {
             let value = defaults.rule(kind).value.to_string();
@@ -67,6 +69,7 @@ impl Zentop {
                 }
             }),
         ];
+        subscriptions.push(cx.subscribe(&view_name, |_, _, _: &InputEvent, cx| cx.notify()));
         for (kind, input) in RuleKind::ALL.into_iter().zip(thresholds.iter()) {
             subscriptions.push(cx.subscribe_in(
                 input,
@@ -90,6 +93,7 @@ impl Zentop {
             filters,
             last_sequence: None,
             search,
+            view_name,
             thresholds,
             list,
             _subscriptions: subscriptions,
@@ -122,7 +126,9 @@ impl Zentop {
         if let Some(frame) = &new_frame {
             self.last_sequence = Some(frame.sequence);
         }
-        if self.list.columns() != columns.as_slice() {
+        if self.list.columns().len() != columns.len()
+            || columns.iter().any(|c| !self.list.columns().contains(c))
+        {
             self.list.set_columns(columns);
         }
         if self.list.per_page != per_page {
@@ -462,6 +468,74 @@ impl Zentop {
             })
     }
 
+    fn restore_saved_view(
+        &mut self,
+        view: zentop_core::monitoring_preferences::SavedView,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let visibility: serde_json::Map<String, serde_json::Value> = Column::ALL
+            .into_iter()
+            .map(|c| (c.key().into(), json!(view.columns.contains(&c))))
+            .collect();
+        let saved = self.monitor.update(cx, |m, cx| {
+            m.save(json!({"appearance": {"columnVisibility": visibility}, "behavior": {"processView": if view.tree {"tree"} else {"flat"}}}), cx);
+            m.prefs_error.is_none()
+        });
+        if !saved {
+            return;
+        }
+        self.search_text = view.search.clone();
+        self.filters = view.filters.clone();
+        self.search.update(cx, |input, cx| {
+            input.set_value(view.search.clone(), window, cx)
+        });
+        self.view_name.update(cx, |input, cx| {
+            input.set_value(view.name.clone(), window, cx)
+        });
+        for (kind, input) in RuleKind::ALL.into_iter().zip(&self.thresholds) {
+            input.update(cx, |input, cx| {
+                input.set_value(view.filters.rule(kind).value.to_string(), window, cx)
+            });
+        }
+        self.list.restore_view(&view);
+        self.update_demand(cx);
+        self.list.load_icons(cx);
+        self.fit_columns(window, cx);
+    }
+
+    fn render_saved_views(&self, cx: &mut Context<Self>) -> impl IntoElement {
+        let entity = cx.entity();
+        let reload = self.monitor.clone();
+        Popover::new("saved-views")
+            .trigger(Button::new("saved-views-button").outline().label("Views").tooltip("Save or restore monitoring views"))
+            .on_open_change(move |open, _, cx| { if *open { reload.update(cx, |m,cx| m.reload_features(cx)); } })
+            .content(move |_, _, cx| {
+                let this = entity.read(cx);
+                let name = this.view_name.read(cx).value().to_string();
+                let views = this.monitor.read(cx).features.config.views.clone();
+                let name_input = this.view_name.clone();
+                let save = entity.clone();
+                let mut list = v_flex().id("saved-views-list").max_h(px(300.)).overflow_y_scroll().gap_2();
+                if views.is_empty() { list = list.child(div().text_sm().text_color(cx.theme().muted_foreground).child("No saved views yet.")); }
+                for (i, view) in views.into_iter().enumerate() {
+                    let load = entity.clone(); let delete = entity.clone(); let delete_name = view.name.clone(); let label = view.name.clone();
+                    list = list.child(h_flex().gap_2()
+                        .child(Button::new(("load-view", i)).ghost().label(label).on_click(move |_,window,cx| { load.update(cx, |this,cx| this.restore_saved_view(view.clone(),window,cx)); }))
+                        .child(div().flex_1())
+                        .child(Button::new(("delete-view", i)).small().ghost().label("Delete").on_click(move |_,_,cx| { delete.read(cx).monitor.clone().update(cx, |m,cx| m.delete_view(&delete_name,cx)); })));
+                }
+                v_flex().w(px(380.)).gap_3()
+                    .child(div().text_sm().font_weight(FontWeight::MEDIUM).child("Saved monitoring views"))
+                    .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Search, filters, sort, columns, List/Tree and pins. Shared with the TUI."))
+                    .child(Input::new(&name_input).cleanable(true))
+                    .child(Button::new("save-view").outline().label(if this.monitor.read(cx).features.config.views.iter().any(|v| v.name.to_lowercase() == name.trim().to_lowercase()) { "Update view" } else { "Save current view" }).disabled(name.trim().is_empty()).on_click(move |_,_,cx| {
+                        save.update(cx, |this,cx| { let name = this.view_name.read(cx).value().to_string(); let view = this.list.saved_view(name); this.monitor.update(cx, |m,cx| m.save_view(view,cx)); });
+                    }))
+                    .child(list)
+            })
+    }
+
     fn render_toolbar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let delegate = &self.list;
         let tree = delegate.tree;
@@ -584,6 +658,7 @@ impl Zentop {
                     }),
             )
             .child(self.render_filters(cx))
+            .child(self.render_saved_views(cx))
             .when(tree && expanded && !searching, |this| {
                 this.child(
                     Button::new("collapse")
@@ -831,7 +906,14 @@ impl Render for Zentop {
             .error
             .clone()
             .or_else(|| monitor.port_error.clone())
-            .or_else(|| monitor.prefs_error.clone());
+            .or_else(|| monitor.prefs_error.clone())
+            .or_else(|| monitor.feature_error.clone());
+        let recent_alert = monitor
+            .alerts
+            .history
+            .front()
+            .filter(|a| sampling::now_ms().saturating_sub(a.timestamp) < 60000)
+            .map(|a| format!("Recent resource alert · {}", a.message));
         let frame = monitor.frame.clone();
         let history = monitor.history.clone();
         let unavailable = monitor.error.is_some();
@@ -856,6 +938,19 @@ impl Render for Zentop {
                 ))
             })
             .child(self.render_toolbar(cx))
+            .when_some(recent_alert, |this, message| {
+                this.child(
+                    div()
+                        .mx_4()
+                        .my_1()
+                        .px_3()
+                        .py_2()
+                        .rounded(cx.theme().radius)
+                        .bg(cx.theme().secondary)
+                        .text_sm()
+                        .child(message),
+                )
+            })
             .when_some(alert, |this, alert: String| {
                 this.child(
                     div()

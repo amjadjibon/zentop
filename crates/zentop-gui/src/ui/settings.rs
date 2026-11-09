@@ -3,7 +3,7 @@
 use super::monitor::{self, Monitor, REFRESH_RATES};
 use super::theme;
 use gpui_kit::assets::IconName;
-use gpui_kit::component::button::Button;
+use gpui_kit::component::button::{Button, ButtonVariant, ButtonVariants};
 use gpui_kit::component::checkbox::Checkbox;
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::menu::{DropdownMenu, PopupMenuItem};
@@ -70,20 +70,23 @@ pub(super) const THEME_GROUPS: &[(&str, &[&str])] = &[
 enum Pane {
     General,
     Appearance,
+    Alerts,
 }
 
 impl Pane {
-    const ALL: [Pane; 2] = [Pane::General, Pane::Appearance];
+    const ALL: [Pane; 3] = [Pane::General, Pane::Appearance, Pane::Alerts];
     fn label(self) -> &'static str {
         match self {
             Pane::General => "General",
             Pane::Appearance => "Appearance",
+            Pane::Alerts => "Alerts",
         }
     }
     fn icon(self) -> IconName {
         match self {
             Pane::General => IconName::Settings,
             Pane::Appearance => IconName::Palette,
+            Pane::Alerts => IconName::SlidersHorizontal,
         }
     }
 }
@@ -144,6 +147,188 @@ fn row(
                 ),
         )
         .child(control)
+}
+
+fn alerts(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
+    use zentop_core::alerts::Kind;
+    let m = monitor.read(cx);
+    let settings = m.features.config.alerts.clone();
+    let mut content = v_flex().gap_3();
+    for (i, kind) in Kind::ALL.into_iter().enumerate() {
+        let rule = settings.rule(kind);
+        let toggle = monitor.clone();
+        let threshold = monitor.clone();
+        let options: &[u8] = if kind == Kind::DiskFree {
+            &[1, 2, 5, 10, 15, 20, 25, 30]
+        } else {
+            &[50, 60, 70, 75, 80, 85, 90, 95, 99]
+        };
+        let selected = rule.threshold;
+        content = content.child(
+            h_flex()
+                .py_3()
+                .gap_3()
+                .border_b_1()
+                .border_color(cx.theme().border)
+                .child(
+                    Checkbox::new(("alert-enabled", i))
+                        .checked(rule.enabled)
+                        .label(kind.label())
+                        .on_click(move |enabled, _, cx| {
+                            toggle.update(cx, |m, cx| {
+                                let mut settings = m.features.config.alerts.clone();
+                                settings.rule_mut(kind).enabled = *enabled;
+                                m.set_alerts(settings, cx);
+                            });
+                        }),
+                )
+                .child(div().flex_1())
+                .child(
+                    Button::new(("alert-threshold", i))
+                        .outline()
+                        .label(format!(
+                            "{} {selected}%",
+                            if kind == Kind::DiskFree {
+                                "At or below"
+                            } else {
+                                "At or above"
+                            }
+                        ))
+                        .dropdown_caret(true)
+                        .dropdown_menu(move |mut menu, _, _| {
+                            for value in options {
+                                let monitor = threshold.clone();
+                                let value = *value;
+                                menu = menu.item(
+                                    PopupMenuItem::new(format!("{value}%"))
+                                        .checked(value == selected)
+                                        .on_click(move |_, _, cx| {
+                                            monitor.update(cx, |m, cx| {
+                                                let mut settings = m.features.config.alerts.clone();
+                                                settings.rule_mut(kind).threshold = value;
+                                                m.set_alerts(settings, cx);
+                                            });
+                                        }),
+                                );
+                            }
+                            menu
+                        }),
+                ),
+        );
+    }
+    for (i, (title, selected, options)) in [
+        (
+            "Sustained for",
+            settings.sustain_secs,
+            vec![5, 10, 15, 30, 60, 120, 300],
+        ),
+        (
+            "Repeat cooldown",
+            settings.cooldown_secs,
+            vec![30, 60, 120, 300, 600, 1800, 3600],
+        ),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let timing = monitor.clone();
+        content = content.child(row(
+            title,
+            if i == 0 {
+                "Ignore shorter spikes."
+            } else {
+                "Minimum time between notifications for the same resource."
+            },
+            Button::new(("alert-timing", i))
+                .outline()
+                .label(format!("{selected}s"))
+                .dropdown_caret(true)
+                .dropdown_menu(move |mut menu, _, _| {
+                    for value in &options {
+                        let monitor = timing.clone();
+                        let value = *value;
+                        menu = menu.item(
+                            PopupMenuItem::new(format!("{value}s"))
+                                .checked(value == selected)
+                                .on_click(move |_, _, cx| {
+                                    monitor.update(cx, |m, cx| {
+                                        let mut settings = m.features.config.alerts.clone();
+                                        if i == 0 {
+                                            settings.sustain_secs = value;
+                                        } else {
+                                            settings.cooldown_secs = value;
+                                        }
+                                        m.set_alerts(settings, cx);
+                                    })
+                                }),
+                        );
+                    }
+                    menu
+                }),
+            cx,
+        ));
+    }
+    let notifications = monitor.clone();
+    content = content.child(Checkbox::new("alert-notifications").checked(settings.desktop_notifications).label("Also send desktop notifications").on_click(move |enabled,_,cx| notifications.update(cx, |m,cx| { let mut settings = m.features.config.alerts.clone(); settings.desktop_notifications = *enabled; m.set_alerts(settings,cx); })))
+        .child(div().text_xs().text_color(cx.theme().muted_foreground).child("Opt-in rules keep sampling while windows are hidden. Pause suspends alerts. Disk alerts use the least-free writable volume. Desktop delivery depends on OS permissions."));
+    if let Some(error) = &m.notification_error {
+        content = content.child(
+            div()
+                .text_sm()
+                .text_color(theme::palette(cx).danger)
+                .child(error.clone()),
+        );
+    }
+    let clear = monitor.clone();
+    content = content.child(
+        h_flex()
+            .mt_3()
+            .justify_between()
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::MEDIUM)
+                    .child("Recent alerts"),
+            )
+            .child(
+                Button::new("clear-alerts")
+                    .small()
+                    .ghost()
+                    .label("Clear history")
+                    .disabled(m.alerts.history.is_empty())
+                    .on_click(move |_, _, cx| {
+                        clear.update(cx, |m, cx| {
+                            m.alerts.history.clear();
+                            cx.notify();
+                        })
+                    }),
+            ),
+    );
+    if m.alerts.history.is_empty() {
+        content = content.child(
+            div()
+                .text_sm()
+                .text_color(cx.theme().muted_foreground)
+                .child("No alerts this session."),
+        );
+    }
+    for event in &m.alerts.history {
+        content = content.child(
+            v_flex()
+                .py_2()
+                .gap_1()
+                .child(div().text_sm().child(event.message.clone()))
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(super::process_view::format_timestamp(
+                            event.timestamp / 1000,
+                        )),
+                ),
+        );
+    }
+    content.into_any_element()
 }
 
 fn general(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
@@ -342,9 +527,15 @@ fn appearance(
 
 impl Render for Settings {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let error = self.monitor.read(cx).prefs_error.clone();
+        let error = self
+            .monitor
+            .read(cx)
+            .prefs_error
+            .clone()
+            .or_else(|| self.monitor.read(cx).feature_error.clone());
         let content = match self.pane {
             Pane::General => general(&self.monitor, cx),
+            Pane::Alerts => alerts(&self.monitor, cx),
             Pane::Appearance => {
                 let query = self.search.read(cx).value().to_string();
                 let matches = theme::all().any(|(_, label)| matches_theme(label, &query));
@@ -399,26 +590,19 @@ impl Render for Settings {
                             .border_color(cx.theme().border)
                             .children(Pane::ALL.map(|pane| {
                                 let selected = pane == self.pane;
-                                h_flex()
-                                    .id(SharedString::from(pane.label()))
-                                    .gap_2()
-                                    .px_2()
-                                    .py_1p5()
-                                    .rounded(cx.theme().radius)
-                                    .text_sm()
-                                    .cursor_pointer()
-                                    .when(selected, |this| this.bg(cx.theme().secondary))
-                                    .when(!selected, |this| {
-                                        this.hover(|this| this.bg(cx.theme().accent))
+                                Button::new(SharedString::from(pane.label()))
+                                    .with_variant(if selected {
+                                        ButtonVariant::Secondary
+                                    } else {
+                                        ButtonVariant::Ghost
                                     })
-                                    .child(
-                                        Icon::new(pane.icon())
-                                            .small()
-                                            .text_color(cx.theme().muted_foreground),
-                                    )
-                                    .child(pane.label())
+                                    .icon(pane.icon())
+                                    .label(pane.label())
                                     .on_click(cx.listener(move |this, _, _, cx| {
                                         this.pane = pane;
+                                        if pane == Pane::Alerts {
+                                            this.monitor.update(cx, |m, cx| m.reload_features(cx));
+                                        }
                                         cx.notify();
                                     }))
                             })),
@@ -457,6 +641,9 @@ impl Render for Settings {
                                     .text_color(cx.theme().muted_foreground)
                                     .child(match self.pane {
                                         Pane::General => "Choose how Zentop monitors your system.",
+                                        Pane::Alerts => {
+                                            "Get notified about sustained resource pressure."
+                                        }
                                         Pane::Appearance => {
                                             "All your Zentop themes, across every window."
                                         }

@@ -13,7 +13,7 @@ name = "Zentop"
 path = "src/main.rs"
 
 [dependencies]
-zentop-core.workspace = true
+zentop-core = { workspace = true, features = ["notifications"] }
 gpui-kit = "0.9"
 dirs = "6"
 serde_json.workspace = true

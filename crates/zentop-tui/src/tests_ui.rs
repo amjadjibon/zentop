@@ -320,3 +320,104 @@ fn waiting_layout_handles_empty_and_narrow_terminals() {
         render(&mut app, w, h);
     }
 }
+
+#[test]
+fn saved_views_capture_text_keys_restore_settings_and_delete() {
+    let mut app = fixture();
+    let directory = std::env::temp_dir().join(format!("zentop-tui-views-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    app.features =
+        zentop_core::monitoring_preferences::Store::open_at(directory.join("monitoring.json")).0;
+    app.search = "node".into();
+    app.filters.memory.enabled = true;
+    app.sort.column = Column::Memory;
+    app.sort.ascending = true;
+    app.tree = true;
+    app.columns = vec![Column::Name, Column::Memory];
+    app.pinned.insert("/Applications/node".into());
+    let expected = app.capture_view("qTpb".into());
+    key(&mut app, KeyCode::Char('b'));
+    assert_eq!(app.panel, Some(Panel::Views));
+    key(&mut app, KeyCode::Char('n'));
+    let theme = app.theme_index;
+    for ch in "qTpb".chars() {
+        assert_eq!(key(&mut app, KeyCode::Char(ch)), Effect::None);
+    }
+    assert_eq!(app.theme_index, theme);
+    assert!(!app.paused);
+    key(&mut app, KeyCode::Enter);
+    assert!(app.feature_error.is_none());
+    assert_eq!(app.features.config.views, vec![expected.clone()]);
+    app.search.clear();
+    app.tree = false;
+    app.filters = Default::default();
+    app.pinned.clear();
+    key(&mut app, KeyCode::Enter);
+    assert!(app.panel.is_none());
+    assert_eq!(app.capture_view("qTpb".into()), expected);
+    key(&mut app, KeyCode::Char('b'));
+    key(&mut app, KeyCode::Char('u'));
+    assert_eq!(app.features.config.views.len(), 1);
+    key(&mut app, KeyCode::Delete);
+    assert!(app.features.config.views.is_empty());
+    assert!(app.feature_error.is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn alert_sheet_persists_rules_and_small_panels_render() {
+    let mut app = fixture();
+    let directory = std::env::temp_dir().join(format!("zentop-tui-alerts-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&directory);
+    app.features =
+        zentop_core::monitoring_preferences::Store::open_at(directory.join("monitoring.json")).0;
+    key(&mut app, KeyCode::Char('a'));
+    assert_eq!(app.panel, Some(Panel::Alerts));
+    key(&mut app, KeyCode::Char(' '));
+    assert!(app.features.config.alerts.cpu.enabled);
+    key(&mut app, KeyCode::Left);
+    assert_eq!(app.features.config.alerts.cpu.threshold, 89);
+    for _ in 0..3 {
+        key(&mut app, KeyCode::Down);
+    }
+    key(&mut app, KeyCode::Right);
+    assert_eq!(app.features.config.alerts.sustain_secs, 35);
+    let saved =
+        zentop_core::monitoring_preferences::Store::open_at(directory.join("monitoring.json")).0;
+    assert_eq!(saved.config.alerts, app.features.config.alerts);
+    for panel in [Panel::Alerts, Panel::Views] {
+        app.panel = Some(panel);
+        app.panel_index = 0;
+        for (width, height) in [(20, 8), (45, 16), (80, 24), (150, 40)] {
+            let mut terminal = Terminal::new(TestBackend::new(width, height)).unwrap();
+            terminal.draw(|frame| ui::draw(&mut app, frame)).unwrap();
+        }
+    }
+    app.panel = Some(Panel::Views);
+    key(&mut app, KeyCode::Char('n'));
+    key(&mut app, KeyCode::Enter);
+    assert!(app.feature_error.is_some());
+    assert!(app.view_name.is_some());
+    key(&mut app, KeyCode::Esc);
+    assert!(app.view_name.is_none());
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
+#[test]
+fn wrapped_saved_view_selection_remains_visible_in_a_narrow_terminal() {
+    let mut app = fixture();
+    app.features.config.views = (0..32)
+        .map(|i| {
+            app.capture_view(format!(
+                "Preset{i:02} with a long descriptive monitoring name"
+            ))
+        })
+        .collect();
+    app.panel = Some(Panel::Views);
+    for _ in 0..31 {
+        key(&mut app, KeyCode::Down);
+    }
+    let backend = render(&mut app, 40, 16);
+    assert_eq!(app.panel_index, 31);
+    assert!(text(&backend).contains("Preset31"));
+}

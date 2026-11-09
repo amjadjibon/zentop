@@ -9,7 +9,7 @@ authors.workspace = true
 repository.workspace = true
 
 [dependencies]
-zentop-core.workspace = true
+zentop-core = { workspace = true, features = ["notifications"] }
 clap.workspace = true
 ratatui.workspace = true
 serde.workspace = true

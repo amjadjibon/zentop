@@ -23,6 +23,8 @@ pub enum Panel {
     Columns,
     Settings,
     Help,
+    Alerts,
+    Views,
 }
 #[derive(Debug, PartialEq, Eq)]
 pub enum Effect {
@@ -33,6 +35,12 @@ pub enum Effect {
 }
 
 pub struct App {
+    pub features: zentop_core::monitoring_preferences::Store,
+    pub feature_error: Option<String>,
+    pub notification_error: Option<String>,
+    pub alerts: zentop_core::alerts::Center,
+    pub notifications: zentop_core::alerts::DesktopNotifications,
+    pub view_name: Option<String>,
     pub disk: crate::disktree::DiskTree,
     pub snapshot: Option<Snapshot>,
     pub error: Option<String>,
@@ -66,6 +74,12 @@ impl App {
             .position(|t| t.name == theme_name)
             .ok_or_else(|| io::Error::other(format!("Unknown theme: {theme_name}")))?;
         Ok(Self {
+            features: Default::default(),
+            feature_error: None,
+            notification_error: None,
+            alerts: Default::default(),
+            notifications: Default::default(),
+            view_name: None,
             disk: crate::disktree::DiskTree::default(),
             snapshot: None,
             error: None,
@@ -120,12 +134,28 @@ impl App {
                         .error
                         .clone()
                         .or_else(|| snapshot.port_error.clone());
+                    let settings = &self.features.config.alerts;
+                    let events = self.alerts.observe(
+                        &snapshot.frame,
+                        !snapshot.paused && snapshot.error.is_none(),
+                        Duration::from_millis(self.interval),
+                        settings,
+                        std::time::Instant::now(),
+                    );
+                    if settings.desktop_notifications {
+                        for event in events {
+                            if let Err(error) = self.notifications.send(event.message) {
+                                self.notification_error = Some(error);
+                            }
+                        }
+                    }
                     self.snapshot = Some(snapshot);
                     self.rebuild(selected);
                     dirty = true;
                 }
                 Ok(Ok(_)) => {} // Ignore a queued frame from before a pause/resume request.
                 Ok(Err(error)) => {
+                    self.alerts.suspend();
                     self.error = Some(error);
                     dirty = true;
                 }
@@ -133,6 +163,10 @@ impl App {
                     return Err(io::Error::other("Sampling worker stopped"))
                 }
                 Err(TryRecvError::Empty) => {}
+            }
+            if let Some(result) = self.notifications.poll_result() {
+                self.notification_error = result.err();
+                dirty = true;
             }
             if dirty {
                 terminal.draw(|frame| crate::ui::draw(self, frame))?;
@@ -237,6 +271,15 @@ impl App {
         if key.code == KeyCode::Char('c') && key.modifiers.contains(KeyModifiers::CONTROL) {
             return Effect::Quit;
         }
+        if self.view_name.is_some() {
+            if key
+                .modifiers
+                .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            {
+                return Effect::None;
+            }
+            return self.name_key(key.code);
+        }
         if self.disk.active {
             return self.disk.key(key);
         }
@@ -290,7 +333,10 @@ impl App {
                 self.filters = Filters::default();
                 preserve = false;
             }
+            KeyCode::Char('a') => self.open(Panel::Alerts),
+            KeyCode::Char('b') => self.open(Panel::Views),
             KeyCode::Char('p') => {
+                self.alerts.suspend();
                 self.paused = !self.paused;
                 return Effect::Pause(self.paused);
             }
@@ -396,6 +442,9 @@ impl App {
     }
 
     fn open(&mut self, panel: Panel) {
+        if matches!(panel, Panel::Alerts | Panel::Views) {
+            self.feature_error = self.features.reload().err();
+        }
         self.panel = Some(panel);
         self.panel_index = 0;
         self.detail_scroll = 0;
@@ -408,6 +457,7 @@ impl App {
             return Effect::None;
         }
         match panel {
+            Panel::Alerts | Panel::Views => return self.features_key(panel, code),
             Panel::Filters => {
                 match code {
                     KeyCode::Up => self.panel_index = self.panel_index.saturating_sub(1),

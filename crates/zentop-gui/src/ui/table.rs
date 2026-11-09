@@ -98,6 +98,29 @@ impl ProcessList {
         }
     }
 
+    pub fn saved_view(&self, name: String) -> zentop_core::monitoring_preferences::SavedView {
+        zentop_core::monitoring_preferences::SavedView {
+            name,
+            search: self.search.clone(),
+            filters: self.filters.clone(),
+            sort: self.sort,
+            columns: self.columns.clone(),
+            tree: self.tree,
+            pinned: self.pinned.iter().cloned().collect(),
+        }
+    }
+    pub fn restore_view(&mut self, view: &zentop_core::monitoring_preferences::SavedView) {
+        self.search = view.search.clone();
+        self.filters = view.filters.clone();
+        self.sort = view.sort;
+        self.columns = view.columns.clone();
+        self.tree = view.tree;
+        self.pinned = view.pinned.iter().cloned().collect();
+        self.expanded.clear();
+        self.page = 0;
+        self.hovered = None;
+        self.rebuild();
+    }
     pub fn total(&self) -> usize {
         self.frame.as_ref().map_or(0, |f| f.processes.len())
     }
