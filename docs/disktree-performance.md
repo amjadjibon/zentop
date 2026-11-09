@@ -72,3 +72,68 @@ workspace tests and Clippy passed. Directory iteration remains serial within
 a single directory, so a very wide folder may benefit less than a repository
 tree. Blocked filesystem calls can still delay worker shutdown, as before;
 frontends continue to cancel without joining the scan thread.
+
+## Scan memory follow-up — 2026-11-09
+
+The target for this follow-up was lower retained memory after repeated scans of
+the same real directory. The release benchmark now supports `--retain`: it keeps
+the last view visible while scanning its replacement, matching the shared GUI
+and TUI session lifecycle. The saved pre-change binary used the same RSS and
+owned-heap instrumentation, with the previous view-replacement behavior.
+
+The completed tree had substantial spare node and child-vector capacity.
+`vmmap` also showed freed `MALLOC_LARGE` blocks still resident. Experiments
+isolated repeated geometric node-vector growth and differently sized large
+allocations as the main source of RSS growth. Shrinking everything to exact
+length on every scan reduced live heap but made allocator retention worse.
+
+The scanner now reserves from the previous entry count for the same canonical
+folder. Large reservations and completed vectors round to 4,096-node buckets,
+keeping allocation sizes stable when a few entries change. Larger excess
+capacity and child-vector slack are trimmed. Path comparison runs in the scan
+worker; scanning another folder starts without the previous folder's hint.
+
+Successful rescans replace the tree in the existing view, release the old
+snapshot, and reuse its four numeric buffers. This also removes a redundant
+default-options rebuild. A much smaller replacement releases oversized numeric
+and review buffers. Settings persist, scan-specific selection/marks reset, and
+errors or cancellation retain the previous view. No allocator overrides,
+platform-specific pressure calls, or new dependencies are needed.
+
+Five real-directory scans in one process, with the old view retained during each
+replacement scan:
+
+| Measurement | Before | After | Change |
+| --- | ---: | ---: | ---: |
+| RSS after scan 5 (`ps`) | 383.8 MiB | 203.0 MiB | −47.1% |
+| Maximum RSS (`/usr/bin/time -l`) | 383.8 MiB | 244.3 MiB | −36.4% |
+| Estimated completed-tree heap | 99.7 MiB | 76.9 MiB | −22.9% |
+| Median scan time | 2.218 s | 2.255 s | +1.7% |
+| Observed scan-time range | 2.175–2.278 s | 2.194–2.340 s | |
+
+These runs contained 392,736 nodes, 272,352 deduplicated files and 75,199
+directories, with no truncation or skipped entries. The directory is live:
+small byte-total changes occurred between runs. The fixed synthetic fixture
+matched all counts and totals exactly in every before/after run: 54,001 nodes,
+51,000 files, 3,000 directories, 6,400,000 apparent bytes and 204,800,000 allocated
+bytes. Its fifth-scan RSS was 63.3 MiB before and 34.8 MiB after.
+
+A separate 15-scan real-directory run ended at 220.1 MiB RSS. A brief two-entry
+change occurred during that run; memory still avoided the previous roughly
+60 MiB increase per additional scan. These are local allocator/cache observations,
+not a fixed RSS guarantee. Both the current and incoming trees coexist while
+scanning so that the previous results remain usable. Estimated heap excludes
+allocator overhead and view buffers; maximum RSS includes transient allocations.
+
+```sh
+cargo build --release -p zentop-core --example disktree_scan --locked
+/usr/bin/time -l target/release/examples/disktree_scan /path/to/folder 5 --retain
+/usr/bin/time -l target/release/examples/disktree_scan /path/to/folder 15 --retain
+```
+
+The CSV includes `tree_heap_bytes` and `rss_kib` (`ps` on Unix; zero if unavailable).
+Complete builds and tests before measuring, and avoid writes below the scanned
+directory. All 98 workspace tests and Clippy passed. Six new regression tests
+cover buffer reuse without stale filtered totals, snapshot release/settings,
+large-to-small replacements, entry caps, nearby rescan allocation sizes, and
+successful/failed/cancelled session replacement.

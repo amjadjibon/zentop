@@ -80,6 +80,226 @@ fn hidden_filter_and_review_are_consistent() {
     assert_eq!(view.files[0], 1);
     assert_eq!(view.dirs[0], 1);
 }
+
+#[test]
+fn rebuild_reuses_buffers_without_retaining_filtered_totals() {
+    let fixture = Fixture::new();
+    let mut view = View::new(fixture.scan());
+    let buffers = (
+        view.weights.as_ptr(),
+        view.bytes.as_ptr(),
+        view.files.as_ptr(),
+        view.dirs.as_ptr(),
+    );
+    view.options.apparent = true;
+    for _ in 0..3 {
+        view.options.filter = "nothing matches".into();
+        view.rebuild();
+        assert_eq!(
+            (view.weights[0], view.bytes[0], view.files[0], view.dirs[0]),
+            (0., 0, 0, 0)
+        );
+        view.options.filter = "main.rs".into();
+        view.options.metric = Metric::Files;
+        view.rebuild();
+        assert_eq!(
+            (view.weights[0], view.bytes[0], view.files[0], view.dirs[0]),
+            (1., 2048, 1, 1)
+        );
+    }
+    assert_eq!(
+        buffers,
+        (
+            view.weights.as_ptr(),
+            view.bytes.as_ptr(),
+            view.files.as_ptr(),
+            view.dirs.as_ptr()
+        )
+    );
+}
+
+#[test]
+fn replacement_releases_snapshot_preserves_settings_and_resets_node_ids() {
+    let fixture = Fixture::new();
+    let mut view = View::new(fixture.scan());
+    let previous = Arc::downgrade(&view.tree);
+    let buffers = (
+        view.weights.as_ptr(),
+        view.bytes.as_ptr(),
+        view.files.as_ptr(),
+        view.dirs.as_ptr(),
+    );
+    view.options = ViewOptions {
+        hidden: false,
+        apparent: true,
+        depth: 2,
+        metric: Metric::Files,
+        filter: "main.rs".into(),
+    };
+    view.rebuild();
+    view.selected = view
+        .tree
+        .nodes
+        .iter()
+        .position(|n| n.name == "src")
+        .unwrap();
+    view.enter();
+    view.mark();
+    fs::remove_dir_all(fixture.0.join("src/target")).unwrap();
+    fs::write(fixture.0.join("src/main.rs"), [1; 17]).unwrap();
+    view.replace_tree(fixture.scan());
+    assert!(previous.upgrade().is_none());
+    assert_eq!(
+        buffers,
+        (
+            view.weights.as_ptr(),
+            view.bytes.as_ptr(),
+            view.files.as_ptr(),
+            view.dirs.as_ptr()
+        )
+    );
+    assert_eq!((view.zoom, view.selected), (0, 0));
+    assert!(view.marked.is_empty());
+    assert!(!view.options.hidden && view.options.apparent);
+    assert_eq!(
+        (
+            view.options.depth,
+            view.options.metric,
+            view.options.filter.as_str()
+        ),
+        (2, Metric::Files, "main.rs")
+    );
+    assert_eq!((view.weights[0], view.bytes[0], view.files[0]), (1., 17, 1));
+    assert!(view.review().is_empty());
+}
+
+#[test]
+fn smaller_replacement_releases_oversized_buffers_and_review_candidates() {
+    let large = Fixture::new();
+    for i in 0..128 {
+        fs::create_dir_all(large.0.join(format!("branch-{i}/.cache"))).unwrap();
+    }
+    let mut view = View::new(large.scan());
+    assert!(view.review_candidates.len() > 64);
+    let small = Fixture::new();
+    view.replace_tree(small.scan());
+    let limit = (view.tree.nodes.len() * 2).max(64);
+    assert!([
+        view.weights.capacity(),
+        view.bytes.capacity(),
+        view.files.capacity(),
+        view.dirs.capacity()
+    ]
+    .iter()
+    .all(|c| *c <= limit));
+    assert!(view.review_candidates.capacity() <= 64);
+    assert_eq!(view.review().len(), 2);
+    assert_eq!(view.files[0], 5);
+}
+
+#[test]
+fn capacity_hints_preserve_counts_and_obey_entry_limits() {
+    let fixture = Fixture::new();
+    for hint in [0, 1, 9, 32] {
+        let tree = scan(
+            &fixture.0,
+            &ScanOptions {
+                initial_capacity: hint,
+                ..Default::default()
+            },
+            &AtomicBool::new(false),
+            &Progress::default(),
+        )
+        .unwrap();
+        assert_eq!(
+            (
+                tree.nodes[0].apparent,
+                tree.nodes[0].files,
+                tree.nodes[0].dirs
+            ),
+            (7168, 5, 3)
+        );
+        assert!(tree.nodes.capacity() <= tree.nodes.len() + tree.nodes.len() / 8);
+        assert!(tree
+            .nodes
+            .iter()
+            .all(|n| n.children.capacity() == n.children.len()));
+    }
+    let tree = scan(
+        &fixture.0,
+        &ScanOptions {
+            initial_capacity: usize::MAX,
+            max_entries: 2,
+            ..Default::default()
+        },
+        &AtomicBool::new(false),
+        &Progress::default(),
+    )
+    .unwrap();
+    assert!(tree.truncated);
+    assert_eq!(tree.nodes.len(), 2);
+    assert_eq!(tree.nodes.capacity(), 2);
+}
+
+#[test]
+fn nearby_rescans_keep_the_same_node_allocation_size() {
+    let fixture = Fixture::new();
+    for i in 0..4096 {
+        fs::write(fixture.0.join(format!("file-{i}")), []).unwrap();
+    }
+    let first = fixture.scan();
+    fs::write(fixture.0.join("one-more"), [1; 23]).unwrap();
+    let next = scan(
+        &fixture.0,
+        &ScanOptions {
+            initial_capacity: first.nodes.len(),
+            ..Default::default()
+        },
+        &AtomicBool::new(false),
+        &Progress::default(),
+    )
+    .unwrap();
+    assert_eq!(next.nodes.len(), first.nodes.len() + 1);
+    assert_eq!(next.nodes.capacity(), first.nodes.capacity());
+    assert!(next.nodes.capacity() - next.nodes.len() < 4096);
+    assert_eq!(next.nodes[0].files, first.nodes[0].files + 1);
+    assert_eq!(next.nodes[0].apparent, first.nodes[0].apparent + 23);
+}
+
+#[test]
+fn session_rescans_replace_only_on_success() {
+    fn finish(session: &mut Session) {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !session.poll() {
+            assert!(std::time::Instant::now() < deadline, "scan did not finish");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+    }
+    let fixture = Fixture::new();
+    let mut session = Session::default();
+    session.start(fixture.0.clone());
+    finish(&mut session);
+    let original = Arc::downgrade(&session.view.as_ref().unwrap().tree);
+    session.view.as_mut().unwrap().options.apparent = true;
+    session.start(fixture.0.clone());
+    assert!(original.upgrade().is_some());
+    session.cancel();
+    assert!(original.upgrade().is_some());
+    assert_eq!(session.error.as_deref(), Some("Scan cancelled"));
+    session.start(fixture.0.join("missing"));
+    finish(&mut session);
+    assert!(session.error.is_some());
+    assert!(original.upgrade().is_some());
+    fs::write(fixture.0.join("new"), [1; 23]).unwrap();
+    session.start(fixture.0.clone());
+    finish(&mut session);
+    assert!(session.error.is_none());
+    assert!(original.upgrade().is_none());
+    let view = session.view.as_ref().unwrap();
+    assert!(view.options.apparent);
+    assert_eq!(view.bytes[0], 7168 + 23);
+    assert_eq!(view.files[0], 6);
+}
 #[test]
 fn squarified_siblings_fill_without_overlapping() {
     let fixture = Fixture::new();

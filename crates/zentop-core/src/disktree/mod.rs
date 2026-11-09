@@ -173,12 +173,36 @@ impl View {
         view.rebuild();
         view
     }
+    /// Replace a completed scan while retaining settings and reusing numeric buffers.
+    /// Node IDs belong to a scan, so selection and marks reset as on initial load.
+    pub fn replace_tree(&mut self, tree: Tree) {
+        // Release the old snapshot before rebuilding; do not allocate a second
+        // full set of view buffers alongside it.
+        self.tree = Arc::new(tree);
+        self.zoom = 0;
+        self.selected = 0;
+        self.marked = HashSet::new();
+        self.review_candidates.clear();
+        self.review_candidates.extend(
+            self.tree
+                .nodes
+                .iter()
+                .enumerate()
+                .filter_map(|(id, n)| n.review.is_some().then_some(id)),
+        );
+        if self.review_candidates.capacity()
+            > self.review_candidates.len().saturating_mul(2).max(64)
+        {
+            self.review_candidates.shrink_to_fit();
+        }
+        self.rebuild();
+    }
     pub fn rebuild(&mut self) {
         let n = self.tree.nodes.len();
-        self.weights = vec![0.; n];
-        self.bytes = vec![0; n];
-        self.files = vec![0; n];
-        self.dirs = vec![0; n];
+        reset_buffer(&mut self.weights, n);
+        reset_buffer(&mut self.bytes, n);
+        reset_buffer(&mut self.files, n);
+        reset_buffer(&mut self.dirs, n);
         let mut visible = vec![true; n];
         let mut matches = vec![false; n];
         let query = self.options.filter.to_lowercase();
@@ -350,6 +374,16 @@ impl View {
     }
 }
 
+fn reset_buffer<T: Default>(buffer: &mut Vec<T>, len: usize) {
+    buffer.clear();
+    // Reuse allocations for similar-size scans, but do not retain a large tree's
+    // buffers after switching to a small directory.
+    if buffer.capacity() > len.saturating_mul(2).max(64) {
+        buffer.shrink_to(len);
+    }
+    buffer.resize_with(len, T::default);
+}
+
 pub fn classify(name: &str, parent: Category) -> (Category, Option<Review>) {
     let kind = upstream::classify::category_of_name(name).unwrap_or(parent);
     (
@@ -394,7 +428,7 @@ impl Session {
         self.job = None;
         self.error = None;
         self.path = Some(path.clone());
-        match ScanJob::start(path) {
+        match ScanJob::with_previous(path, self.view.as_ref().map(|v| v.tree.as_ref())) {
             Ok(job) => self.job = Some(job),
             Err(error) => self.error = Some(error.to_string()),
         }
@@ -406,13 +440,11 @@ impl Session {
         self.job = None;
         match result {
             Ok(tree) => {
-                let options = self.view.as_ref().map(|v| v.options.clone());
-                let mut view = View::new(tree);
-                if let Some(options) = options {
-                    view.options = options;
-                    view.rebuild();
+                if let Some(view) = &mut self.view {
+                    view.replace_tree(tree);
+                } else {
+                    self.view = Some(View::new(tree));
                 }
-                self.view = Some(view);
             }
             Err(error) => self.error = Some(error),
         }

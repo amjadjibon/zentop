@@ -18,10 +18,14 @@ pub struct ScanOptions {
     pub same_filesystem: bool,
     /// Concurrent directory readers, bounded to 1–8 to avoid saturating the disk.
     pub workers: usize,
+    /// Expected entries from a previous scan. Zero grows on demand.
+    /// Reservation includes modest growth headroom and is capped by `max_entries`.
+    pub initial_capacity: usize,
 }
 impl Default for ScanOptions {
     fn default() -> Self {
         Self {
+            initial_capacity: 0,
             max_entries: 1_000_000,
             max_depth: 128,
             same_filesystem: true,
@@ -45,17 +49,29 @@ pub struct ScanJob {
 }
 impl ScanJob {
     pub fn start(root: PathBuf) -> io::Result<Self> {
+        Self::with_previous(root, None)
+    }
+    pub(super) fn with_previous(root: PathBuf, previous: Option<&Tree>) -> io::Result<Self> {
         let progress = Arc::new(Progress::default());
         let cancel = Arc::new(AtomicBool::new(false));
         let (tx, result) = mpsc::sync_channel(1);
         let target = root.clone();
         let token = cancel.clone();
         let counters = progress.clone();
+        let previous = previous.map(|tree| (tree.root.clone(), tree.nodes.len()));
         thread::Builder::new()
             .name("zentop-disktree".into())
             .spawn(move || {
-                let result = scan(&target, &ScanOptions::default(), &token, &counters)
-                    .map_err(|e| e.to_string());
+                // Resolve aliases/relative paths off the UI thread. A different
+                // folder must not inherit a large previous folder's reservation.
+                let initial_capacity = previous
+                    .filter(|(root, _)| fs::canonicalize(&target).is_ok_and(|p| p == *root))
+                    .map_or(0, |(_, len)| len);
+                let options = ScanOptions {
+                    initial_capacity,
+                    ..Default::default()
+                };
+                let result = scan(&target, &options, &token, &counters).map_err(|e| e.to_string());
                 let _ = tx.send(result);
             })?;
         Ok(Self {
@@ -125,6 +141,17 @@ struct Batch {
     depth: usize,
     entries: Vec<Entry>,
     done: bool,
+}
+
+// Use the same allocation size for nearby entry counts, so small changes between
+// rescans do not leave a differently sized large block in the allocator each time.
+fn node_capacity(entries: usize) -> usize {
+    const CHUNK: usize = 4096;
+    if entries < CHUNK {
+        entries
+    } else {
+        entries.saturating_add((CHUNK - entries % CHUNK) % CHUNK)
+    }
 }
 
 // Workers only perform I/O. The coordinator owns all IDs, limits and inode sets.
@@ -245,8 +272,13 @@ pub fn scan(
     let name = root
         .file_name()
         .map_or_else(|| root.as_os_str().to_owned(), std::ffi::OsStr::to_owned);
+    // Avoid repeatedly growing/copying a large node vector. Allow small changes
+    // since the last scan without doubling its allocation on the next push.
+    let capacity = node_capacity(options.initial_capacity).min(options.max_entries.max(1));
+    let mut nodes = Vec::with_capacity(capacity);
+    nodes.push(node(name, None, &metadata, Category::Other));
     let mut tree = Tree {
-        nodes: vec![node(name, None, &metadata, Category::Other)],
+        nodes,
         root: root.clone(),
         volume: None,
         skipped: 0,
@@ -465,6 +497,13 @@ pub fn scan(
             }
         }
     }
+    // Completed trees live across rescans; discard traversal growth slack.
+    for node in &mut tree.nodes {
+        node.children.shrink_to_fit();
+    }
+    // Keep the small rescan headroom: shrinking/reallocating this large block
+    // on every scan makes the allocator retain more memory than the slack saves.
+    tree.nodes.shrink_to(node_capacity(tree.nodes.len()));
     let disks = sysinfo::Disks::new_with_refreshed_list();
     tree.volume = disks
         .iter()
