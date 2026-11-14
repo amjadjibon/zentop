@@ -12,3 +12,5 @@ pub mod monitoring_preferences;
 pub mod process_view;
 pub mod sampling;
 pub mod state;
+
+pub mod temperature;

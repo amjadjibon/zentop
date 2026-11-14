@@ -52,7 +52,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
         area,
     );
     let compact = area.width < 65 || area.height < 20;
-    let card_rows = if area.width >= 150 {
+    let card_rows = if area.width >= 175 {
         1
     } else if area.width >= 78 {
         2
@@ -105,11 +105,14 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
         } else {
             let bands =
                 Layout::vertical(vec![Constraint::Fill(1); card_rows as usize]).split(cards);
-            let per_row = 6 / card_rows;
+            let per_row = 7_u16.div_ceil(card_rows);
             for (r, band) in bands.iter().enumerate() {
                 let boxes =
                     Layout::horizontal(vec![Constraint::Fill(1); per_row as usize]).split(*band);
                 for (c, rect) in boxes.iter().enumerate() {
+                    if r * per_row as usize + c >= 7 {
+                        break;
+                    }
                     card(
                         frame,
                         *rect,
@@ -166,7 +169,7 @@ pub fn draw(app: &mut App, frame: &mut Frame) {
             if app.searching {
                 "Type a name, command, PID, regex or :port · Enter apply · Esc clear".into()
             } else {
-                "↑↓ scroll  Enter inspect  Space pin  p pause  1–6 resources  d DiskTree  a alerts  b views  ? help  q quit".into()
+                "↑↓ scroll  Enter inspect  Space pin  p pause  1–7 resources  d DiskTree  a alerts  b views  ? help  q quit".into()
             }
         });
     let hint = app
@@ -305,6 +308,14 @@ fn card(
                 "Capacity not reported".into()
             },
         ),
+        6 => (
+            "Temperature",
+            theme.chart_3,
+            zentop_core::temperature::format(
+                zentop_core::temperature::hottest(&stats.temperatures).and_then(|s| s.celsius),
+            ),
+            "Hottest reported sensor".into(),
+        ),
         4 => (
             "System",
             theme.foreground,
@@ -353,17 +364,25 @@ fn card(
             height: 1,
         };
         match index {
-            0 | 1 | 2 | 5 => {
+            0 | 1 | 2 | 5 | 6 => {
                 let data = trend(snapshot, chart.width, |s| match index {
                     0 => s.cpu.map(|n| (n * 10.) as u64),
                     1 => s.memory.map(|n| (n * 10.) as u64),
                     2 => gpu
                         .and_then(|g| s.gpus.get(&g.id).copied().flatten())
                         .map(|n| (n * 10.) as u64),
+                    6 => s
+                        .temperatures
+                        .values()
+                        .filter_map(|v| *v)
+                        .reduce(f64::max)
+                        .map(|v| ((v + 40.) * 10.) as u64),
                     _ => s.received.zip(s.sent).map(|(r, t)| r.saturating_add(t)),
                 });
                 let max = if index == 5 {
                     data.iter().flatten().copied().max().unwrap_or(1).max(1)
+                } else if index == 6 {
+                    1900
                 } else {
                     1000
                 };
@@ -378,6 +397,8 @@ fn card(
                 frame.render_widget(
                     Paragraph::new(if index == 5 {
                         "2m · received + sent"
+                    } else if index == 6 {
+                        "2m · −40–150°C"
                     } else {
                         "2m · 0–100%"
                     })
@@ -655,7 +676,7 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
             use zentop_core::alerts::Kind;
             let settings = &app.features.config.alerts;
             let mut lines = vec!["↑↓ select · Space toggle · ←→ adjust · PgUp/Dn history · x clear history".into(), "".into()];
-            lines.extend(Kind::ALL.into_iter().map(|kind| { let rule = settings.rule(kind); format!("[{}] {} {} {}%", if rule.enabled {"✓"} else {" "}, kind.label(), if kind == Kind::DiskFree {"≤"} else {"≥"}, rule.threshold) }));
+            lines.extend(Kind::ALL.into_iter().map(|kind| { let rule = settings.rule(kind); format!("[{}] {} {} {}{}", if rule.enabled {"✓"} else {" "}, kind.label(), if kind == Kind::DiskFree {"≤"} else {"≥"}, rule.threshold, if kind == Kind::Temperature {"°C"} else {"%"}) }));
             lines.push(format!("Sustained for: {}s", settings.sustain_secs));
             lines.push(format!("Repeat cooldown: {}s", settings.cooldown_secs));
             lines.push(format!("[{}] Also send desktop notifications", if settings.desktop_notifications {"✓"} else {" "}));
@@ -673,7 +694,7 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
             vec![
                 "/ or Ctrl+F   Search names, commands, PIDs, regex or :port",
                 "Enter          Inspect selected process",
-                "1–6            CPU / Memory / GPU / Storage / System / Network details",
+                "1–7            CPU / Memory / GPU / Storage / System / Network / Temperature",
                 "↑↓ or j/k      Scroll processes or a detail sheet",
                 "PageUp/Down    Move ten rows",
                 "Space          Pin/unpin the selected command",
@@ -840,13 +861,38 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
 }
 
 fn resource_text(app: &App, index: usize) -> (String, Vec<String>) {
-    let title = ["CPU", "Memory", "Graphics", "Storage", "System", "Network"][index].to_string();
+    let title = [
+        "CPU",
+        "Memory",
+        "Graphics",
+        "Storage",
+        "System",
+        "Network",
+        "Temperature",
+    ][index]
+        .to_string();
     let Some(snapshot) = &app.snapshot else {
         return (title, vec!["No readings yet.".into()]);
     };
     let s = &snapshot.frame.stats;
     let d = &s.details;
     let lines = match index {
+        6 => s
+            .temperatures
+            .iter()
+            .map(|sensor| {
+                format!(
+                    "{} · {} · {} · session min {} / max {} · critical {} · {}",
+                    sensor.kind,
+                    sensor.name,
+                    zentop_core::temperature::format(sensor.celsius),
+                    zentop_core::temperature::format(sensor.minimum),
+                    zentop_core::temperature::format(sensor.maximum),
+                    zentop_core::temperature::format(sensor.critical),
+                    sensor.source
+                )
+            })
+            .collect(),
         0 => {
             let mut lines = vec![
                 d.identity

@@ -101,6 +101,7 @@ pub struct ProcessInfo {
 /// Provides overall system resource usage and performance metrics
 #[derive(Clone, Serialize, Debug)]
 pub struct SystemStats {
+    pub temperatures: Vec<crate::temperature::Sensor>,
     pub details: ResourceDetails,
     /// CPU usage per core as percentage (0-100)
     pub cpu_usage: Vec<f32>,

@@ -7,6 +7,7 @@ fn frame() -> Frame {
         processes: vec![],
         gpus: vec![],
         stats: SystemStats {
+            temperatures: vec![],
             cpu_usage: vec![95.; 4],
             memory_total: 100,
             memory_used: 95,
@@ -240,4 +241,44 @@ fn delivery_errors_remain_visible_and_later_success_clears_them() {
     assert_eq!(worker.poll_result(), None);
     tx.send(Ok(())).unwrap();
     assert_eq!(worker.poll_result(), Some(Ok(())));
+}
+
+#[test]
+fn heat_alerts_use_celsius_and_require_a_fresh_sustained_sensor() {
+    let (mut center, mut frame, mut settings, start) =
+        (Center::default(), frame(), settings(), Instant::now());
+    settings.cpu.enabled = false;
+    settings.temperature.enabled = true;
+    settings.temperature.threshold = 100;
+    assert!(settings.validate().is_ok());
+    frame.stats.temperatures = vec![crate::temperature::Sensor {
+        id: "cpu".into(),
+        name: "CPU package".into(),
+        kind: "CPU".into(),
+        source: "fixture".into(),
+        celsius: Some(105.),
+        minimum: Some(105.),
+        maximum: Some(105.),
+        critical: None,
+    }];
+    for t in 0..3 {
+        assert!(tick(&mut center, &mut frame, &settings, start, t).is_empty());
+    }
+    let fired = tick(&mut center, &mut frame, &settings, start, 3);
+    assert_eq!(fired.len(), 1);
+    assert_eq!(fired[0].kind, Kind::Temperature);
+    assert!(fired[0].message.contains("105.0°C"));
+    frame.stats.temperatures[0].celsius = None;
+    for t in 4..20 {
+        assert!(tick(&mut center, &mut frame, &settings, start, t).is_empty());
+    }
+    frame.stats.temperatures[0].celsius = Some(110.);
+    for t in 20..22 {
+        assert!(tick(&mut center, &mut frame, &settings, start, t).is_empty());
+    }
+    frame.stats.temperatures[0].id = "different-sensor".into();
+    for t in 22..25 {
+        assert!(tick(&mut center, &mut frame, &settings, start, t).is_empty());
+    }
+    assert_eq!(tick(&mut center, &mut frame, &settings, start, 25).len(), 1);
 }

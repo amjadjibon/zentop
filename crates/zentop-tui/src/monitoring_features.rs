@@ -73,7 +73,7 @@ impl App {
     }
     pub fn features_key(&mut self, panel: Panel, code: KeyCode) -> Effect {
         let limit = if panel == Panel::Alerts {
-            5
+            6
         } else {
             self.features.config.views.len().saturating_sub(1)
         };
@@ -121,25 +121,32 @@ impl App {
             match code {
                 KeyCode::Char('x') => self.alerts.history.clear(),
                 KeyCode::Char(' ') | KeyCode::Enter => {
-                    if self.panel_index < 3 {
+                    if self.panel_index < Kind::ALL.len() {
                         let rule = settings.rule_mut(Kind::ALL[self.panel_index]);
                         rule.enabled = !rule.enabled;
-                    } else if self.panel_index == 5 {
+                    } else if self.panel_index == 6 {
                         settings.desktop_notifications = !settings.desktop_notifications;
                     }
                 }
                 KeyCode::Left | KeyCode::Right => {
                     let add = code == KeyCode::Right;
-                    if self.panel_index < 3 {
+                    if self.panel_index < Kind::ALL.len() {
                         let rule = settings.rule_mut(Kind::ALL[self.panel_index]);
                         rule.threshold = if add {
                             rule.threshold.saturating_add(1)
                         } else {
                             rule.threshold.saturating_sub(1)
                         }
-                        .clamp(1, 99);
-                    } else if self.panel_index < 5 {
-                        let (value, step, max) = if self.panel_index == 3 {
+                        .clamp(
+                            1,
+                            if Kind::ALL[self.panel_index] == Kind::Temperature {
+                                150
+                            } else {
+                                99
+                            },
+                        );
+                    } else if self.panel_index < 6 {
+                        let (value, step, max) = if self.panel_index == 4 {
                             (&mut settings.sustain_secs, 5, 3600)
                         } else {
                             (&mut settings.cooldown_secs, 30, 86400)

@@ -126,3 +126,17 @@ fn concurrent_writers_preserve_independent_views() {
     });
     assert_eq!(fixture.store().config.views.len(), 8);
 }
+
+#[test]
+fn older_saved_alert_configuration_defaults_heat_rule_off() {
+    let fixture = Fixture::new();
+    let mut store = fixture.store();
+    store.save_view(view("existing")).unwrap();
+    let mut old: serde_json::Value =
+        serde_json::from_slice(&fs::read(fixture.path()).unwrap()).unwrap();
+    old["alerts"].as_object_mut().unwrap().remove("temperature");
+    fs::write(fixture.path(), serde_json::to_vec(&old).unwrap()).unwrap();
+    let loaded = fixture.store();
+    assert!(!loaded.config.alerts.temperature.enabled);
+    assert_eq!(loaded.config.views, vec![view("existing")]);
+}

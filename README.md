@@ -16,11 +16,11 @@
 ## What it does
 
 - **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
-- **Resource alerts.** Opt into sustained CPU, memory and low-disk-space rules, with cooldowns, recent history and optional desktop notifications.
+- **Resource alerts.** Opt into sustained CPU, memory, temperature and low-disk-space rules, with cooldowns, recent history and optional desktop notifications.
 - **Saved monitoring views.** Save search, filters, sort, columns, List/Tree and pinned commands; load the same presets in the GUI or TUI.
 - **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
 - **Explore disk usage.** Open DiskTree in the GUI or TUI for a nested treemap, category colors, Size/Files/Age modes, hidden/apparent-size controls and a read-only marked review list. See the [DiskTree guide](docs/disktree.md).
-- **Six live resource cards.** CPU (per core), memory, GPU, storage, system load and network, each with a two-minute trend you can hover or step through with the arrow keys, and a detail sheet one click away.
+- **Seven live resource cards.** CPU (per core), memory, GPU, storage, system load, network and [temperature](docs/temperature.md), each with a two-minute trend you can hover or step through with the arrow keys, and a detail sheet one click away.
 - **Your graphics card, in view.** Utilization, memory, temperature, power and clocks wherever the driver exposes them.
 - **A menu-bar companion.** Live readings and your five busiest processes in a small popup from the menu bar or system tray. Optionally keep monitoring after the main window closes.
 - **Native icons and 24 themes.** Real app icons where the system has them; 24 color themes, each checked for readable contrast.

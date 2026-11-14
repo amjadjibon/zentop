@@ -36,6 +36,7 @@ pub enum Resource {
     Storage,
     System,
     Network,
+    Temperature,
 }
 
 impl Resource {
@@ -47,6 +48,7 @@ impl Resource {
             Resource::Storage => "Storage",
             Resource::System => "System",
             Resource::Network => "Network",
+            Resource::Temperature => "Temperature",
         }
     }
 }
@@ -89,6 +91,7 @@ pub fn open(resource: Resource, window: &mut Window, cx: &mut App) {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(match resource {
+                                Resource::Temperature => "Hardware sensor readings in Celsius; missing readings stay unavailable.",
                                 Resource::Cpu => "Overall utilization and activity on each core.",
                                 Resource::Memory => "Physical RAM, allocation, and swap.",
                                 Resource::Gpu => "Driver-reported readings from this machine.",
@@ -209,6 +212,49 @@ fn content(
     let identity = &s.details.identity;
     let palette = theme::palette(cx);
     match resource {
+        Resource::Temperature => {
+            let mut body = v_flex().gap_3().child(note("Session min/max reset on restart or sensor removal. Access and sensor availability vary by hardware and OS.",cx));
+            for sensor in &s.temperatures {
+                let id = sensor.id.clone();
+                body = body
+                    .child(heading(sensor.name.clone()))
+                    .child(rows(
+                        vec![
+                            ("Kind", sensor.kind.clone()),
+                            (
+                                "Current",
+                                zentop_core::temperature::format(if unavailable {
+                                    None
+                                } else {
+                                    sensor.celsius
+                                }),
+                            ),
+                            (
+                                "Session minimum",
+                                zentop_core::temperature::format(sensor.minimum),
+                            ),
+                            (
+                                "Session maximum",
+                                zentop_core::temperature::format(sensor.maximum),
+                            ),
+                            (
+                                "Critical (reported)",
+                                zentop_core::temperature::format(sensor.critical),
+                            ),
+                            ("Source", sensor.source.clone()),
+                        ],
+                        cx,
+                    ))
+                    .child(div().h(px(112.)).flex().child(stats::temperature_trend(
+                        history,
+                        move |s| s.temperatures.get(&id).copied().flatten(),
+                        palette.charts[2],
+                        unavailable,
+                    )))
+                    .child(note("2m · −40–150°C", cx));
+            }
+            body.into_any_element()
+        }
         Resource::Cpu => {
             let average = (!s.cpu_usage.is_empty()).then(|| {
                 s.cpu_usage.iter().map(|v| *v as f64).sum::<f64>() / s.cpu_usage.len() as f64

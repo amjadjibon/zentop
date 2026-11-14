@@ -28,18 +28,18 @@ selection, theme and sampling interval remain separate from a named view.
 
 ## Resource alerts
 
-Open **Settings → Alerts** to enable CPU usage, memory usage, or disk free space
+Open **Settings → Alerts** to enable CPU usage, memory usage, temperature, or disk free space
 rules. CPU is the average across logical cores; memory is used physical RAM as
 a percentage of total. Disk alerts use the lowest free-space percentage among
 writable mounted volumes, rather than adding overlapping volumes together.
 
 Choose a threshold, a sustained duration, and a repeat cooldown. Defaults are
-90% CPU, 90% used memory and 10% free disk space, held for 30 seconds with a
+90% CPU, 90% used memory, 90°C temperature and 10% free disk space, held for 30 seconds with a
 five-minute cooldown. All rules and desktop delivery start **off**. Persistent
 breaches can repeat only after the cooldown. Detection follows the sampling
 interval, so short durations may take longer than the selected duration to fire.
 Warm-up CPU readings are ignored. Pauses, errors, missing readings, changes of
-volume, and long sampling gaps restart the waiting period.
+volume or temperature sensor, and long sampling gaps restart the waiting period.
 
 Alerts appear briefly in the main window and in **Recent alerts**, which keeps
 the last 50 events in memory for this session. **Also send desktop notifications**
@@ -64,13 +64,14 @@ before launching either frontend.
 
 ## Explore resources
 
-Use each card’s arrow to open a detailed sheet. CPU, memory, GPU and network histories cover roughly two minutes in memory. They are cleared on restart and are not long-term monitoring storage. Gaps indicate paused, missing or delayed readings.
+Use each card’s arrow to open a detailed sheet. CPU, memory, GPU, network and temperature histories cover roughly two minutes in memory. They are cleared on restart and are not long-term monitoring storage. Gaps indicate paused, missing or delayed readings.
 
 - **CPU:** average utilization, individual logical cores, and hardware identity. Process CPU can exceed the 100% scale of a single core.
 - **Memory:** used RAM, actual free pages, swap and breakdowns exposed by the OS. “Not in use” on the overview means total minus used and differs from strictly free pages.
 - **Graphics:** select an adapter and inspect utilization, memory, temperature, core count, power and core clock where the driver exposes them. Apple silicon shared GPU memory is already part of system RAM.
 - **Storage:** capacity and mounted volumes. Unknown/zero capacity stays unavailable. **Open DiskTree…** opens the read-only [DiskTree treemap](disktree.md) for directory-level usage.
 - **System:** OS/build, CPU architecture, uptime and load averages. Load average is not CPU percentage.
+- **Temperature:** hottest reported sensor, with individual readings, session minimum/maximum, source and critical limits where available. Missing sensors show **Unavailable**. See [temperature monitoring](temperature.md).
 - **Network:** received/sent rates, totals and interface details. Interfaces with traffic are listed first. New/reset counters stay unavailable until a valid rate baseline exists. This is network I/O monitoring, not a firewall or packet inspector.
 
 GPU support is driver dependent: macOS IORegistry statistics; Linux AMD sysfs and NVIDIA NVML; Windows NVIDIA NVML with DXGI inventory for other adapters. Missing counters never imply idle hardware. The optional **GPU %** process column and filter use Linux DRM engine accounting. They need two samples and may exceed 100% across engines; unsupported or unreadable clients remain unavailable.
@@ -96,11 +97,11 @@ Run `cargo run -p zentop-cli -- system` for a system summary, or
 Add `--json` for machine-readable output. Reports take two observations, 1.5
 seconds apart, to establish CPU and network rates.
 
-Run `cargo run -p zentop-tui` for a terminal dashboard with the GUI's six
-resource cards: CPU, Memory, GPU, Storage, System and Network. Wide terminals
+Run `cargo run -p zentop-tui` for a terminal dashboard with the GUI's seven
+resource cards: CPU, Memory, GPU, Storage, System, Network and Temperature. Wide terminals
 show one row of cards; narrower terminals wrap them or show a compact summary.
-CPU, RAM, GPU and network cards include two-minute trends with gaps for missing
-readings. Press **1–6** for resource details.
+CPU, RAM, GPU, network and temperature cards include two-minute trends with gaps for missing
+readings. Press **1–7** for resource details.
 
 - **/** or **Ctrl+F**: search by name, command, PID, regular expression or `:port`.
   Enter keeps the search; Esc clears it. **x** clears search and filters.

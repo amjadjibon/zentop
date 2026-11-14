@@ -41,6 +41,7 @@ pub struct Sample {
     pub received: Option<u64>,
     pub sent: Option<u64>,
     pub gpus: BTreeMap<String, Option<f64>>,
+    pub temperatures: BTreeMap<String, Option<f64>>,
 }
 impl Sample {
     fn gap(timestamp: u64, interval: u64) -> Self {
@@ -52,6 +53,7 @@ impl Sample {
             received: None,
             sent: None,
             gpus: BTreeMap::new(),
+            temperatures: BTreeMap::new(),
         }
     }
     fn from_frame(frame: &Frame, interval: u64) -> Self {
@@ -66,6 +68,12 @@ impl Sample {
             )
         };
         Self {
+            temperatures: frame
+                .stats
+                .temperatures
+                .iter()
+                .map(|s| (s.id.clone(), s.celsius))
+                .collect(),
             cpu,
             memory: (stats.memory_total > 0).then(|| {
                 (stats.memory_used as f64 / stats.memory_total as f64 * 100.0).clamp(0.0, 100.0)
@@ -109,6 +117,7 @@ fn append(history: &mut VecDeque<Sample>, sample: Sample) {
 
 #[derive(Debug)]
 pub struct Hub {
+    thermal: crate::temperature::Monitor,
     pub frame: Option<Arc<Frame>>,
     pub process_gpu: bool,
     gpu_process_monitor: crate::monitoring::GpuProcessMonitor,
@@ -122,6 +131,7 @@ pub struct Hub {
 impl Default for Hub {
     fn default() -> Self {
         Self {
+            thermal: Default::default(),
             frame: None,
             process_gpu: false,
             gpu_process_monitor: crate::monitoring::GpuProcessMonitor::new(),
@@ -192,7 +202,7 @@ impl Hub {
         })
     }
     fn capture(&mut self, state: &AppState) -> Result<Frame, String> {
-        let (mut processes, stats) = {
+        let (mut processes, mut stats) = {
             let mut sys = state.sys.lock().map_err(|e| e.to_string())?;
             let mut disks = state.disks.lock().map_err(|e| e.to_string())?;
             let mut networks = state.networks.lock().map_err(|e| e.to_string())?;
@@ -220,6 +230,7 @@ impl Hub {
             self.gpu_process_monitor.reset();
         }
         let gpus = state.gpu.lock().map_err(|e| e.to_string())?.collect();
+        stats.temperatures = self.thermal.collect(&gpus);
         self.sequence += 1;
         Ok(Frame {
             captured_at: now_ms(),

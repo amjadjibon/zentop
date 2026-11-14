@@ -348,7 +348,7 @@ impl App {
             KeyCode::Char('v') => self.open(Panel::Columns),
             KeyCode::Char(',') => self.open(Panel::Settings),
             KeyCode::Char('?') => self.open(Panel::Help),
-            KeyCode::Char('1'..='6') => {
+            KeyCode::Char('1'..='7') => {
                 if let KeyCode::Char(c) = key.code {
                     self.open(Panel::Resource(c as usize - '1' as usize));
                 }

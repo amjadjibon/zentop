@@ -40,12 +40,13 @@ pub fn render(r: &Readings, cx: &App) -> impl IntoElement {
         .border_b_1()
         .border_color(cx.theme().border)
         // Proportions of the original layout: CPU and Network get extra room.
-        .child(cpu(r, &palette, cx).flex_basis(relative(1.5 / 6.75)))
-        .child(memory(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
-        .child(gpu(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
-        .child(storage(r, &palette, cx).flex_basis(relative(1.0 / 6.75)))
-        .child(system(r, cx).flex_basis(relative(1.05 / 6.75)))
-        .child(network(r, &palette, cx).flex_basis(relative(1.2 / 6.75)))
+        .child(cpu(r, &palette, cx).flex_basis(relative(1.5 / 7.95)))
+        .child(memory(r, &palette, cx).flex_basis(relative(1.0 / 7.95)))
+        .child(gpu(r, &palette, cx).flex_basis(relative(1.0 / 7.95)))
+        .child(storage(r, &palette, cx).flex_basis(relative(1.0 / 7.95)))
+        .child(system(r, cx).flex_basis(relative(1.05 / 7.95)))
+        .child(network(r, &palette, cx).flex_basis(relative(1.2 / 7.95)))
+        .child(temperature(r, &palette, cx).flex_basis(relative(1.2 / 7.95)))
 }
 
 fn card(
@@ -580,7 +581,7 @@ pub fn trend(
 
 /// Trend lines over the last two minutes, stretched to the history available.
 /// Missing readings break a line instead of being drawn as zero.
-fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl IntoElement {
+fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> TrendChart {
     let end = history.last().map_or(0, |s| s.timestamp);
     let start = end.saturating_sub(TREND_MS);
     let lines: Vec<Line> = series
@@ -601,17 +602,50 @@ fn trends(history: &[Sample], series: Vec<Series>, unavailable: bool) -> impl In
             (points, s.color, s.fill)
         })
         .collect();
+    // Only the dual network chart needs raw rates for its tooltip. Single-series
+    // charts already carry their values; do not clone every sensor history per chart.
+    let history = if lines.len() == 2 {
+        history.to_vec()
+    } else {
+        Vec::new()
+    };
     TrendChart {
         lines,
         start,
         end,
         unavailable,
-        history: history.to_vec(),
+        history,
+        scale: Scale::Percent,
     }
+}
+
+enum Scale {
+    Percent,
+    Celsius,
+}
+
+pub fn temperature_trend(
+    history: &[Sample],
+    value: impl Fn(&Sample) -> Option<f64> + 'static,
+    color: Hsla,
+    unavailable: bool,
+) -> impl IntoElement {
+    let mut chart = trends(
+        history,
+        vec![Series {
+            value: Rc::new(move |sample| value(sample).map(|v| (v + 40.) / 190. * 100.)),
+            color,
+            fill: true,
+        }],
+        unavailable,
+    );
+    chart.scale = Scale::Celsius;
+    chart
 }
 
 #[derive(IntoElement)]
 struct TrendChart {
+    scale: Scale,
     lines: Vec<Line>,
     start: u64,
     end: u64,
@@ -646,6 +680,7 @@ impl RenderOnce for TrendChart {
             end,
             unavailable,
             history,
+            scale,
         } = self;
         let opacity = if unavailable { 0.4 } else { 1.0 };
         let state = window.use_state(cx, |_, cx| Inspection {
@@ -688,7 +723,13 @@ impl RenderOnce for TrendChart {
                     .0
                     .get(selected.unwrap_or(0))
                     .and_then(|(_, v)| *v)
-                    .map_or_else(|| "Unavailable".into(), |v| format!("{v:.1}%"))
+                    .map_or_else(
+                        || "Unavailable".into(),
+                        |v| match scale {
+                            Scale::Percent => format!("{v:.1}%"),
+                            Scale::Celsius => format!("{:.1}°C", v / 100. * 190. - 40.),
+                        },
+                    )
             };
             format!("{time_label} · {values}")
         });
@@ -910,6 +951,50 @@ pub(super) fn network_trend(
         ],
         unavailable,
     )
+}
+
+fn temperature(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
+    let hot = zentop_core::temperature::hottest(&r.stats.temperatures);
+    let accent = palette.charts[2];
+    card(
+        IconName::Cpu,
+        "Temperature",
+        accent,
+        None,
+        Resource::Temperature,
+        cx,
+    )
+    .p_3()
+    .child(headline(
+        if r.unavailable {
+            None
+        } else {
+            hot.and_then(|s| s.celsius).map(|v| format!("{v:.1}"))
+        },
+        "°C",
+        "Hottest sensor",
+        cx,
+    ))
+    .child(
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child(
+                hot.map_or("No readable sensor", |s| s.name.as_str())
+                    .to_string(),
+            ),
+    )
+    .child(div().flex_1())
+    .child(chart_block(
+        temperature_trend(
+            r.history,
+            |s| s.temperatures.values().filter_map(|v| *v).reduce(f64::max),
+            accent,
+            r.unavailable,
+        ),
+        "2m · −40–150°C".into(),
+        cx,
+    ))
 }
 
 #[cfg(test)]

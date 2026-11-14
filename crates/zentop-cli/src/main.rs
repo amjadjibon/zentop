@@ -27,6 +27,8 @@ struct Args {
 enum Command {
     /// Show system resources (the default command)
     System,
+    /// Show named hardware temperature sensors in Celsius
+    Temperature,
     /// List processes, busiest first
     Processes {
         /// Maximum number of processes to show
@@ -103,6 +105,24 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
                 )?;
                 writeln!(output, "Uptime: {}s", stats.uptime)?;
                 writeln!(output, "Processes: {}", snapshot.frame.processes.len())?;
+            }
+        }
+        Command::Temperature => {
+            let sensors = &snapshot.frame.stats.temperatures;
+            if args.json {
+                serde_json::to_writer_pretty(&mut *output, sensors)?;
+                writeln!(output)?;
+            } else {
+                for sensor in sensors {
+                    writeln!(
+                        output,
+                        "{}: {} · min {} · max {}",
+                        plain(&sensor.name),
+                        zentop_core::temperature::format(sensor.celsius),
+                        zentop_core::temperature::format(sensor.minimum),
+                        zentop_core::temperature::format(sensor.maximum)
+                    )?;
+                }
             }
         }
         Command::Processes { limit, sort } => {

@@ -11,14 +11,16 @@ pub enum Kind {
     Cpu,
     Memory,
     DiskFree,
+    Temperature,
 }
 impl Kind {
-    pub const ALL: [Self; 3] = [Self::Cpu, Self::Memory, Self::DiskFree];
+    pub const ALL: [Self; 4] = [Self::Cpu, Self::Memory, Self::DiskFree, Self::Temperature];
     pub fn label(self) -> &'static str {
         match self {
             Self::Cpu => "CPU usage",
             Self::Memory => "Memory usage",
             Self::DiskFree => "Disk free space",
+            Self::Temperature => "Temperature",
         }
     }
     fn index(self) -> usize {
@@ -26,6 +28,7 @@ impl Kind {
             Self::Cpu => 0,
             Self::Memory => 1,
             Self::DiskFree => 2,
+            Self::Temperature => 3,
         }
     }
 }
@@ -40,6 +43,7 @@ pub struct Settings {
     pub cpu: Rule,
     pub memory: Rule,
     pub disk_free: Rule,
+    pub temperature: Rule,
     pub sustain_secs: u64,
     pub cooldown_secs: u64,
     pub desktop_notifications: bool,
@@ -59,6 +63,10 @@ impl Default for Settings {
                 enabled: false,
                 threshold: 10,
             },
+            temperature: Rule {
+                enabled: false,
+                threshold: 90,
+            },
             sustain_secs: 30,
             cooldown_secs: 300,
             desktop_notifications: false,
@@ -71,6 +79,7 @@ impl Settings {
             Kind::Cpu => &self.cpu,
             Kind::Memory => &self.memory,
             Kind::DiskFree => &self.disk_free,
+            Kind::Temperature => &self.temperature,
         }
     }
     pub fn rule_mut(&mut self, kind: Kind) -> &mut Rule {
@@ -78,17 +87,17 @@ impl Settings {
             Kind::Cpu => &mut self.cpu,
             Kind::Memory => &mut self.memory,
             Kind::DiskFree => &mut self.disk_free,
+            Kind::Temperature => &mut self.temperature,
         }
     }
     pub fn enabled(&self) -> bool {
         Kind::ALL.iter().any(|k| self.rule(*k).enabled)
     }
     pub fn validate(&self) -> Result<(), String> {
-        if Kind::ALL
-            .iter()
-            .any(|k| !(1..=99).contains(&self.rule(*k).threshold))
-        {
-            return Err("Alert thresholds must be between 1% and 99%.".into());
+        if Kind::ALL.iter().any(|k| {
+            !(1..=if *k == Kind::Temperature { 150 } else { 99 }).contains(&self.rule(*k).threshold)
+        }) {
+            return Err("Alert thresholds must be 1–99% or 1–150°C for temperature.".into());
         }
         if !(1..=3600).contains(&self.sustain_secs) || !(1..=86400).contains(&self.cooldown_secs) {
             return Err(
@@ -113,7 +122,7 @@ struct State {
 #[derive(Default)]
 pub struct Center {
     settings: Settings,
-    states: [State; 3],
+    states: [State; 4],
     last_sequence: Option<u64>,
     last_sample: Option<Instant>,
     pub history: VecDeque<Alert>,
@@ -175,12 +184,17 @@ impl Center {
                     .total_cmp(&(b.available as f64 / b.total as f64))
                     .then_with(|| a.mount.cmp(&b.mount))
             });
+        let hot = crate::temperature::hottest(&stats.temperatures);
         let values = [
             (cpu, String::new()),
             (memory, String::new()),
             (
                 volume.map(|v| v.available as f64 / v.total as f64 * 100.0),
                 volume.map_or_else(String::new, |v| v.mount.clone()),
+            ),
+            (
+                hot.and_then(|s| s.celsius),
+                hot.map_or_else(String::new, |s| s.id.clone()),
             ),
         ];
         let mut fired = Vec::new();
@@ -217,6 +231,13 @@ impl Center {
                 format!(
                     "{}: {value:.1}% free (limit {}%) for {}s",
                     state.scope, rule.threshold, settings.sustain_secs
+                )
+            } else if kind == Kind::Temperature {
+                format!(
+                    "{}: {value:.1}°C (limit {}°C) for {}s",
+                    hot.map_or("Temperature", |s| s.name.as_str()),
+                    rule.threshold,
+                    settings.sustain_secs
                 )
             } else {
                 format!(

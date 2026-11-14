@@ -47,6 +47,7 @@ pub(super) fn fixture() -> App {
     let gib = 1073741824;
     let mut app = App::new(3000, "catppuccin").unwrap();
     let stats = SystemStats {
+        temperatures: vec![],
         cpu_usage: vec![12.5; 12],
         memory_total: 32 * gib,
         memory_used: 16 * gib,
@@ -119,6 +120,7 @@ pub(super) fn fixture() -> App {
     };
     let history = (0..41)
         .map(|i| Sample {
+            temperatures: BTreeMap::new(),
             timestamp: 3000 + i * 3000,
             interval: 3000,
             cpu: if i == 20 {
@@ -157,7 +159,7 @@ fn text(backend: &TestBackend) -> String {
 }
 
 #[test]
-fn dashboard_has_six_desktop_cards_and_controls() {
+fn dashboard_has_desktop_resource_cards_and_controls() {
     let mut app = fixture();
     let backend = render(&mut app, 160, 42);
     let screen = text(&backend);
@@ -377,7 +379,7 @@ fn alert_sheet_persists_rules_and_small_panels_render() {
     assert!(app.features.config.alerts.cpu.enabled);
     key(&mut app, KeyCode::Left);
     assert_eq!(app.features.config.alerts.cpu.threshold, 89);
-    for _ in 0..3 {
+    for _ in 0..4 {
         key(&mut app, KeyCode::Down);
     }
     key(&mut app, KeyCode::Right);
@@ -420,4 +422,28 @@ fn wrapped_saved_view_selection_remains_visible_in_a_narrow_terminal() {
     let backend = render(&mut app, 40, 16);
     assert_eq!(app.panel_index, 31);
     assert!(text(&backend).contains("Preset31"));
+}
+
+#[test]
+fn temperature_card_details_and_heat_controls_render_and_use_celsius() {
+    let mut app = fixture();
+    let current = std::sync::Arc::make_mut(&mut app.snapshot.as_mut().unwrap().frame);
+    current.stats.temperatures = vec![zentop_core::temperature::Sensor {
+        id: "cpu".into(),
+        name: "CPU package".into(),
+        kind: "CPU".into(),
+        source: "fixture".into(),
+        celsius: Some(65.),
+        minimum: Some(50.),
+        maximum: Some(70.),
+        critical: Some(100.),
+    }];
+    assert!(text(&render(&mut app, 180, 42)).contains("65.0°C"));
+    key(&mut app, KeyCode::Char('7'));
+    let screen = text(&render(&mut app, 100, 30));
+    assert!(
+        screen.contains("CPU package") && screen.contains("50.0°C") && screen.contains("70.0°C")
+    );
+    app.panel = Some(Panel::Alerts);
+    assert!(text(&render(&mut app, 100, 30)).contains("90°C"));
 }

@@ -158,7 +158,9 @@ fn alerts(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
         let rule = settings.rule(kind);
         let toggle = monitor.clone();
         let threshold = monitor.clone();
-        let options: &[u8] = if kind == Kind::DiskFree {
+        let options: &[u8] = if kind == Kind::Temperature {
+            &[60, 70, 80, 85, 90, 95, 100, 110, 120]
+        } else if kind == Kind::DiskFree {
             &[1, 2, 5, 10, 15, 20, 25, 30]
         } else {
             &[50, 60, 70, 75, 80, 85, 90, 95, 99]
@@ -187,11 +189,16 @@ fn alerts(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
                     Button::new(("alert-threshold", i))
                         .outline()
                         .label(format!(
-                            "{} {selected}%",
+                            "{} {selected}{}",
                             if kind == Kind::DiskFree {
                                 "At or below"
                             } else {
                                 "At or above"
+                            },
+                            if kind == Kind::Temperature {
+                                "°C"
+                            } else {
+                                "%"
                             }
                         ))
                         .dropdown_caret(true)
@@ -200,15 +207,24 @@ fn alerts(monitor: &Entity<Monitor>, cx: &App) -> AnyElement {
                                 let monitor = threshold.clone();
                                 let value = *value;
                                 menu = menu.item(
-                                    PopupMenuItem::new(format!("{value}%"))
-                                        .checked(value == selected)
-                                        .on_click(move |_, _, cx| {
+                                    PopupMenuItem::new(format!(
+                                        "{value}{}",
+                                        if kind == Kind::Temperature {
+                                            "°C"
+                                        } else {
+                                            "%"
+                                        }
+                                    ))
+                                    .checked(value == selected)
+                                    .on_click(
+                                        move |_, _, cx| {
                                             monitor.update(cx, |m, cx| {
                                                 let mut settings = m.features.config.alerts.clone();
                                                 settings.rule_mut(kind).threshold = value;
                                                 m.set_alerts(settings, cx);
                                             });
-                                        }),
+                                        },
+                                    ),
                                 );
                             }
                             menu

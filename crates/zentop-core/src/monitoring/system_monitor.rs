@@ -57,6 +57,7 @@ impl SystemMonitor {
         let load_average = System::load_average();
 
         SystemStats {
+            temperatures: vec![],
             details: ResourceDetails {
                 identity: self
                     .identity
