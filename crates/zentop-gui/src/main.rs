@@ -49,6 +49,7 @@ icon_assets!(
         Power,
         Settings,
         SlidersHorizontal,
+        Thermometer,
         Timer,
         X
     ]

@@ -956,15 +956,20 @@ pub(super) fn network_trend(
 fn temperature(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<gpui_kit::Div> {
     let hot = zentop_core::temperature::hottest(&r.stats.temperatures);
     let accent = palette.charts[2];
+    let count = r
+        .stats
+        .temperatures
+        .iter()
+        .filter(|s| s.celsius.is_some())
+        .count();
     card(
-        IconName::Cpu,
+        IconName::Thermometer,
         "Temperature",
         accent,
         None,
         Resource::Temperature,
         cx,
     )
-    .p_3()
     .child(headline(
         if r.unavailable {
             None
@@ -972,19 +977,34 @@ fn temperature(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<
             hot.and_then(|s| s.celsius).map(|v| format!("{v:.1}"))
         },
         "°C",
-        "Hottest sensor",
+        format!("Peak · {count} sensors"),
         cx,
     ))
     .child(
         div()
             .text_xs()
             .text_color(cx.theme().muted_foreground)
+            .truncate()
             .child(
-                hot.map_or("No readable sensor", |s| s.name.as_str())
+                hot.map_or("No readable sensors", |s| s.name.as_str())
                     .to_string(),
             ),
     )
     .child(div().flex_1())
+    .children(
+        [
+            ("Min", hot.and_then(|s| s.minimum)),
+            ("Max", hot.and_then(|s| s.maximum)),
+        ]
+        .into_iter()
+        .map(|(label, value)| {
+            h_flex()
+                .justify_between()
+                .text_xs()
+                .child(div().text_color(cx.theme().muted_foreground).child(label))
+                .child(zentop_core::temperature::format(value))
+        }),
+    )
     .child(chart_block(
         temperature_trend(
             r.history,
@@ -992,7 +1012,7 @@ fn temperature(r: &Readings, palette: &Palette, cx: &App) -> gpui_kit::Stateful<
             accent,
             r.unavailable,
         ),
-        "2m · −40–150°C".into(),
+        "2m · °C".into(),
         cx,
     ))
 }

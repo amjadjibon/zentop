@@ -17,6 +17,8 @@ use std::{cell::RefCell, rc::Rc};
 struct Selection {
     volume: String,
     gpu: String,
+    sensor: String,
+    show_unavailable: bool,
     unused: bool,
     interface_order: Vec<String>,
 }
@@ -55,7 +57,13 @@ impl Resource {
 
 pub fn open(resource: Resource, window: &mut Window, cx: &mut App) {
     let selection = Rc::new(RefCell::new(Selection::default()));
-    let search = cx.new(|cx| InputState::new(window, cx).placeholder("Search all interfaces…"));
+    let search = cx.new(|cx| {
+        InputState::new(window, cx).placeholder(if resource == Resource::Temperature {
+            "Search sensors…"
+        } else {
+            "Search all interfaces…"
+        })
+    });
     let subscription = cx.subscribe(&search, |_, event: &InputEvent, cx| {
         if matches!(event, InputEvent::Change) {
             cx.refresh_windows();
@@ -91,7 +99,7 @@ pub fn open(resource: Resource, window: &mut Window, cx: &mut App) {
                             .text_sm()
                             .text_color(cx.theme().muted_foreground)
                             .child(match resource {
-                                Resource::Temperature => "Hardware sensor readings in Celsius; missing readings stay unavailable.",
+                                Resource::Temperature => "Live hardware sensors · Celsius",
                                 Resource::Cpu => "Overall utilization and activity on each core.",
                                 Resource::Memory => "Physical RAM, allocation, and swap.",
                                 Resource::Gpu => "Driver-reported readings from this machine.",
@@ -213,47 +221,7 @@ fn content(
     let palette = theme::palette(cx);
     match resource {
         Resource::Temperature => {
-            let mut body = v_flex().gap_3().child(note("Session min/max reset on restart or sensor removal. Access and sensor availability vary by hardware and OS.",cx));
-            for sensor in &s.temperatures {
-                let id = sensor.id.clone();
-                body = body
-                    .child(heading(sensor.name.clone()))
-                    .child(rows(
-                        vec![
-                            ("Kind", sensor.kind.clone()),
-                            (
-                                "Current",
-                                zentop_core::temperature::format(if unavailable {
-                                    None
-                                } else {
-                                    sensor.celsius
-                                }),
-                            ),
-                            (
-                                "Session minimum",
-                                zentop_core::temperature::format(sensor.minimum),
-                            ),
-                            (
-                                "Session maximum",
-                                zentop_core::temperature::format(sensor.maximum),
-                            ),
-                            (
-                                "Critical (reported)",
-                                zentop_core::temperature::format(sensor.critical),
-                            ),
-                            ("Source", sensor.source.clone()),
-                        ],
-                        cx,
-                    ))
-                    .child(div().h(px(112.)).flex().child(stats::temperature_trend(
-                        history,
-                        move |s| s.temperatures.get(&id).copied().flatten(),
-                        palette.charts[2],
-                        unavailable,
-                    )))
-                    .child(note("2m · −40–150°C", cx));
-            }
-            body.into_any_element()
+            temperature_details(frame, history, unavailable, selection, search, cx)
         }
         Resource::Cpu => {
             let average = (!s.cpu_usage.is_empty()).then(|| {
@@ -936,4 +904,203 @@ fn gpu_details(
                         }),
                 ),
         )
+}
+
+fn temperature_details(
+    frame: &crate::sampling::Frame,
+    history: &[Sample],
+    unavailable: bool,
+    selection: &Rc<RefCell<Selection>>,
+    search: &gpui_kit::Entity<InputState>,
+    cx: &App,
+) -> AnyElement {
+    use zentop_core::temperature::{format, hottest};
+    let sensors = &frame.stats.temperatures;
+    let palette = theme::palette(cx);
+    if !sensors.iter().any(|s| s.id == selection.borrow().sensor) {
+        selection.borrow_mut().sensor = hottest(sensors)
+            .or_else(|| sensors.first())
+            .map_or_else(String::new, |s| s.id.clone());
+    }
+    let mut body = v_flex().gap_3();
+    if let Some(sensor) = sensors.iter().find(|s| s.id == selection.borrow().sensor) {
+        let id = sensor.id.clone();
+        let value = if unavailable { None } else { sensor.celsius };
+        body = body.child(
+            v_flex()
+                .gap_3()
+                .p_4()
+                .rounded(cx.theme().radius)
+                .border_1()
+                .border_color(cx.theme().border)
+                .bg(palette.card)
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .gap_3()
+                        .child(
+                            v_flex()
+                                .min_w_0()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .truncate()
+                                        .child(sensor.name.clone()),
+                                )
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(sensor.kind.clone()),
+                                ),
+                        )
+                        .child(
+                            div()
+                                .text_2xl()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .child(format(value)),
+                        ),
+                )
+                .child(
+                    h_flex().gap_4().children(
+                        [
+                            ("Session min", sensor.minimum),
+                            ("Session max", sensor.maximum),
+                            ("Critical", sensor.critical),
+                        ]
+                        .into_iter()
+                        .filter(|(label, value)| *label != "Critical" || value.is_some())
+                        .map(|(label, value)| {
+                            v_flex()
+                                .flex_1()
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(cx.theme().muted_foreground)
+                                        .child(label),
+                                )
+                                .child(div().text_sm().child(format(value)))
+                        }),
+                    ),
+                )
+                .child(div().h(px(96.)).flex().child(stats::temperature_trend(
+                    history,
+                    move |s| s.temperatures.get(&id).copied().flatten(),
+                    palette.charts[2],
+                    unavailable,
+                )))
+                .child(
+                    h_flex()
+                        .justify_between()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child("Last 2 minutes · −40–150°C")
+                        .child("Session ranges"),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(cx.theme().muted_foreground)
+                        .child(sensor.source.clone()),
+                ),
+        );
+    }
+    let query = search.read(cx).value().trim().to_lowercase();
+    let show_unavailable = selection.borrow().show_unavailable;
+    let readable = sensors.iter().filter(|s| s.celsius.is_some()).count();
+    let toggle = selection.clone();
+    body = body
+        .child(
+            h_flex().justify_between().child(heading("Sensors")).child(
+                div()
+                    .text_xs()
+                    .text_color(cx.theme().muted_foreground)
+                    .child(format!("{readable} of {} readable", sensors.len())),
+            ),
+        )
+        .child(Input::new(search).cleanable(true))
+        .child(
+            Checkbox::new("show-unavailable-sensors")
+                .label("Show unavailable sensors")
+                .checked(show_unavailable)
+                .on_click(move |checked, _, cx| {
+                    toggle.borrow_mut().show_unavailable = *checked;
+                    cx.refresh_windows();
+                }),
+        );
+    let visible: Vec<_> = sensors
+        .iter()
+        .filter(|sensor| {
+            (show_unavailable || sensor.celsius.is_some() || !query.is_empty())
+                && (sensor.name.to_lowercase().contains(&query)
+                    || sensor.kind.to_lowercase().contains(&query))
+        })
+        .collect();
+    let columns = |values: [String; 3]| {
+        h_flex().gap_2().children(
+            values
+                .into_iter()
+                .map(|value| div().w(px(52.)).text_right().child(value)),
+        )
+    };
+    body = body.child(
+        h_flex()
+            .justify_between()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child("Sensor")
+            .child(columns(["Now".into(), "Min".into(), "Max".into()])),
+    );
+    if visible.is_empty() {
+        body = body.child(note(
+            if query.is_empty() {
+                "No readable sensors. Show unavailable sensors to inspect hardware support."
+            } else {
+                "No sensors match this search."
+            },
+            cx,
+        ));
+    }
+    for sensor in visible {
+        let selected = selection.borrow().sensor == sensor.id;
+        let selection = selection.clone();
+        let id = sensor.id.clone();
+        let value = if unavailable { None } else { sensor.celsius };
+        let short = |v: Option<f64>| if v.is_some() { format(v) } else { "—".into() };
+        body = body.child(
+            h_flex()
+                .gap_2()
+                .py_1()
+                .border_b_1()
+                .border_color(cx.theme().border.opacity(0.5))
+                .when(selected, |this| this.bg(palette.charts[2].opacity(0.08)))
+                .child(
+                    Button::new(SharedString::from(format!("sensor-{}", sensor.id)))
+                        .ghost()
+                        .small()
+                        .flex_1()
+                        .min_w_0()
+                        .justify_start()
+                        .label(sensor.name.clone())
+                        .on_click(move |_, _, cx| {
+                            selection.borrow_mut().sensor = id.clone();
+                            cx.refresh_windows();
+                        }),
+                )
+                .child(div().text_xs().child(columns([
+                    short(value),
+                    short(sensor.minimum),
+                    short(sensor.maximum),
+                ]))),
+        );
+    }
+    body.child(
+        div()
+            .text_xs()
+            .text_color(cx.theme().muted_foreground)
+            .child("Ranges reset on restart. Sensor availability depends on your hardware and OS."),
+    )
+    .into_any_element()
 }
