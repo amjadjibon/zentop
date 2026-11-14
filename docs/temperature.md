@@ -2,7 +2,7 @@
 
 The **Temperature** resource card shows the hottest readable hardware sensor and a two-minute trend on a −40…150°C scale. Open its detail sheet to see individual sensor names, current readings, session minimum/maximum, source, critical limit (when reported), and the selected sensor’s trend. Search the compact sensor list, click a name to inspect it, or enable **Show unavailable sensors** to inspect missing readings. In the TUI, press **7** for details.
 
-All readings use Celsius. A missing, invalid or unsupported reading is **Unavailable**, never zero. CPU, GPU and storage categories remain visible even when no sensor is exposed. Hardware labels are preserved: a PMU sensor is not assumed to be a CPU sensor. The overview can therefore show a battery, storage or other sensor as the hottest reading.
+All readings use Celsius. A missing, invalid or unsupported reading is **Unavailable**, never zero. Unavailable CPU, GPU and storage entries remain accessible through **Show unavailable sensors** in the GUI, and remain listed in TUI and CLI reports. Hardware labels are preserved: a PMU sensor is not assumed to be a CPU sensor. The overview can therefore show a battery, storage or other sensor as the hottest reading.
 
 ## Availability
 
