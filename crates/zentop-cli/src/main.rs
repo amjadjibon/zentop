@@ -29,6 +29,11 @@ enum Command {
     System,
     /// Show named hardware temperature sensors in Celsius
     Temperature,
+    /// Inspect one process's TCP connections and bound UDP sockets
+    Connections {
+        #[arg(value_parser = clap::value_parser!(u32).range(1..))]
+        pid: u32,
+    },
     /// List processes, busiest first
     Processes {
         /// Maximum number of processes to show
@@ -83,8 +88,12 @@ fn capture() -> io::Result<Snapshot> {
 }
 
 fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
+    if let Some(Command::Connections { pid }) = &args.command {
+        return connection_report(*pid, args.json, output);
+    }
     let snapshot = capture()?;
     match args.command.unwrap_or(Command::System) {
+        Command::Connections { pid } => connection_report(pid, args.json, output)?,
         Command::System => {
             let stats = &snapshot.frame.stats;
             if args.json {
@@ -172,6 +181,49 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
 // Process names are OS data and may contain terminal escape sequences.
 fn plain(value: &str) -> String {
     value.chars().filter(|c| !c.is_control()).collect()
+}
+
+fn connection_report(pid: u32, json: bool, output: &mut impl Write) -> io::Result<()> {
+    let start = zentop_core::connections::process_start_time(pid).map_err(io::Error::other)?;
+    let report = zentop_core::connections::collect(pid, start).map_err(io::Error::other)?;
+    if json {
+        serde_json::to_writer_pretty(&mut *output, &report)?;
+        writeln!(output)?;
+    } else {
+        writeln!(
+            output,
+            "PID {pid} · {} sockets · snapshot {}",
+            report.connections.len(),
+            report.captured_at
+        )?;
+        for c in &report.connections {
+            writeln!(
+                output,
+                "{} {:<12} {} → {}",
+                c.protocol.label(),
+                c.state,
+                c.local,
+                c.remote_label()
+            )?;
+        }
+        if report.connections.is_empty() {
+            writeln!(output, "No accessible connections reported.")?;
+        }
+        if report.truncated {
+            writeln!(output, "Showing the first 512 sockets; more were reported.")?;
+        }
+        if report.partial {
+            writeln!(
+                output,
+                "Some sockets could not be read; results are partial."
+            )?;
+        }
+        writeln!(
+            output,
+            "Permissions may hide sockets. UDP peer addresses are unavailable."
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

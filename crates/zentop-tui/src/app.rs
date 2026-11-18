@@ -122,7 +122,7 @@ impl App {
 
     pub fn run(&mut self, terminal: &mut DefaultTerminal, sampler: &Sampler) -> io::Result<()> {
         let mut dirty = true;
-        let mut demand = (false, false);
+        let mut demand = (false, false, None);
         loop {
             if self.disk.tick() {
                 dirty = true;
@@ -185,13 +185,17 @@ impl App {
                         }
                         let requested = (
                             self.columns.contains(&Column::Gpu) || self.filters.gpu.enabled,
-                            view::has_port_query(&self.search)
-                                || matches!(self.panel, Some(Panel::Process(_))),
+                            view::has_port_query(&self.search),
+                            match self.panel {
+                                Some(Panel::Process(id)) => Some(id),
+                                _ => None,
+                            },
                         );
                         if requested != demand {
                             sampler.send(Command::Demand {
                                 gpu: requested.0,
                                 ports: requested.1,
+                                connections: requested.2,
                             })?;
                             demand = requested;
                         }

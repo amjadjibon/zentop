@@ -13,7 +13,11 @@ use zentop_core::{
 pub enum Command {
     Pause(bool),
     Interval(u64),
-    Demand { gpu: bool, ports: bool },
+    Demand {
+        gpu: bool,
+        ports: bool,
+        connections: Option<zentop_core::process_view::Identity>,
+    },
     Stop,
 }
 
@@ -34,6 +38,7 @@ impl Sampler {
                 let mut hub = Hub::default();
                 hub.interval = interval;
                 let mut ports = false;
+                let mut connections = None;
                 let mut due = Instant::now();
                 loop {
                     if Instant::now() >= due {
@@ -41,6 +46,17 @@ impl Sampler {
                         if ports {
                             if let Ok(snapshot) = &mut result {
                                 snapshot.attach_ports();
+                            }
+                        }
+                        if let (Some(identity), Ok(snapshot)) = (connections, &mut result) {
+                            if !snapshot.paused {
+                                snapshot.connections =
+                                    Some(zentop_core::connections::Observation {
+                                        identity,
+                                        result: zentop_core::connections::collect(
+                                            identity.0, identity.1,
+                                        ),
+                                    });
                             }
                         }
                         if let Err(mpsc::TrySendError::Disconnected(_)) =
@@ -62,9 +78,11 @@ impl Sampler {
                         Ok(Command::Demand {
                             gpu,
                             ports: requested,
+                            connections: requested_connections,
                         }) => {
                             hub.process_gpu = gpu;
                             ports = requested;
+                            connections = requested_connections;
                             due = Instant::now();
                         }
                         Ok(Command::Stop) | Err(RecvTimeoutError::Disconnected) => break,

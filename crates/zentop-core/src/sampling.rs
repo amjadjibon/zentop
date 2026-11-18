@@ -145,6 +145,7 @@ impl Default for Hub {
     }
 }
 pub struct Snapshot {
+    pub connections: Option<crate::connections::Observation>,
     pub port_error: Option<String>,
     pub frame: Arc<Frame>,
     pub history: Vec<Sample>,
@@ -190,6 +191,7 @@ impl Hub {
             }
         }
         Ok(Snapshot {
+            connections: None,
             port_error: None,
             frame: self.frame.clone().ok_or_else(|| {
                 self.error

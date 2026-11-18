@@ -5,6 +5,7 @@ mod details;
 mod disktree;
 mod main_window;
 mod monitor;
+mod process_connections;
 mod process_view;
 mod resource_details;
 mod settings;

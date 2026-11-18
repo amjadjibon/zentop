@@ -135,6 +135,7 @@ pub(super) fn fixture() -> App {
         })
         .collect();
     app.snapshot = Some(Snapshot {
+        connections: None,
         frame: Arc::new(frame),
         history,
         paused: false,
@@ -446,4 +447,57 @@ fn temperature_card_details_and_heat_controls_render_and_use_celsius() {
     );
     app.panel = Some(Panel::Alerts);
     assert!(text(&render(&mut app, 100, 30)).contains("90°C"));
+}
+
+#[test]
+fn connection_inspector_displays_endpoints_and_rejects_stale_identity_results() {
+    use zentop_core::connections::{Connection, Observation, Protocol, Report};
+    let mut app = fixture();
+    let id = app.selected_identity().unwrap();
+    key(&mut app, KeyCode::Enter);
+    let report = Report {
+        pid: id.0,
+        start_time: id.1,
+        captured_at: 1000,
+        partial: true,
+        truncated: true,
+        connections: vec![Connection {
+            protocol: Protocol::Tcp,
+            local: "127.0.0.1:50001".parse().unwrap(),
+            remote: Some("[::1]:443".parse().unwrap()),
+            state: "ESTABLISHED".into(),
+        }],
+    };
+    app.snapshot.as_mut().unwrap().connections = Some(Observation {
+        identity: id,
+        result: Ok(report),
+    });
+    let screen = text(&render(&mut app, 120, 48));
+    for expected in [
+        "ESTABLISHED",
+        "127.0.0.1:50001",
+        "[::1]:443",
+        "results are partial",
+        "first 512",
+    ] {
+        assert!(screen.contains(expected), "{screen}");
+    }
+    app.snapshot
+        .as_mut()
+        .unwrap()
+        .connections
+        .as_mut()
+        .unwrap()
+        .identity
+        .1 += 1;
+    let screen = text(&render(&mut app, 120, 48));
+    assert!(!screen.contains("50001"));
+    assert!(screen.contains("Checking connections"));
+    app.snapshot.as_mut().unwrap().connections = Some(Observation {
+        identity: id,
+        result: Err("Connection permission denied".into()),
+    });
+    assert!(text(&render(&mut app, 120, 48)).contains("Connection permission denied"));
+    app.snapshot.as_mut().unwrap().paused = true;
+    assert!(text(&render(&mut app, 120, 48)).contains("Resume monitoring to refresh connections"));
 }

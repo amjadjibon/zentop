@@ -50,3 +50,36 @@ fn temperature_json_has_named_nullable_celsius_readings() {
         );
     }
 }
+
+#[test]
+fn connections_json_reports_live_endpoints_without_process_secrets() {
+    use std::net::{TcpListener, TcpStream, UdpSocket};
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (_server, _) = listener.accept().unwrap();
+    let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_zentop-cli"))
+        .args(["connections", &std::process::id().to_string(), "--json"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(report["pid"], std::process::id());
+    let rows = report["connections"].as_array().unwrap();
+    assert!(rows.len() <= 512);
+    assert!(rows
+        .iter()
+        .any(|r| r["local"] == client.local_addr().unwrap().to_string()
+            && r["remote"] == client.peer_addr().unwrap().to_string()
+            && r["state"] == "ESTABLISHED"));
+    assert!(rows
+        .iter()
+        .any(|r| r["local"] == udp.local_addr().unwrap().to_string()
+            && r["remote"].is_null()
+            && r["protocol"] == "UDP"));
+    assert!(!report.to_string().contains("environ"));
+}

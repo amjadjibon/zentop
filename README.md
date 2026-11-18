@@ -18,6 +18,7 @@
 - **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
 - **Resource alerts.** Opt into sustained CPU, memory, temperature and low-disk-space rules, with cooldowns, recent history and optional desktop notifications.
 - **Saved monitoring views.** Save search, filters, sort, columns, List/Tree and pinned commands; load the same presets in the GUI or TUI.
+- **Process connections.** Inspect TCP peers, states and listening addresses, plus bound UDP sockets, with protocol filters and address copying. [Connection inspection](docs/connections.md).
 - **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
 - **Explore disk usage.** Open DiskTree in the GUI or TUI for a nested treemap, category colors, Size/Files/Age modes, hidden/apparent-size controls and a read-only marked review list. See the [DiskTree guide](docs/disktree.md).
 - **Seven live resource cards.** CPU (per core), memory, GPU, storage, system load, network and [temperature](docs/temperature.md), each with a two-minute trend you can hover or step through with the arrow keys, and a detail sheet one click away.

@@ -10,7 +10,7 @@ Use **⌘F** (macOS) or **Ctrl+F** to focus search. Search by name, command, or 
 
 Choose **List** for individual processes or **Tree** for families. Tree search retains parents and expands matching branches; family CPU and RAM continue to include hidden descendants. CPU may exceed 100% across cores, and shared pages can overlap in summed family RAM. Expanded families stay together when paging.
 
-Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. The details sheet lists the ports a process listens on (TCP) or has bound (UDP), and whether each accepts connections from other machines or only from this computer; ports are checked when the sheet opens. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
+Pin a process with the pin action, inspect it with the information action, or use the end action to request termination after confirmation. The details sheet includes **Network connections**: TCP local/remote endpoints and states, plus bound UDP sockets. Filter by TCP/UDP, copy an address, or choose **Refresh** for a new snapshot. [Connection inspection](connections.md) explains OS limits. **Columns** chooses what the table shows; process names always stay visible. Choose rows per page and move between pages below the table. The Actions column stays pinned on the right while the other columns stretch with the window and scroll sideways when they do not fit.
 
 ## Saved monitoring views
 
@@ -94,8 +94,8 @@ Settings → Appearance and the title-bar palette menu share all 24 original the
 
 Run `cargo run -p zentop-cli -- system` for a system summary, or
 `cargo run -p zentop-cli -- processes --sort memory --limit 10` for a process list.
-Add `--json` for machine-readable output. Reports take two observations, 1.5
-seconds apart, to establish CPU and network rates.
+Add `--json` for machine-readable output. System and process reports take two observations, 1.5
+seconds apart, to establish CPU and network rates. `cargo run -p zentop-cli -- connections PID --json` takes one on-demand socket snapshot for that PID.
 
 Run `cargo run -p zentop-tui` for a terminal dashboard with the GUI's seven
 resource cards: CPU, Memory, GPU, Storage, System, Network and Temperature. Wide terminals
@@ -110,8 +110,7 @@ readings. Press **1–7** for resource details.
 - **t**: List/Tree; left/right collapses/expands families. Tree totals and search
   follow the same rules as the GUI, including app-owned helpers on macOS.
 - **Space**: pin/unpin a command. **Enter** opens process details; **e** reveals
-  environment values in that sheet. Port collection runs only for port searches
-  or an open process sheet; paused port lookups ask you to resume.
+  environment values in that sheet. Port search collection runs only for port searches. The open process sheet refreshes connections at the sampling interval; pause suspends these updates.
 - **c / m**: sort by CPU/RAM. **[ / ]** chooses a sort column; **r** reverses it.
   **v** chooses columns; narrow terminals hide columns that do not fit.
 - **a**: alert rules and recent history. Up/down selects; Space toggles; left/right

@@ -831,21 +831,6 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
                 ),
                 String::new(),
                 format!(
-                    "Local ports: {}",
-                    if p.ports.is_empty() {
-                        "None reported (permissions may hide sockets)".into()
-                    } else {
-                        p.ports
-                            .iter()
-                            .map(u16::to_string)
-                            .collect::<Vec<_>>()
-                            .join(", ")
-                    }
-                ),
-                "Ports include TCP listeners and bound UDP sockets; unavailable while paused."
-                    .into(),
-                String::new(),
-                format!(
                     "Environment variables ({}) · e to {}",
                     p.environ.len(),
                     if app.environment { "hide" } else { "reveal" }
@@ -853,6 +838,23 @@ fn panel_text(app: &App, panel: Panel) -> (String, Vec<String>) {
             ]);
             if app.environment {
                 lines.extend(p.environ.iter().cloned());
+            }
+            lines.extend([String::new(), "Network connections".into()]);
+            if snapshot.paused {
+                lines.push("Resume monitoring to refresh connections.".into());
+            } else {
+                match snapshot.connections.as_ref().filter(|c| c.identity == id).map(|c| &c.result) {
+                    None => lines.push("Checking connections…".into()),
+                    Some(Err(error)) => lines.push(error.clone()),
+                    Some(Ok(report)) => {
+                        lines.push(format!("Snapshot {} · {} sockets", view::format_timestamp(report.captured_at), report.connections.len()));
+                        if report.truncated { lines.push("Showing the first 512 sockets; more were reported.".into()); }
+                        if report.partial { lines.push("Some sockets could not be read; results are partial.".into()); }
+                        if report.connections.is_empty() { lines.push("No accessible connections reported.".into()); }
+                        lines.extend(report.connections.iter().map(|c| format!("{} {}   {} → {}", c.protocol.label(), c.state, c.local, c.remote_label())));
+                        lines.push("Permissions may hide sockets. UDP peer addresses are unavailable.".into());
+                    }
+                }
             }
             ("Process details".into(), lines)
         }
