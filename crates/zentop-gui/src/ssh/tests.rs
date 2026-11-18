@@ -67,6 +67,9 @@ fn dead(pid_path: &Path) -> bool {
 fn fake_ssh_retries_retains_readings_and_reaps_on_disconnect() {
     let fixture = Fixture::fake_ssh(&format!(
         r#"
+case "$*" in
+  *'stream --protocol 2') echo "invalid value '2' for '--protocol <PROTOCOL>': 2 is not in 1..=1" >&2; exit 2 ;;
+esac
 printf '%s\n' "$@" > args
 printf '%s\n' '{LINE}'
 if [ ! -f first ]; then
@@ -144,9 +147,12 @@ fn fake_ssh_rejects_unexpected_sequence_and_limited_reader_rejects_flood() {
         LINE.replace("\"sequence\":1", "\"sequence\":2")
     ));
     smol::block_on(async {
-        let error = read_session(fixture.program().as_os_str(), "fixture", |_| {
-            panic!("accepted wrong sequence")
-        })
+        let error = read_version(
+            fixture.program().as_os_str(),
+            "fixture",
+            ssh_stream::VERSION,
+            |_| panic!("accepted wrong sequence"),
+        )
         .await
         .unwrap_err();
         assert!(error.contains("out of sequence"), "{error}");

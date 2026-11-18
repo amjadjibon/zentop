@@ -3,7 +3,9 @@
 Open **SSH Hosts** from the Zentop desktop title bar or the **View** menu.
 The window displays CPU, RAM, disk usage, uptime, and reading age for Local and
 up to 12 configured remote machines. Select a remote host to see up to eight
-recent readings, each showing up to 24 processes ranked by CPU.
+recent readings, each showing up to 24 processes ranked by CPU and a Docker
+container panel when the guest reports it. Linux threads are grouped under their
+process by the collector.
 
 ## Set up a host
 
@@ -19,7 +21,7 @@ recent readings, each showing up to 24 processes ranked by CPU.
    Substitute your alias for `home-server`.
 
    ```sh
-   ssh -o BatchMode=yes -o StrictHostKeyChecking=yes home-server 'zentop-cli stream --protocol 1 --samples 1'
+   ssh -o BatchMode=yes -o StrictHostKeyChecking=yes home-server 'zentop-cli stream --protocol 2 --samples 1'
    ```
 
 4. In Zentop, choose **Add host**, enter a display name and the destination,
@@ -60,7 +62,7 @@ Host lab-vm
 ## Connections and readings
 
 - Zentop requires an already-trusted host key for the destination and runs SSH in batch mode. It
-  invokes the fixed command `zentop-cli stream --protocol 1` with agent
+  invokes the fixed command `zentop-cli stream --protocol 2` with agent
   forwarding, other SSH forwards, and SSH connection sharing disabled.
 - Readings normally arrive every three seconds. Disk usage follows Zentop's
   existing storage metric, using the root filesystem on Unix and aggregate
@@ -84,9 +86,23 @@ If the first reading never arrives, check OpenSSH availability, host-key
 trust, non-interactive authentication and the remote PATH. Remote shell
 startup output must leave stdout clear for the JSON stream.
 
+## Docker health
+
+On Linux, the collector checks the local `/var/run/docker.sock` using `docker
+container ls` roughly every 15 seconds. The normal SSH user needs access to
+that socket and the Docker CLI on its PATH. The panel shows the 64 newest
+containers, including stopped containers, with unhealthy or dead rows first.
+The health column follows Docker’s health check result when available.
+
+A failed or slow Docker query shows **Docker status unavailable** while CPU,
+RAM, disk, uptime, and process readings continue. The dashboard reconnects in
+protocol 1 mode if the installed collector only supports protocol 1. Updating
+that collector enables Docker health.
+
 ## Stream protocol
 
-Protocol 1 writes newline-terminated JSON objects to stdout. The CLI warms up
+Protocols 1 and 2 write newline-terminated JSON objects to stdout. Protocol 2
+adds a bounded `docker` field to each reading. The CLI warms up
 the shared sampler before the first reading, flushes each line, and exits after
 1,200 samples or when its output pipe closes. The dashboard renews completed
 sessions. Use `--samples 1` through `--samples 1200` to end a diagnostic run

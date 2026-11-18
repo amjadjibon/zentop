@@ -19,7 +19,7 @@ use zentop_core::{
     process_view::{format_bytes, format_uptime},
     sampling,
     ssh_hosts::{Host, Store},
-    ssh_stream::{Metrics, MAX_PROCESSES},
+    ssh_stream::{ContainerHealth, ContainerState, Docker, Metrics, MAX_PROCESSES},
 };
 
 const WIDTHS: [f32; 5] = [80., 128., 128., 100., 156.];
@@ -340,13 +340,13 @@ impl SshHosts {
                             .truncate()
                             .text_lg()
                             .font_weight(FontWeight::SEMIBOLD)
-                            .child(format!("{} processes", remote.host.name)),
+                            .child(remote.host.name.clone()),
                     )
                     .child(
                         div()
                             .text_xs()
                             .text_color(cx.theme().muted_foreground)
-                            .child(format!("Top {MAX_PROCESSES} by CPU · recent readings")),
+                            .child("Recent readings"),
                     ),
             )
             .child(
@@ -424,7 +424,16 @@ impl SshHosts {
                     })),
             );
         }
-        detail.child(timeline).child(process_table(reading, cx))
+        detail
+            .child(timeline)
+            .child(docker_panel(reading, cx))
+            .child(
+                div()
+                    .text_sm()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child(format!("Top {MAX_PROCESSES} processes by CPU")),
+            )
+            .child(process_table(reading, cx))
     }
 }
 
@@ -645,6 +654,53 @@ fn host_row(
                     )
                 }),
         )
+}
+
+fn docker_panel(reading: &Reading, cx: &App) -> impl IntoElement {
+    let muted = cx.theme().muted_foreground;
+    let palette = theme::palette(cx);
+    let mut panel = v_flex()
+        .gap_2()
+        .p_3()
+        .rounded(cx.theme().radius)
+        .border_1()
+        .border_color(cx.theme().border)
+        .bg(palette.card)
+        .child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .child("Docker containers"),
+        );
+    let note = |message| div().text_xs().text_color(muted).child(message);
+    match &reading.sample.docker {
+        None => panel.child(note("Update zentop-cli on this host to see container health.")),
+        Some(Docker::Unavailable) => panel.child(note("Docker status unavailable. Zentop needs the Docker CLI and access to the Linux host’s local Docker socket.")),
+        Some(Docker::Available { containers, .. }) if containers.is_empty() => panel.child(note("No containers on this host.")),
+        Some(Docker::Available { containers, truncated }) => {
+            let mut rows: Vec<_> = containers.iter().collect();
+            rows.sort_by_key(|container| {
+                let priority = match (container.health, container.state) {
+                    (Some(ContainerHealth::Unhealthy), _) | (_, ContainerState::Dead) => 0,
+                    (_, ContainerState::Restarting | ContainerState::Exited | ContainerState::Paused) => 1,
+                    _ => 2,
+                };
+                (priority, container.name.as_str())
+            });
+            if *truncated {
+                panel = panel.child(note("Showing the 64 newest containers."));
+            }
+            panel.child(v_flex().id("ssh-docker-containers").max_h(px(220.)).overflow_y_scroll()
+                .children(rows.into_iter().map(|container| {
+                    let unhealthy = container.health == Some(ContainerHealth::Unhealthy);
+                    h_flex().gap_3().py_1().border_t_1().border_color(cx.theme().border).text_xs()
+                        .child(div().min_w_0().flex_1().truncate().child(container.name.clone()))
+                        .child(div().w(px(100.)).flex_shrink_0().child(container.state.label()))
+                        .child(div().w(px(110.)).flex_shrink_0().text_color(if unhealthy { palette.danger } else { muted })
+                            .child(container.health.map_or("—", ContainerHealth::label)))
+                })))
+        }
+    }
 }
 
 fn process_table(reading: &Reading, cx: &App) -> impl IntoElement {

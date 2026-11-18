@@ -199,15 +199,12 @@ async fn supervise(program: &OsStr, destination: &str, state: &Shared, controls:
     }
 }
 
-fn ssh_command(program: &OsStr, destination: &str) -> Command {
+fn ssh_command(program: &OsStr, destination: &str, version: u32) -> Command {
     let mut command = Command::new(program);
     command
         .args(SSH_OPTIONS)
         .arg(destination)
-        .arg(format!(
-            "zentop-cli stream --protocol {}",
-            ssh_stream::VERSION
-        ))
+        .arg(format!("zentop-cli stream --protocol {version}"))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
@@ -225,7 +222,27 @@ async fn read_session(
     destination: &str,
     mut on_sample: impl FnMut(Sample),
 ) -> Result<(), String> {
-    let mut child = ssh_command(program, destination)
+    if !read_version(
+        program,
+        destination,
+        ssh_stream::DOCKER_VERSION,
+        &mut on_sample,
+    )
+    .await?
+    {
+        read_version(program, destination, ssh_stream::VERSION, on_sample).await?;
+    }
+    Ok(())
+}
+
+// False indicates an older collector rejected the version before emitting any data.
+async fn read_version(
+    program: &OsStr,
+    destination: &str,
+    version: u32,
+    mut on_sample: impl FnMut(Sample),
+) -> Result<bool, String> {
+    let mut child = ssh_command(program, destination, version)
         .spawn()
         .map_err(|e| format!("Could not start OpenSSH: {e}"))?;
     let mut stdout = BufReader::new(child.stdout.take().ok_or("OpenSSH stdout unavailable.")?);
@@ -241,7 +258,7 @@ async fn read_session(
                 diagnostic.extend_from_slice(&buffer[..keep]);
                 yield_now().await;
             }
-            pending::<Result<(), String>>().await
+            pending::<Result<bool, String>>().await
         },
         async {
             let mut expected = 1;
@@ -263,7 +280,13 @@ async fn read_session(
                     if expected > ssh_stream::MAX_SAMPLES
                         && exited.is_some_and(|status| status.success())
                     {
-                        return Ok(());
+                        return Ok(true);
+                    }
+                    if expected == 1
+                        && version == ssh_stream::DOCKER_VERSION
+                        && exited.is_some_and(|status| status.code() == Some(2))
+                    {
+                        return Ok(false);
                     }
                     return Err(exited.map_or_else(
                         || "SSH stream closed.".into(),
@@ -277,6 +300,9 @@ async fn read_session(
                     ));
                 }
                 let sample = ssh_stream::decode_sample(&line).map_err(|e| e.to_string())?;
+                if sample.version != version {
+                    return Err("SSH collector replied with a different protocol version.".into());
+                }
                 if sample.sequence != expected {
                     return Err("SSH readings arrived out of sequence.".into());
                 }
@@ -287,6 +313,15 @@ async fn read_session(
         },
     )
     .await;
+    let result = match result {
+        Ok(false)
+            if !String::from_utf8_lossy(&diagnostic)
+                .contains("invalid value '2' for '--protocol <PROTOCOL>': 2 is not in 1..=1") =>
+        {
+            Err("SSH command rejected the stream arguments.".into())
+        }
+        other => other,
+    };
     result.map_err(|mut error| {
         let text = String::from_utf8_lossy(&diagnostic);
         let flat = text

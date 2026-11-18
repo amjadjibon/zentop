@@ -9540,6 +9540,7 @@ dependencies = [
  "clap",
  "serde",
  "serde_json",
+ "smol",
  "zentop-core",
 ]
 

@@ -4,6 +4,8 @@ use serde::{Deserialize, Serialize};
 use std::{io, time::Duration};
 
 pub const VERSION: u32 = 1;
+pub const DOCKER_VERSION: u32 = 2;
+pub const MAX_CONTAINERS: usize = 64;
 pub const INTERVAL: Duration = Duration::from_secs(3);
 pub const MAX_SAMPLES: u32 = 1200;
 pub const MAX_LINE_BYTES: usize = 32 * 1024;
@@ -42,6 +44,68 @@ pub struct ProcessReading {
     pub memory_bytes: u64,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case", deny_unknown_fields, tag = "status")]
+pub enum Docker {
+    Unavailable,
+    Available {
+        containers: Vec<Container>,
+        truncated: bool,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Container {
+    pub name: String,
+    pub state: ContainerState,
+    pub health: Option<ContainerHealth>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerState {
+    Running,
+    Exited,
+    Created,
+    Paused,
+    Restarting,
+    Removing,
+    Dead,
+    Unknown,
+}
+impl ContainerState {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Running => "Running",
+            Self::Exited => "Stopped",
+            Self::Created => "Created",
+            Self::Paused => "Paused",
+            Self::Restarting => "Restarting",
+            Self::Removing => "Removing",
+            Self::Dead => "Dead",
+            Self::Unknown => "Unknown",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ContainerHealth {
+    Starting,
+    Healthy,
+    Unhealthy,
+}
+impl ContainerHealth {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Starting => "Starting",
+            Self::Healthy => "Healthy",
+            Self::Unhealthy => "Unhealthy",
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Sample {
@@ -50,6 +114,8 @@ pub struct Sample {
     pub captured_at_ms: u64,
     pub metrics: Metrics,
     pub processes: Vec<ProcessReading>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub docker: Option<Docker>,
 }
 
 impl Sample {
@@ -76,6 +142,7 @@ impl Sample {
             sequence,
             captured_at_ms: frame.captured_at,
             metrics: Metrics::from(&frame.stats),
+            docker: None,
             processes: busiest
                 .into_iter()
                 .map(|process| ProcessReading {
@@ -111,14 +178,15 @@ pub fn decode_sample(line: &[u8]) -> io::Result<Sample> {
         return Err(invalid("SSH stream ended during a reading."));
     }
     let mut sample: Sample = serde_json::from_slice(line).map_err(|_| {
-        invalid("Invalid SSH reading. Check that the host runs zentop-cli stream v1.")
+        invalid("Invalid SSH reading. Check that the host runs a compatible zentop-cli.")
     })?;
-    if sample.version != VERSION {
+    if !matches!(sample.version, VERSION | DOCKER_VERSION) {
         return Err(invalid(
             "Unsupported SSH stream version. Install a compatible zentop-cli.",
         ));
     }
-    if !(1..=MAX_SAMPLES).contains(&sample.sequence)
+    if (sample.version == DOCKER_VERSION) != sample.docker.is_some()
+        || !(1..=MAX_SAMPLES).contains(&sample.sequence)
         || sample
             .metrics
             .cpu_percent
@@ -136,6 +204,14 @@ pub fn decode_sample(line: &[u8]) -> io::Result<Sample> {
     for process in &mut sample.processes {
         process.name = safe_display(&process.name, 80);
     }
+    if let Some(Docker::Available { containers, .. }) = &mut sample.docker {
+        if containers.len() > MAX_CONTAINERS {
+            return Err(invalid("SSH reading contained too many containers."));
+        }
+        for container in containers {
+            container.name = safe_display(&container.name, 64);
+        }
+    }
     Ok(sample)
 }
 
@@ -148,7 +224,7 @@ mod tests {
         assert!(decode_sample(b"{}").is_err());
         let large = vec![b'x'; MAX_LINE_BYTES + 1];
         assert!(decode_sample(&large).is_err());
-        let sample = br#"{"version":2,"sequence":1,"captured_at_ms":0,"metrics":{"cpu_percent":null,"memory_used":0,"memory_total":0,"disk_used":0,"disk_total":0,"uptime_seconds":0},"processes":[]}
+        let sample = br#"{"version":99,"sequence":1,"captured_at_ms":0,"metrics":{"cpu_percent":null,"memory_used":0,"memory_total":0,"disk_used":0,"disk_total":0,"uptime_seconds":0},"processes":[]}
 "#;
         assert!(decode_sample(sample)
             .unwrap_err()

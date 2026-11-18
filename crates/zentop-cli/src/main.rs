@@ -1,4 +1,7 @@
 //! One-shot system and process reports backed by the shared sampler.
+#[cfg(target_os = "linux")]
+mod docker;
+
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
 use std::{
@@ -31,7 +34,7 @@ enum Command {
     /// Stream bounded JSON Lines readings for SSH Hosts
     Stream {
         /// Wire protocol version
-        #[arg(long, value_parser = clap::value_parser!(u32).range(i64::from(ssh_stream::VERSION)..=i64::from(ssh_stream::VERSION)))]
+        #[arg(long, value_parser = clap::value_parser!(u32).range(i64::from(ssh_stream::VERSION)..=i64::from(ssh_stream::DOCKER_VERSION)))]
         protocol: u32,
         /// End the stream after this many readings
         #[arg(long, default_value_t = ssh_stream::MAX_SAMPLES, value_parser = clap::value_parser!(u32).range(1..=i64::from(ssh_stream::MAX_SAMPLES)))]
@@ -189,7 +192,7 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
 }
 
 fn stream(protocol: u32, samples: u32, output: &mut impl Write) -> io::Result<()> {
-    debug_assert_eq!(protocol, ssh_stream::VERSION);
+    let mut docker = None;
     let state = AppState::new();
     let mut hub = Hub::default();
     hub.interval = ssh_stream::INTERVAL.as_millis() as u64;
@@ -201,8 +204,15 @@ fn stream(protocol: u32, samples: u32, output: &mut impl Write) -> io::Result<()
         if let Some(error) = snapshot.error {
             return Err(io::Error::other(error));
         }
-        let mut line =
-            serde_json::to_vec(&ssh_stream::Sample::from_frame(sequence, &snapshot.frame))?;
+        let mut sample = ssh_stream::Sample::from_frame(sequence, &snapshot.frame);
+        if protocol == ssh_stream::DOCKER_VERSION {
+            if (sequence - 1).is_multiple_of(5) {
+                docker = Some(docker_health());
+            }
+            sample.version = protocol;
+            sample.docker.clone_from(&docker);
+        }
+        let mut line = serde_json::to_vec(&sample)?;
         line.push(b'\n');
         if line.len() > ssh_stream::MAX_LINE_BYTES {
             return Err(io::Error::other("SSH reading exceeded the line budget"));
@@ -211,6 +221,17 @@ fn stream(protocol: u32, samples: u32, output: &mut impl Write) -> io::Result<()
         output.flush()?;
     }
     Ok(())
+}
+
+fn docker_health() -> ssh_stream::Docker {
+    #[cfg(target_os = "linux")]
+    {
+        docker::collect()
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        ssh_stream::Docker::Unavailable
+    }
 }
 
 // Process names are OS data and may contain terminal escape sequences.
@@ -275,7 +296,7 @@ mod tests {
     #[test]
     fn stream_rejects_unsupported_versions_and_sample_counts() {
         for (option, value) in [
-            ("--protocol", "2"),
+            ("--protocol", "3"),
             ("--samples", "0"),
             ("--samples", "1201"),
         ] {
