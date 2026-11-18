@@ -5,7 +5,12 @@
 
 use crate::monitoring::{ProcessMonitor, SystemMonitor};
 use std::sync::Mutex;
-use sysinfo::{Disks, Networks, System};
+use sysinfo::{Disks, Networks, ProcessRefreshKind, RefreshKind, System};
+
+// Linux tasks share the process resource totals and should not appear as separate rows.
+pub(crate) fn system_refresh() -> RefreshKind {
+    RefreshKind::everything().with_processes(ProcessRefreshKind::everything().without_tasks())
+}
 
 /// Global application state
 ///
@@ -35,7 +40,7 @@ impl AppState {
     ///
     /// A new `AppState` instance with initialized monitors
     pub fn new() -> Self {
-        let sys = System::new_all();
+        let sys = System::new_with_specifics(system_refresh());
         let disks = Disks::new_with_refreshed_list();
         let networks = Networks::new_with_refreshed_list();
 
