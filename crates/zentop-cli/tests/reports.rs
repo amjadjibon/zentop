@@ -83,3 +83,39 @@ fn connections_json_reports_live_endpoints_without_process_secrets() {
             && r["protocol"] == "UDP"));
     assert!(!report.to_string().contains("environ"));
 }
+
+#[test]
+fn stream_v1_outputs_two_bounded_samples_with_a_read_only_schema() {
+    use zentop_core::ssh_stream::{self, MAX_LINE_BYTES, MAX_PROCESSES, VERSION};
+    let output = Command::new(env!("CARGO_BIN_EXE_zentop-cli"))
+        .args(["stream", "--protocol", "1", "--samples", "2"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let lines: Vec<_> = output
+        .stdout
+        .split_inclusive(|&byte| byte == b'\n')
+        .collect();
+    assert_eq!(lines.len(), 2);
+    let mut previous_at = 0;
+    for (index, line) in lines.iter().enumerate() {
+        assert!(line.len() <= MAX_LINE_BYTES);
+        // The decoder rejects fields outside the wire schema, including process secrets.
+        let sample = ssh_stream::decode_sample(line).unwrap();
+        assert_eq!(sample.version, VERSION);
+        assert_eq!(sample.sequence, index as u32 + 1);
+        assert!(sample.captured_at_ms > previous_at);
+        assert!(sample.metrics.cpu_percent.is_some());
+        assert!(sample.metrics.memory_total > 0);
+        assert!(!sample.processes.is_empty() && sample.processes.len() <= MAX_PROCESSES);
+        assert!(sample
+            .processes
+            .windows(2)
+            .all(|pair| pair[0].cpu_percent >= pair[1].cpu_percent));
+        previous_at = sample.captured_at_ms;
+    }
+}

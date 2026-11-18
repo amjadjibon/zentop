@@ -10,6 +10,7 @@ use std::{
 use zentop_core::{
     monitoring::ProcessInfo,
     sampling::{Hub, Snapshot},
+    ssh_stream,
     state::AppState,
 };
 
@@ -27,6 +28,15 @@ struct Args {
 enum Command {
     /// Show system resources (the default command)
     System,
+    /// Stream bounded JSON Lines readings for SSH Hosts
+    Stream {
+        /// Wire protocol version
+        #[arg(long, value_parser = clap::value_parser!(u32).range(i64::from(ssh_stream::VERSION)..=i64::from(ssh_stream::VERSION)))]
+        protocol: u32,
+        /// End the stream after this many readings
+        #[arg(long, default_value_t = ssh_stream::MAX_SAMPLES, value_parser = clap::value_parser!(u32).range(1..=i64::from(ssh_stream::MAX_SAMPLES)))]
+        samples: u32,
+    },
     /// Show named hardware temperature sensors in Celsius
     Temperature,
     /// Inspect one process's TCP connections and bound UDP sockets
@@ -88,13 +98,11 @@ fn capture() -> io::Result<Snapshot> {
 }
 
 fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
-    if let Some(Command::Connections { pid }) = &args.command {
-        return connection_report(*pid, args.json, output);
-    }
-    let snapshot = capture()?;
     match args.command.unwrap_or(Command::System) {
         Command::Connections { pid } => connection_report(pid, args.json, output)?,
+        Command::Stream { protocol, samples } => stream(protocol, samples, output)?,
         Command::System => {
+            let snapshot = capture()?;
             let stats = &snapshot.frame.stats;
             if args.json {
                 serde_json::to_writer_pretty(&mut *output, stats)?;
@@ -117,6 +125,7 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
             }
         }
         Command::Temperature => {
+            let snapshot = capture()?;
             let sensors = &snapshot.frame.stats.temperatures;
             if args.json {
                 serde_json::to_writer_pretty(&mut *output, sensors)?;
@@ -135,6 +144,7 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
             }
         }
         Command::Processes { limit, sort } => {
+            let snapshot = capture()?;
             let mut processes: Vec<&ProcessInfo> = snapshot.frame.processes.iter().collect();
             processes.sort_by(|a, b| match sort {
                 Sort::Cpu => b.cpu_usage.total_cmp(&a.cpu_usage).then(a.pid.cmp(&b.pid)),
@@ -174,6 +184,31 @@ fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn stream(protocol: u32, samples: u32, output: &mut impl Write) -> io::Result<()> {
+    debug_assert_eq!(protocol, ssh_stream::VERSION);
+    let state = AppState::new();
+    let mut hub = Hub::default();
+    hub.interval = ssh_stream::INTERVAL.as_millis() as u64;
+    // Prime the shared collector before sending CPU readings.
+    hub.read(&state).map_err(io::Error::other)?;
+    for sequence in 1..=samples {
+        thread::sleep(ssh_stream::INTERVAL);
+        let snapshot = hub.read(&state).map_err(io::Error::other)?;
+        if let Some(error) = snapshot.error {
+            return Err(io::Error::other(error));
+        }
+        let mut line =
+            serde_json::to_vec(&ssh_stream::Sample::from_frame(sequence, &snapshot.frame))?;
+        line.push(b'\n');
+        if line.len() > ssh_stream::MAX_LINE_BYTES {
+            return Err(io::Error::other("SSH reading exceeded the line budget"));
+        }
+        output.write_all(&line)?;
+        output.flush()?;
     }
     Ok(())
 }
@@ -234,6 +269,22 @@ mod tests {
     fn rejects_invalid_process_limits() {
         for value in ["0", "10001", "invalid"] {
             assert!(Args::try_parse_from(["zentop-cli", "processes", "--limit", value]).is_err());
+        }
+    }
+
+    #[test]
+    fn stream_rejects_unsupported_versions_and_sample_counts() {
+        for (option, value) in [
+            ("--protocol", "2"),
+            ("--samples", "0"),
+            ("--samples", "1201"),
+        ] {
+            let mut args = vec!["zentop-cli", "stream"];
+            if option != "--protocol" {
+                args.extend(["--protocol", "1"]);
+            }
+            args.extend([option, value]);
+            assert!(Args::try_parse_from(args).is_err());
         }
     }
 

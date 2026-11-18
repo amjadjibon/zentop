@@ -9,6 +9,7 @@ mod process_connections;
 mod process_view;
 mod resource_details;
 mod settings;
+mod ssh_hosts;
 mod stats;
 mod table;
 pub mod theme;
@@ -30,6 +31,7 @@ actions!(
         OpenSettings,
         OpenAbout,
         OpenDiskTree,
+        OpenSshHosts,
         ShowOverview,
         ShowMain,
         ViewList,
@@ -63,6 +65,7 @@ struct Windows {
     settings: Option<AnyWindowHandle>,
     about: Option<AnyWindowHandle>,
     disktree: Option<AnyWindowHandle>,
+    ssh_hosts: Option<AnyWindowHandle>,
     overview: Option<AnyWindowHandle>,
     /// A tray click that dismissed the overview must not immediately reopen it.
     overview_closed_at: Option<Instant>,
@@ -92,6 +95,7 @@ pub fn init(cx: &mut App) {
     cx.on_action(|_: &OpenSettings, cx: &mut App| open_settings(cx));
     cx.on_action(|_: &OpenAbout, cx: &mut App| open_about(cx));
     cx.on_action(|_: &OpenDiskTree, cx: &mut App| open_disktree(cx));
+    cx.on_action(|_: &OpenSshHosts, cx: &mut App| open_ssh_hosts(cx));
     cx.on_action(|_: &ShowOverview, cx: &mut App| companion::show(None, cx));
     cx.on_action(|_: &ShowMain, cx: &mut App| open_main(cx));
     cx.on_action(|_: &ViewList, cx: &mut App| set_view(false, cx));
@@ -142,6 +146,7 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Process List", ViewList),
                 MenuItem::action("Process Tree", ViewTree),
                 MenuItem::action("DiskTree…", OpenDiskTree),
+                MenuItem::action("SSH Hosts…", OpenSshHosts),
                 MenuItem::separator(),
                 MenuItem::action("Menu-bar Overview", ShowOverview),
             ],
@@ -315,6 +320,23 @@ pub fn open_disktree(cx: &mut App) {
         cx.new(|cx| disktree::DiskTree::new(window, cx))
     }) {
         cx.global_mut::<Windows>().disktree = Some(handle);
+    }
+    cx.activate(true);
+}
+
+fn open_ssh_hosts(cx: &mut App) {
+    if !focus(cx.global::<Windows>().ssh_hosts, cx) {
+        let options = window_options(
+            size(px(1060.), px(790.)),
+            Some(size(px(850.), px(550.))),
+            cx,
+        );
+        if let Ok((handle, _)) = gpui_kit::open_window(options, cx, |window, cx| {
+            window.set_window_title("Zentop SSH Hosts");
+            cx.new(|cx| ssh_hosts::SshHosts::new(window, cx))
+        }) {
+            cx.global_mut::<Windows>().ssh_hosts = Some(handle);
+        }
     }
     cx.activate(true);
 }

@@ -2,6 +2,7 @@
 use crate::{
     alerts,
     process_view::{Column, Filters, RuleKind, Sort, STATUSES},
+    ssh_hosts::{Host, MAX_HOSTS},
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -70,6 +71,8 @@ pub struct Configuration {
     pub version: u32,
     pub alerts: alerts::Settings,
     pub views: Vec<SavedView>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub ssh_hosts: Vec<Host>,
 }
 impl Default for Configuration {
     fn default() -> Self {
@@ -77,6 +80,7 @@ impl Default for Configuration {
             version: 1,
             alerts: alerts::Settings::default(),
             views: vec![],
+            ssh_hosts: vec![],
         }
     }
 }
@@ -88,6 +92,16 @@ impl Configuration {
         self.alerts.validate()?;
         if self.views.len() > 32 {
             return Err("At most 32 monitoring views can be saved.".into());
+        }
+        if self.ssh_hosts.len() > MAX_HOSTS {
+            return Err(format!("At most {MAX_HOSTS} SSH hosts can be saved."));
+        }
+        let mut destinations = HashSet::new();
+        for host in &self.ssh_hosts {
+            host.validate()?;
+            if !destinations.insert(&host.destination) {
+                return Err("That SSH destination is already saved.".into());
+            }
         }
         let mut names = HashSet::new();
         for view in &self.views {
@@ -196,6 +210,22 @@ impl Store {
             Ok(())
         })
     }
+    pub fn add_ssh_host(&mut self, host: Host) -> Result<(), String> {
+        self.change(move |config| {
+            config.ssh_hosts.push(host);
+            Ok(())
+        })
+    }
+
+    pub fn remove_ssh_host(&mut self, destination: &str) -> Result<(), String> {
+        self.change(|config| {
+            config
+                .ssh_hosts
+                .retain(|host| host.destination != destination);
+            Ok(())
+        })
+    }
+
     fn change(
         &mut self,
         edit: impl FnOnce(&mut Configuration) -> Result<(), String>,

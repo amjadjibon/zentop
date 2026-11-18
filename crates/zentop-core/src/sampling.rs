@@ -24,6 +24,13 @@ pub fn interval(ms: u64) -> u64 {
     }
 }
 
+pub(crate) fn average_cpu(cores: &[f32]) -> Option<f64> {
+    if cores.is_empty() || cores.iter().any(|v| !v.is_finite()) {
+        return None;
+    }
+    Some((cores.iter().map(|&v| f64::from(v)).sum::<f64>() / cores.len() as f64).clamp(0.0, 100.0))
+}
+
 #[derive(Clone, Debug)]
 pub struct Frame {
     pub captured_at: u64,
@@ -58,15 +65,6 @@ impl Sample {
     }
     fn from_frame(frame: &Frame, interval: u64) -> Self {
         let stats = &frame.stats;
-        let cpu = if stats.cpu_usage.is_empty() || stats.cpu_usage.iter().any(|v| !v.is_finite()) {
-            None
-        } else {
-            Some(
-                (stats.cpu_usage.iter().map(|v| *v as f64).sum::<f64>()
-                    / stats.cpu_usage.len() as f64)
-                    .clamp(0.0, 100.0),
-            )
-        };
         Self {
             temperatures: frame
                 .stats
@@ -74,7 +72,7 @@ impl Sample {
                 .iter()
                 .map(|s| (s.id.clone(), s.celsius))
                 .collect(),
-            cpu,
+            cpu: average_cpu(&stats.cpu_usage),
             memory: (stats.memory_total > 0).then(|| {
                 (stats.memory_used as f64 / stats.memory_total as f64 * 100.0).clamp(0.0, 100.0)
             }),

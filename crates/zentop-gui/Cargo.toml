@@ -19,6 +19,7 @@ dirs = "6"
 serde_json.workspace = true
 serde.workspace = true
 sysinfo.workspace = true
+smol = "2"
 chrono.workspace = true
 unicode-normalization = "0.1"
 tray-icon = { version = "0.24", default-features = false, features = ["gtk"] }

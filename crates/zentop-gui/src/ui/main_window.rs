@@ -2,7 +2,7 @@
 use super::monitor::{self, Monitor};
 use super::process_view::{self, Column, Filters, RuleKind, STATUSES};
 use super::table::ProcessList;
-use super::{stats, theme, OpenAbout, OpenSettings, Quit, ShowOverview};
+use super::{stats, theme, OpenAbout, OpenSettings, OpenSshHosts, Quit, ShowOverview};
 use crate::preferences::Preferences;
 use crate::sampling;
 use gpui_kit::assets::IconName;
@@ -267,6 +267,16 @@ impl Zentop {
                             .tooltip("Menu-bar overview")
                             .on_click(|_, window, cx| {
                                 window.dispatch_action(Box::new(ShowOverview), cx)
+                            }),
+                    )
+                    .child(
+                        Button::new("ssh-hosts")
+                            .ghost()
+                            .small()
+                            .icon(IconName::Server)
+                            .label("SSH Hosts")
+                            .on_click(|_, window, cx| {
+                                window.dispatch_action(Box::new(OpenSshHosts), cx)
                             }),
                     )
                     .child(div().mx_1().w(px(1.)).h(px(16.)).bg(cx.theme().border))

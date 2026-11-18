@@ -2,7 +2,7 @@
   <img src="app-icon.png" alt="Zentop icon: an open ensō ring with a glowing dot" width="96" />
   <h1>Zentop</h1>
   <p><strong>A calm, native system monitor.</strong></p>
-  <p>See every process, understand your graphics card, and keep your whole machine in view on macOS, Linux and Windows.<br />Built in Rust with GPU-accelerated UI. Nothing leaves your machine.</p>
+  <p>See every process, understand your graphics card, and keep your whole machine in view on macOS, Linux and Windows.<br />Built in Rust with GPU-accelerated UI. Local monitoring works offline.</p>
 
 <a href="https://github.com/amjadjibon/zentop/releases/latest"><img src="https://img.shields.io/github/v/release/amjadjibon/zentop?style=flat-square&label=release" alt="Latest release" /></a>
 <a href="https://github.com/amjadjibon/zentop/actions/workflows/test.yml"><img src="https://github.com/amjadjibon/zentop/actions/workflows/test.yml/badge.svg" alt="Tests" /></a>
@@ -18,6 +18,7 @@
 - **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
 - **Resource alerts.** Opt into sustained CPU, memory, temperature and low-disk-space rules, with cooldowns, recent history and optional desktop notifications.
 - **Saved monitoring views.** Save search, filters, sort, columns, List/Tree and pinned commands; load the same presets in the GUI or TUI.
+- **SSH Hosts.** Compare Local with configured machines and inspect recent read-only process readings over OpenSSH. [SSH Hosts setup](docs/ssh-hosts.md).
 - **Process connections.** Inspect TCP peers, states and listening addresses, plus bound UDP sockets, with protocol filters and address copying. [Connection inspection](docs/connections.md).
 - **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
 - **Explore disk usage.** Open DiskTree in the GUI or TUI for a nested treemap, category colors, Size/Files/Age modes, hidden/apparent-size controls and a read-only marked review list. See the [DiskTree guide](docs/disktree.md).
@@ -25,7 +26,7 @@
 - **Your graphics card, in view.** Utilization, memory, temperature, power and clocks wherever the driver exposes them.
 - **A menu-bar companion.** Live readings and your five busiest processes in a small popup from the menu bar or system tray. Optionally keep monitoring after the main window closes.
 - **Native icons and 24 themes.** Real app icons where the system has them; 24 color themes, each checked for readable contrast.
-- **Private by design.** No analytics, no accounts, no network requests.
+- **Private by design.** No analytics, accounts, or cloud service.
 
 <table>
   <tr>
@@ -86,7 +87,7 @@ Counters such as temperature, power and clock appear only where the driver expos
 
 ## Privacy
 
-Zentop sends nothing. There are no analytics, launch counts or update checks; process names, commands, searches and system readings never leave your machine. "Check for updates" simply opens the releases page in your browser.
+Local monitoring stays on your machine. SSH Hosts transfers resource readings and a limited process summary directly from the hosts you configure. "Check for updates" opens the releases page in your browser.
 
 ## Development
 

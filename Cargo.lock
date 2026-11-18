@@ -9580,6 +9580,7 @@ dependencies = [
  "png 0.17.14",
  "serde",
  "serde_json",
+ "smol",
  "sysinfo 0.35.2",
  "tray-icon",
  "unicode-normalization",

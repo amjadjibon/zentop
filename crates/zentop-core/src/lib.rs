@@ -16,3 +16,7 @@ pub mod state;
 pub mod temperature;
 
 pub mod connections;
+
+pub mod ssh_stream;
+
+pub mod ssh_hosts;

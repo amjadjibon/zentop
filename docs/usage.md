@@ -1,6 +1,6 @@
 # Using Zentop
 
-Zentop is a free, open-source system monitor for macOS, Linux and Windows. It runs entirely on your machine: no account, no cloud service and no background agent.
+Zentop is a free, open-source system monitor for macOS, Linux and Windows. Local monitoring runs on your machine and works offline. The desktop SSH Hosts view can also read from machines you configure.
 
 ## Find the process you need
 
@@ -75,6 +75,13 @@ Use each card’s arrow to open a detailed sheet. CPU, memory, GPU, network and 
 - **Network:** received/sent rates, totals and interface details. Interfaces with traffic are listed first. New/reset counters stay unavailable until a valid rate baseline exists. This is network I/O monitoring, not a firewall or packet inspector.
 
 GPU support is driver dependent: macOS IORegistry statistics; Linux AMD sysfs and NVIDIA NVML; Windows NVIDIA NVML with DXGI inventory for other adapters. Missing counters never imply idle hardware. The optional **GPU %** process column and filter use Linux DRM engine accounting. They need two samples and may exceed 100% across engines; unsupported or unreadable clients remain unavailable.
+
+## Monitor SSH hosts
+
+Open **SSH Hosts** from the desktop title bar or the **View** menu to compare
+CPU, RAM, disk and uptime for Local and your configured machines. Select a
+remote host to see its recent process readings and connection controls.
+[SSH Hosts setup](ssh-hosts.md).
 
 ## Menu-bar companion
 

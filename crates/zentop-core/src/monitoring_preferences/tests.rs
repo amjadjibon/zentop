@@ -140,3 +140,21 @@ fn older_saved_alert_configuration_defaults_heat_rule_off() {
     assert!(!loaded.config.alerts.temperature.enabled);
     assert_eq!(loaded.config.views, vec![view("existing")]);
 }
+
+#[test]
+fn ssh_hosts_persist_with_independent_view_edits_and_failed_duplicates() {
+    let fixture = Fixture::new();
+    let mut desktop = fixture.store();
+    let mut tui = fixture.store();
+    let host = Host::new(" Home server ", "home-server").unwrap();
+    desktop.add_ssh_host(host.clone()).unwrap();
+    tui.save_view(view("existing")).unwrap();
+    let mut reopened = fixture.store();
+    assert_eq!(reopened.config.ssh_hosts, vec![host.clone()]);
+    assert!(reopened.add_ssh_host(host.clone()).is_err());
+    assert_eq!(fixture.store().config.ssh_hosts, vec![host]);
+    reopened.remove_ssh_host("home-server").unwrap();
+    let configuration = fixture.store().config;
+    assert!(configuration.ssh_hosts.is_empty());
+    assert_eq!(configuration.views, vec![view("existing")]);
+}

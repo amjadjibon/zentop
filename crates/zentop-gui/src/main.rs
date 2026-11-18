@@ -3,6 +3,7 @@
 
 mod native_icons;
 mod preferences;
+mod ssh;
 mod state;
 mod ui;
 
