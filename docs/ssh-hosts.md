@@ -36,9 +36,30 @@ Host home-server
     Port 2222
 ```
 
+### If you use a jump host
+
+Zentop requires strict host-key checking and batch mode for the destination.
+OpenSSH opens a separate connection to each `ProxyJump` host using that host’s
+own SSH configuration. Verify each jump host’s key against a trusted
+fingerprint and configure its alias explicitly.
+
+```sshconfig
+Host lab-bastion
+    HostName bastion.example.invalid
+    User observer
+    StrictHostKeyChecking yes
+    BatchMode yes
+    ForwardAgent no
+
+Host lab-vm
+    HostName vm.example.invalid
+    User observer
+    ProxyJump lab-bastion
+```
+
 ## Connections and readings
 
-- Zentop requires an already-trusted host key and runs SSH in batch mode. It
+- Zentop requires an already-trusted host key for the destination and runs SSH in batch mode. It
   invokes the fixed command `zentop-cli stream --protocol 1` with agent
   forwarding, other SSH forwards, and SSH connection sharing disabled.
 - Readings normally arrive every three seconds. Disk usage follows Zentop's
@@ -51,7 +72,9 @@ Host home-server
 - **Remove host** deletes the saved destination and closes its stream.
   Closing the SSH Hosts window stops its sessions. Reopening the window
   connects to saved destinations again. Only display names and destinations
-  persist in Zentop's `monitoring.json` configuration.
+  persist in `ssh-hosts.json`, in Zentop’s configuration directory. The first
+  time this dashboard opens, it imports any hosts saved by the prototype in
+  `monitoring.json`. From then on, `ssh-hosts.json` is the source of truth.
 - Readings contain resource totals and process names, PIDs, CPU, and RAM.
   The remote view offers read-only inspection. This release keeps history in
   memory for the life of the window. Long-term history, per-volume remote

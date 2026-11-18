@@ -2,7 +2,6 @@
 use crate::{
     alerts,
     process_view::{Column, Filters, RuleKind, Sort, STATUSES},
-    ssh_hosts::{Host, MAX_HOSTS},
 };
 use fs2::FileExt;
 use serde::{Deserialize, Serialize};
@@ -71,8 +70,9 @@ pub struct Configuration {
     pub version: u32,
     pub alerts: alerts::Settings,
     pub views: Vec<SavedView>,
-    #[serde(skip_serializing_if = "Vec::is_empty")]
-    pub ssh_hosts: Vec<Host>,
+    // Preserve prototype data until the Hosts dashboard can import it.
+    #[serde(rename = "ssh_hosts", skip_serializing_if = "Option::is_none")]
+    legacy_ssh_hosts: Option<serde_json::Value>,
 }
 impl Default for Configuration {
     fn default() -> Self {
@@ -80,7 +80,7 @@ impl Default for Configuration {
             version: 1,
             alerts: alerts::Settings::default(),
             views: vec![],
-            ssh_hosts: vec![],
+            legacy_ssh_hosts: None,
         }
     }
 }
@@ -92,16 +92,6 @@ impl Configuration {
         self.alerts.validate()?;
         if self.views.len() > 32 {
             return Err("At most 32 monitoring views can be saved.".into());
-        }
-        if self.ssh_hosts.len() > MAX_HOSTS {
-            return Err(format!("At most {MAX_HOSTS} SSH hosts can be saved."));
-        }
-        let mut destinations = HashSet::new();
-        for host in &self.ssh_hosts {
-            host.validate()?;
-            if !destinations.insert(&host.destination) {
-                return Err("That SSH destination is already saved.".into());
-            }
         }
         let mut names = HashSet::new();
         for view in &self.views {
@@ -210,22 +200,6 @@ impl Store {
             Ok(())
         })
     }
-    pub fn add_ssh_host(&mut self, host: Host) -> Result<(), String> {
-        self.change(move |config| {
-            config.ssh_hosts.push(host);
-            Ok(())
-        })
-    }
-
-    pub fn remove_ssh_host(&mut self, destination: &str) -> Result<(), String> {
-        self.change(|config| {
-            config
-                .ssh_hosts
-                .retain(|host| host.destination != destination);
-            Ok(())
-        })
-    }
-
     fn change(
         &mut self,
         edit: impl FnOnce(&mut Configuration) -> Result<(), String>,
@@ -234,25 +208,7 @@ impl Store {
             .path
             .as_ref()
             .ok_or("Monitoring settings cannot be saved in this session.")?;
-        let parent = path
-            .parent()
-            .ok_or("Monitoring settings location unavailable")?;
-        fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        let mut lock_options = OpenOptions::new();
-        lock_options
-            .create(true)
-            .truncate(false)
-            .read(true)
-            .write(true);
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::OpenOptionsExt;
-            lock_options.mode(0o600);
-        }
-        let lock = lock_options
-            .open(path.with_extension("lock"))
-            .map_err(|e| e.to_string())?;
-        FileExt::lock_exclusive(&lock).map_err(|e| e.to_string())?;
+        let _lock = lock_settings(path)?;
         let mut next = load(path)?;
         edit(&mut next)?;
         next.validate()?;
@@ -260,28 +216,55 @@ impl Store {
         if data.len() > 2 * 1024 * 1024 {
             return Err("Monitoring settings exceed 2 MiB.".into());
         }
-        let temporary = path.with_extension("json.tmp");
-        let result = (|| -> Result<(), String> {
-            let mut options = OpenOptions::new();
-            options.create(true).truncate(true).write(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            let mut file = options.open(&temporary).map_err(|e| e.to_string())?;
-            file.write_all(&data)
-                .and_then(|_| file.sync_all())
-                .map_err(|e| e.to_string())?;
-            fs::rename(&temporary, path).map_err(|e| e.to_string())
-        })();
-        if result.is_err() {
-            let _ = fs::remove_file(&temporary);
-        }
-        result.map_err(|e| format!("Could not save monitoring settings: {e}"))?;
+        write_settings(path, &data)
+            .map_err(|e| format!("Could not save monitoring settings: {e}"))?;
         self.config = next;
         Ok(())
     }
+}
+
+pub(crate) fn lock_settings(path: &Path) -> Result<fs::File, String> {
+    let parent = path
+        .parent()
+        .ok_or("Monitoring settings location unavailable")?;
+    fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    let mut lock_options = OpenOptions::new();
+    lock_options
+        .create(true)
+        .truncate(false)
+        .read(true)
+        .write(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        lock_options.mode(0o600);
+    }
+    let lock = lock_options
+        .open(path.with_extension("lock"))
+        .map_err(|e| e.to_string())?;
+    FileExt::lock_exclusive(&lock).map_err(|e| e.to_string())?;
+    Ok(lock)
+}
+
+pub(crate) fn write_settings(path: &Path, data: &[u8]) -> std::io::Result<()> {
+    let temporary = path.with_extension("json.tmp");
+    let result = (|| -> std::io::Result<()> {
+        let mut options = OpenOptions::new();
+        options.create(true).truncate(true).write(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        let mut file = options.open(&temporary)?;
+        file.write_all(data)?;
+        file.sync_all()?;
+        fs::rename(&temporary, path)
+    })();
+    if result.is_err() {
+        let _ = fs::remove_file(&temporary);
+    }
+    result
 }
 
 #[cfg(test)]

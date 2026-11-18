@@ -16,10 +16,9 @@ use gpui_kit::{
 };
 use std::time::{Duration, Instant};
 use zentop_core::{
-    monitoring_preferences::Store,
     process_view::{format_bytes, format_uptime},
     sampling,
-    ssh_hosts::Host,
+    ssh_hosts::{Host, Store},
     ssh_stream::{Metrics, MAX_PROCESSES},
 };
 
@@ -96,8 +95,7 @@ impl SshHosts {
         let mut previous = std::mem::take(&mut self.remotes);
         self.remotes = self
             .store
-            .config
-            .ssh_hosts
+            .hosts()
             .iter()
             .map(|host| {
                 if let Some(index) = previous
@@ -138,7 +136,7 @@ impl SshHosts {
         );
         let result = host.and_then(|host| {
             let destination = host.destination.clone();
-            self.store.add_ssh_host(host)?;
+            self.store.add(host)?;
             self.selected = Some(destination);
             self.selected_reading = None;
             self.show_form = false;
@@ -154,7 +152,7 @@ impl SshHosts {
     }
 
     fn remove_host(&mut self, destination: &str, cx: &mut Context<Self>) {
-        self.error = self.store.remove_ssh_host(destination).err();
+        self.error = self.store.remove(destination).err();
         if self.error.is_none() {
             self.sync_hosts(cx);
         }
