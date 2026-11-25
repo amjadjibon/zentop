@@ -1373,3 +1373,778 @@ async fn repeats_and_edits_captured_requests_and_enforces_policy() {
         }
     }
 }
+
+// Phase 3B: live editing.
+
+use zentop_proxy::rules::{Action, RewriteAction, Rule, RuleSide};
+use zentop_proxy::{HeldEdits, RuleKind, RuleSet};
+
+fn rule(id: u32, url: &str, action: Action) -> Rule {
+    Rule {
+        id,
+        name: format!("Rule {id}"),
+        enabled: true,
+        method: None,
+        url: url.into(),
+        app: None,
+        action,
+    }
+}
+
+/// An origin that describes each request in its body and header.
+async fn echo_origin() -> (SocketAddr, JoinHandle<()>) {
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = origin.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = origin.accept().await {
+            tokio::spawn(async move {
+                let service = service_fn(|request: Request<hyper::body::Incoming>| async move {
+                    let (head, body) = request.into_parts();
+                    let body = body.collect().await.unwrap().to_bytes();
+                    let text = format!(
+                        "{} {} x-test={} body={}",
+                        head.method,
+                        head.uri,
+                        head.headers
+                            .get("x-test")
+                            .map_or("-", |value| value.to_str().unwrap()),
+                        String::from_utf8_lossy(&body)
+                    );
+                    let mut response = Response::builder()
+                        .header("x-origin", "echo")
+                        .header("content-type", "text/plain");
+                    let body = if head.uri.path().ends_with("gzip") {
+                        response = response.header("content-encoding", "gzip");
+                        let mut gzip =
+                            flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+                        std::io::Write::write_all(&mut gzip, text.as_bytes()).unwrap();
+                        gzip.finish().unwrap()
+                    } else {
+                        text.into_bytes()
+                    };
+                    Ok::<_, Infallible>(response.body(Full::new(Bytes::from(body))).unwrap())
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (address, server)
+}
+
+/// Sends one request on its own connection.
+async fn send(
+    session: &Session,
+    method: &str,
+    url: &str,
+    headers: &[(&str, &str)],
+    body: &'static str,
+) -> (StatusCode, http::HeaderMap, Bytes) {
+    let (mut sender, _driver) = client(session.address()).await;
+    let mut request = Request::builder()
+        .method(method)
+        .uri(url)
+        .header("proxy-authorization", auth(session));
+    for (name, value) in headers {
+        request = request.header(*name, *value);
+    }
+    let response = sender
+        .send_request(
+            request
+                .body(Full::new(Bytes::from_static(body.as_bytes())))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let (head, body) = response.into_parts();
+    (
+        head.status,
+        head.headers,
+        body.collect().await.unwrap().to_bytes(),
+    )
+}
+
+async fn complete(session: &Session, id: u64) -> zentop_proxy::Flow {
+    wait(|| {
+        session
+            .flow(id, false)
+            .is_some_and(|flow| flow.metadata.state != FlowState::Active)
+    })
+    .await;
+    session.flow(id, false).unwrap()
+}
+
+#[tokio::test]
+async fn request_breakpoint_edits_and_executes_while_other_connections_flow() {
+    let (address, origin) = echo_origin().await;
+    let session = proxy(true);
+    session.set_rules(
+        RuleSet::new(
+            vec![rule(
+                1,
+                &format!("http://{address}/held*"),
+                Action::Breakpoint {
+                    request: true,
+                    response: false,
+                },
+            )],
+            true,
+        )
+        .unwrap(),
+    );
+    let held = tokio::spawn({
+        let url = format!("http://{address}/held?token=secret");
+        let session_auth = auth(&session);
+        let proxy_address = session.address();
+        async move {
+            let (mut sender, _driver) = client(proxy_address).await;
+            let response = sender
+                .send_request(
+                    Request::post(url)
+                        .header("proxy-authorization", session_auth)
+                        .header("authorization", "Bearer original")
+                        .header("x-test", "before")
+                        .body(Full::new(Bytes::from_static(b"original")))
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            response.collect().await.unwrap().to_bytes()
+        }
+    });
+    wait(|| session.held_count() == 1).await;
+
+    // Holding one request never blocks another connection.
+    let (status, _, body) = tokio::time::timeout(
+        Duration::from_secs(5),
+        send(&session, "GET", &format!("http://{address}/free"), &[], ""),
+    )
+    .await
+    .expect("other connections keep flowing");
+    assert_eq!(status, StatusCode::OK);
+    assert!(body.starts_with(b"GET /free"));
+
+    let summary = session.held_messages().remove(0);
+    assert!(!summary.response);
+    assert!(!summary.url.contains("secret"));
+    let message = session.held_message(summary.id, false).unwrap();
+    assert_eq!(message.method, "POST");
+    assert_eq!(message.body.as_deref(), Some("original"));
+    let authorization = message
+        .headers
+        .iter()
+        .position(|(name, _)| name == "authorization")
+        .unwrap();
+    assert_eq!(message.headers[authorization].1, "[redacted]");
+    assert!(session
+        .execute_held(
+            summary.id,
+            HeldEdits {
+                method: Some("BAD METHOD".into()),
+                ..HeldEdits::default()
+            }
+        )
+        .is_err());
+    let headers = message
+        .headers
+        .iter()
+        .enumerate()
+        .map(|(index, (name, _))| ReplayHeader {
+            name: name.clone(),
+            value: if name == "x-test" {
+                ReplayValue::Edited("after".into())
+            } else {
+                ReplayValue::Original(index)
+            },
+        })
+        .collect();
+    session
+        .execute_held(
+            summary.id,
+            HeldEdits {
+                method: Some("PUT".into()),
+                url: Some(message.url.replace("/held", "/held/edited")),
+                preserve_masked_query: true,
+                headers: Some(headers),
+                body: Some("edited body".into()),
+                ..HeldEdits::default()
+            },
+        )
+        .unwrap();
+    let body = held.await.unwrap();
+    assert_eq!(
+        body,
+        "PUT /held/edited?token=secret x-test=after body=edited body"
+    );
+    let flow = complete(&session, 0).await;
+    assert_eq!(flow.metadata.method, "PUT");
+    assert_eq!(flow.metadata.path, "/held/edited");
+    assert_eq!(flow.request_body.kept(), b"edited body");
+    assert_eq!(flow.metadata.rules, vec![(1, RuleKind::Breakpoint)]);
+    assert!(
+        flow.rules[0].note.contains("executed with edits"),
+        "{:?}",
+        flow.rules
+    );
+    assert_eq!(session.held_count(), 0);
+    origin.abort();
+}
+
+#[tokio::test]
+async fn response_breakpoints_abort_time_out_and_release_on_pause() {
+    let (address, origin) = echo_origin().await;
+    let session = proxy(true);
+    session.set_rules(
+        RuleSet::new(
+            vec![
+                rule(
+                    1,
+                    &format!("http://{address}/abort"),
+                    Action::Breakpoint {
+                        request: false,
+                        response: true,
+                    },
+                ),
+                rule(
+                    2,
+                    &format!("http://{address}/slow"),
+                    Action::Breakpoint {
+                        request: true,
+                        response: false,
+                    },
+                ),
+            ],
+            true,
+        )
+        .unwrap()
+        .with_hold_timeout(Duration::from_millis(300)),
+    );
+
+    // An aborted response is replaced by a 502.
+    let abort_url = format!("http://{address}/abort");
+    let request = send(&session, "GET", &abort_url, &[], "");
+    let abort = async {
+        wait(|| session.held_count() == 1).await;
+        let held = session.held_messages().remove(0);
+        assert!(held.response);
+        assert_eq!(held.status, Some(200));
+        let message = session.held_message(held.id, false).unwrap();
+        assert!(message.body.unwrap().starts_with("GET /abort"));
+        assert!(session.abort_held(held.id));
+    };
+    let ((status, _, body), ()) = tokio::join!(request, abort);
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert_eq!(body, "Zentop breakpoint aborted this response");
+    let flow = complete(&session, 0).await;
+    assert_eq!(
+        flow.metadata.state,
+        FlowState::Failed("Response aborted at a breakpoint")
+    );
+    assert!(flow.rules[0].note.contains("aborted"));
+
+    // A hold that times out continues unmodified.
+    let started = std::time::Instant::now();
+    let (status, _, body) = send(
+        &session,
+        "POST",
+        &format!("http://{address}/slow"),
+        &[],
+        "kept",
+    )
+    .await;
+    assert!(started.elapsed() >= Duration::from_millis(300));
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "POST /slow x-test=- body=kept");
+    let flow = complete(&session, 1).await;
+    assert!(flow.rules[0].note.contains("timed out"), "{:?}", flow.rules);
+    assert_eq!(session.counters().holds_timed_out, 1);
+
+    // Pausing releases held messages unmodified.
+    session.set_rules(
+        RuleSet::new(
+            vec![rule(
+                2,
+                &format!("http://{address}/slow"),
+                Action::Breakpoint {
+                    request: true,
+                    response: false,
+                },
+            )],
+            true,
+        )
+        .unwrap(),
+    );
+    let slow_url = format!("http://{address}/slow");
+    let request = send(&session, "POST", &slow_url, &[], "go");
+    let pause = async {
+        wait(|| session.held_count() == 1).await;
+        assert!(session.pause(true));
+    };
+    let ((status, _, body), ()) = tokio::join!(request, pause);
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "POST /slow x-test=- body=go");
+    let flow = complete(&session, 2).await;
+    assert!(flow.rules[0].note.contains("released when capture paused"));
+    origin.abort();
+}
+
+#[tokio::test]
+async fn breakpoints_switch_off_and_cap_held_messages() {
+    let (address, origin) = echo_origin().await;
+    let session = proxy(true);
+    let hold = |enabled| {
+        RuleSet::new(
+            vec![rule(
+                1,
+                &format!("http://{address}/*"),
+                Action::Breakpoint {
+                    request: true,
+                    response: false,
+                },
+            )],
+            enabled,
+        )
+        .unwrap()
+    };
+    session.set_rules(hold(true));
+    let mut pending = Vec::new();
+    for index in 0..zentop_proxy::rules::HOLD_LIMIT {
+        let url = format!("http://{address}/{index}");
+        let address = session.address();
+        let auth = auth(&session);
+        pending.push(tokio::spawn(async move {
+            let (mut sender, _driver) = client(address).await;
+            let response = sender
+                .send_request(
+                    Request::get(url)
+                        .header("proxy-authorization", auth)
+                        .body(Full::default())
+                        .unwrap(),
+                )
+                .await
+                .unwrap();
+            response.status()
+        }));
+    }
+    wait(|| session.held_count() == zentop_proxy::rules::HOLD_LIMIT).await;
+    // Beyond the cap, matching requests pass through and are counted.
+    let (status, _, _) = send(&session, "GET", &format!("http://{address}/extra"), &[], "").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(session.counters().holds_skipped, 1);
+    // Turning the master switch off releases everything.
+    session.set_rules(hold(false));
+    for request in pending {
+        assert_eq!(request.await.unwrap(), StatusCode::OK);
+    }
+    assert_eq!(session.held_count(), 0);
+    let (status, _, _) = send(&session, "GET", &format!("http://{address}/after"), &[], "").await;
+    assert_eq!(status, StatusCode::OK);
+    origin.abort();
+}
+
+#[tokio::test]
+async fn map_local_serves_files_without_contacting_the_origin() {
+    let dir = std::env::temp_dir().join(format!("zentop-map-local-it-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("users.json");
+    std::fs::write(&file, br#"{"users":["local"]}"#).unwrap();
+    let session = proxy(false);
+    let local = |id, url: &str, path: &std::path::Path| {
+        rule(
+            id,
+            url,
+            Action::MapLocal {
+                path: path.to_str().unwrap().into(),
+                status: 200,
+                content_type: None,
+                headers: vec![("x-mock".into(), "zentop".into())],
+            },
+        )
+    };
+    session.set_rules(
+        RuleSet::new(
+            vec![
+                local(1, "http://api.example.invalid/users*", &file),
+                local(
+                    2,
+                    "http://api.example.invalid/missing",
+                    &dir.join("nope.json"),
+                ),
+                local(3, "http://api.example.invalid/dir", &dir),
+                rule(
+                    4,
+                    "http://api.example.invalid/users",
+                    Action::Rewrite {
+                        actions: vec![RewriteAction::SetHeader {
+                            side: RuleSide::Response,
+                            name: "x-rewritten".into(),
+                            value: "after map local".into(),
+                        }],
+                    },
+                ),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let (status, headers, body) = send(
+        &session,
+        "POST",
+        "http://api.example.invalid/users?page=1",
+        &[],
+        "uploaded",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"users":["local"]}"#);
+    assert_eq!(headers["content-type"], "application/json");
+    assert_eq!(headers["content-length"], body.len().to_string());
+    assert_eq!(headers["x-mock"], "zentop");
+    assert_eq!(headers["x-rewritten"], "after map local");
+    let flow = complete(&session, 0).await;
+    assert_eq!(flow.metadata.state, FlowState::Complete);
+    assert_eq!(flow.request_body.kept(), b"uploaded");
+    assert_eq!(flow.response_body.kept(), br#"{"users":["local"]}"#);
+    assert_eq!(
+        flow.metadata.rules,
+        vec![(1, RuleKind::MapLocal), (4, RuleKind::Rewrite)]
+    );
+    for (id, path, reason) in [
+        (1, "missing", "Map Local file not found"),
+        (2, "dir", "Map Local path is not a regular file"),
+    ] {
+        let (status, _, body) = send(
+            &session,
+            "GET",
+            &format!("http://api.example.invalid/{path}"),
+            &[],
+            "",
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+        assert_eq!(body, format!("Zentop Map Local: {reason}"));
+        let flow = complete(&session, id).await;
+        assert_eq!(flow.metadata.state, FlowState::Failed(reason));
+    }
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn map_remote_follows_destination_policy() {
+    let (first, first_origin) = echo_origin().await;
+    let (second, second_origin) = echo_origin().await;
+    let remote = |url: String, port| {
+        RuleSet::new(
+            vec![rule(
+                1,
+                &url,
+                Action::MapRemote {
+                    scheme: None,
+                    host: Some("127.0.0.1".into()),
+                    port: Some(port),
+                    path: Some("/v2".into()),
+                    keep_query: true,
+                },
+            )],
+            true,
+        )
+        .unwrap()
+    };
+    let session = proxy(true);
+    session.set_rules(remote(format!("http://{first}/v1/*"), second.port()));
+    let (status, headers, body) = send(
+        &session,
+        "GET",
+        &format!("http://{first}/v1/users?page=2"),
+        &[],
+        "",
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers["x-origin"], "echo");
+    assert_eq!(body, "GET /v2?page=2 x-test=- body=");
+    let flow = complete(&session, 0).await;
+    assert_eq!(flow.metadata.host, second.to_string());
+    assert_eq!(flow.rules[0].kind, RuleKind::MapRemote);
+    assert_eq!(flow.rules[0].note, format!("Sent to http://{second}"));
+
+    // A local destination still needs Allow local destinations.
+    let blocked = proxy(false);
+    blocked.set_rules(remote("http://example.invalid/*".into(), second.port()));
+    let (status, _, _) = send(&blocked, "GET", "http://example.invalid/a", &[], "").await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let flow = complete(&blocked, 0).await;
+    assert!(matches!(flow.metadata.state, FlowState::Refused(_)));
+    assert_eq!(blocked.counters().refused, 1);
+    first_origin.abort();
+    second_origin.abort();
+}
+
+/// A one-connection HTTPS origin for `localhost` with a self-signed certificate.
+async fn tls_origin() -> (u16, rustls::pki_types::CertificateDer<'static>) {
+    let certificate = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+    let der = certificate.cert.der().clone();
+    let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_no_client_auth()
+    .with_single_cert(
+        vec![der.clone()],
+        rustls::pki_types::PrivatePkcs8KeyDer::from(certificate.signing_key.serialize_der()).into(),
+    )
+    .unwrap();
+    tls.alpn_protocols = vec![b"h2".to_vec(), b"http/1.1".to_vec()];
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    tokio::spawn(async move {
+        while let Ok((stream, _)) = listener.accept().await {
+            let tls = tls.clone();
+            tokio::spawn(async move {
+                let Ok(stream) = TlsAcceptor::from(Arc::new(tls)).accept(stream).await else {
+                    return;
+                };
+                let service = service_fn(|request: Request<hyper::body::Incoming>| async move {
+                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from(format!(
+                        "secure {} {:?}",
+                        request.uri().path(),
+                        request.version()
+                    )))))
+                });
+                let _ = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new())
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (port, der)
+}
+
+#[tokio::test]
+async fn map_remote_to_https_verifies_the_upstream_certificate() {
+    let (port, certificate) = tls_origin().await;
+    for trusted in [true, false] {
+        let verifier = tls_client(trusted.then(|| certificate.clone()), b"h2");
+        let session = Session::start_with_decryption(
+            Options {
+                allow_local_destinations: true,
+                ..Options::default()
+            },
+            Arc::new(zentop_proxy::Decryption::with_client_config(verifier)),
+        )
+        .unwrap();
+        session.set_rules(
+            RuleSet::new(
+                vec![rule(
+                    1,
+                    "http://plain.example.invalid/*",
+                    Action::MapRemote {
+                        scheme: Some("https".into()),
+                        host: Some("localhost".into()),
+                        port: Some(port),
+                        path: None,
+                        keep_query: true,
+                    },
+                )],
+                true,
+            )
+            .unwrap(),
+        );
+        let (status, _, body) =
+            send(&session, "GET", "http://plain.example.invalid/doc", &[], "").await;
+        let flow = complete(&session, 0).await;
+        if trusted {
+            assert_eq!(status, StatusCode::OK);
+            assert_eq!(body, "secure /doc HTTP/2.0");
+            assert!(flow.metadata.timing.tls.is_some());
+            assert_eq!(flow.request.url, format!("https://localhost:{port}/doc"));
+        } else {
+            assert_eq!(status, StatusCode::BAD_GATEWAY);
+            assert!(matches!(flow.metadata.state, FlowState::UpstreamTls(_)));
+        }
+    }
+}
+
+#[tokio::test]
+async fn rewrites_headers_status_query_and_bodies() {
+    let (address, origin) = echo_origin().await;
+    let session = proxy(true);
+    session.set_rules(
+        RuleSet::new(
+            vec![rule(
+                1,
+                &format!("http://{address}/*"),
+                Action::Rewrite {
+                    actions: vec![
+                        RewriteAction::SetHeader {
+                            side: RuleSide::Request,
+                            name: "x-test".into(),
+                            value: "rewritten".into(),
+                        },
+                        RewriteAction::SetQuery {
+                            name: "page".into(),
+                            value: "2".into(),
+                        },
+                        RewriteAction::RemoveQuery {
+                            name: "debug".into(),
+                        },
+                        RewriteAction::ReplaceBody {
+                            side: RuleSide::Request,
+                            find: "free".into(),
+                            replace: "premium".into(),
+                            regex: false,
+                        },
+                        RewriteAction::Status { code: 201 },
+                        RewriteAction::RemoveHeader {
+                            side: RuleSide::Response,
+                            name: "x-origin".into(),
+                        },
+                        RewriteAction::AddHeader {
+                            side: RuleSide::Response,
+                            name: "x-zentop".into(),
+                            value: "rewrite".into(),
+                        },
+                        RewriteAction::ReplaceBody {
+                            side: RuleSide::Response,
+                            find: r"body=(\w+)".into(),
+                            replace: "BODY<$1>".into(),
+                            regex: true,
+                        },
+                    ],
+                },
+            )],
+            true,
+        )
+        .unwrap(),
+    );
+    for (path, encoded) in [("/plan", false), ("/plan/gzip", true)] {
+        let (status, headers, body) = send(
+            &session,
+            "POST",
+            &format!("http://{address}{path}?page=1&debug=1"),
+            &[("x-test", "original"), ("content-type", "text/plain")],
+            "plan=free",
+        )
+        .await;
+        assert_eq!(status, StatusCode::CREATED);
+        assert_eq!(
+            body,
+            format!("POST {path}?page=2 x-test=rewritten BODY<plan>=premium")
+        );
+        assert_eq!(headers["content-length"], body.len().to_string());
+        assert!(!headers.contains_key("x-origin"));
+        assert_eq!(headers["x-zentop"], "rewrite");
+        // Compressed bodies are rewritten decoded and sent uncompressed.
+        assert!(!headers.contains_key("content-encoding"), "{encoded}");
+    }
+    let flow = complete(&session, 0).await;
+    assert_eq!(flow.metadata.status, Some(201));
+    assert_eq!(flow.request_body.kept(), b"plan=premium");
+    assert!(flow.request.url.ends_with("/plan?page=2"));
+    assert_eq!(flow.metadata.rules, vec![(1, RuleKind::Rewrite)]);
+    assert!(flow.rules[0].note.contains("Response body rewritten"));
+    origin.abort();
+}
+
+#[tokio::test]
+async fn rules_never_touch_tunnels() {
+    let (address, origin) = echo_origin().await;
+    let session = proxy(true);
+    session.set_rules(
+        RuleSet::new(
+            vec![
+                rule(
+                    1,
+                    "*",
+                    Action::Breakpoint {
+                        request: true,
+                        response: true,
+                    },
+                ),
+                rule(
+                    2,
+                    "*",
+                    Action::Rewrite {
+                        actions: vec![RewriteAction::AddHeader {
+                            side: RuleSide::Response,
+                            name: "x-zentop".into(),
+                            value: "1".into(),
+                        }],
+                    },
+                ),
+            ],
+            true,
+        )
+        .unwrap(),
+    );
+    let (mut sender, _driver) = client(session.address()).await;
+    let response = sender
+        .send_request(
+            Request::builder()
+                .method("CONNECT")
+                .uri(address.to_string())
+                .header("proxy-authorization", auth(&session))
+                .body(Full::default())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    let tunnel = hyper::upgrade::on(response).await.unwrap();
+    let (mut inner, connection) = hyper::client::conn::http1::handshake(tunnel).await.unwrap();
+    tokio::spawn(connection);
+    let response = inner
+        .send_request(
+            Request::get("/through")
+                .header("host", address.to_string())
+                .body(Full::<Bytes>::default())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert!(!response.headers().contains_key("x-zentop"));
+    assert_eq!(
+        response.collect().await.unwrap().to_bytes(),
+        "GET /through x-test=- body="
+    );
+    assert_eq!(session.held_count(), 0);
+    let flow = session.flow(0, false).unwrap();
+    assert_eq!(flow.metadata.kind, FlowKind::Tunnel);
+    assert!(flow.rules.is_empty() && flow.metadata.rules.is_empty());
+    origin.abort();
+}
+
+#[tokio::test]
+async fn rewrites_apply_inside_decrypted_connections() {
+    let test = DecryptedTest::new(false, true, 1).await;
+    test.session.set_rules(
+        RuleSet::new(
+            vec![rule(
+                1,
+                &format!("https://localhost:{}/capture", test.port),
+                Action::Rewrite {
+                    actions: vec![RewriteAction::SetHeader {
+                        side: RuleSide::Response,
+                        name: "x-origin".into(),
+                        value: "rewritten inside TLS".into(),
+                    }],
+                },
+            )],
+            true,
+        )
+        .unwrap(),
+    );
+    let tls = test.connect("localhost", false, true).await.unwrap();
+    let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(driver);
+    let response = sender.send_request(test.post(false)).await.unwrap();
+    assert_eq!(response.headers()["x-origin"], "rewritten inside TLS");
+    response.collect().await.unwrap();
+    let flow = complete(&test.session, 1).await;
+    assert_eq!(flow.metadata.kind, FlowKind::DecryptedHttps);
+    assert_eq!(flow.metadata.rules, vec![(1, RuleKind::Rewrite)]);
+}

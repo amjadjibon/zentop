@@ -32,6 +32,9 @@ pub struct Metadata {
     pub content: ContentKind,
     #[serde(skip)]
     pub websocket: bool,
+    /// The rules that touched this flow, in the order they applied.
+    #[serde(skip)]
+    pub rules: Vec<(u32, crate::RuleKind)>,
 }
 
 #[derive(Clone, Copy)]

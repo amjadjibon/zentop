@@ -10014,6 +10014,7 @@ dependencies = [
  "idna 1.1.0",
  "libc",
  "rcgen",
+ "regex",
  "rustls-platform-verifier",
  "security-framework",
  "security-framework-sys",

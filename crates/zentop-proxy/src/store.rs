@@ -38,6 +38,9 @@ struct Record {
     request_has_trailers: bool,
     opaque_request_headers: Vec<(usize, http::HeaderValue)>,
     head_bytes: usize,
+    /// The part of `head_bytes` charged for the request head.
+    request_bytes: usize,
+    applied: Vec<crate::AppliedRule>,
     messages: Vec<Arc<crate::Message>>,
     message_count: u64,
     message_payload: usize,
@@ -238,6 +241,7 @@ impl Store {
         let headers = self.capture_headers(raw_headers, fixed, true);
         request.headers = headers.display;
         self.counters.memory += fixed;
+        let request_bytes = fixed + headers.bytes;
         if process != PENDING_ATTRIBUTION && matches!(process, Attribution::Unknown(_)) {
             self.counters.unattributed += 1;
         }
@@ -246,7 +250,9 @@ impl Store {
         self.records.insert(
             id,
             Record {
-                head_bytes: fixed + headers.bytes,
+                head_bytes: request_bytes,
+                request_bytes,
+                applied: Vec::new(),
                 metadata: Metadata {
                     id,
                     connection,
@@ -264,6 +270,7 @@ impl Store {
                     url: request.url.clone(),
                     content,
                     websocket: false,
+                    rules: Vec::new(),
                 },
                 request,
                 response: None,
@@ -787,6 +794,117 @@ impl Store {
         Ok(request)
     }
 
+    /// Records that a rule touched a flow. A rule that touches both sides
+    /// keeps one entry, with both notes.
+    pub fn mark(&mut self, id: Option<u64>, rule: &crate::rules::Rule, note: String) {
+        let Some(record) = id.and_then(|id| self.records.get_mut(&id)) else {
+            return;
+        };
+        let id = record.metadata.id;
+        let index = match record
+            .applied
+            .iter()
+            .position(|applied| applied.id == rule.id)
+        {
+            Some(index) => index,
+            None => {
+                record.applied.push(crate::AppliedRule {
+                    id: rule.id,
+                    name: rule.name.clone(),
+                    kind: rule.kind(),
+                    note: String::new(),
+                });
+                record.metadata.rules.push((rule.id, rule.kind()));
+                record.head_bytes += rule.name.len();
+                self.counters.memory += rule.name.len();
+                record.applied.len() - 1
+            }
+        };
+        let applied = &mut record.applied[index];
+        let added = note.len() + if applied.note.is_empty() { 0 } else { 2 };
+        if !note.is_empty() {
+            if !applied.note.is_empty() {
+                applied.note.push_str("; ");
+            }
+            applied.note.push_str(&note);
+            record.head_bytes += added;
+            self.counters.memory += added;
+        }
+        self.changed(id);
+    }
+
+    /// Replaces the recorded request head with what rules or a breakpoint
+    /// actually sent.
+    pub fn update_request(
+        &mut self,
+        id: Option<u64>,
+        method: &str,
+        url: String,
+        host: String,
+        path: String,
+        raw_headers: &HeaderMap,
+    ) {
+        let Some(id) = id.filter(|id| self.records.contains_key(id)) else {
+            return;
+        };
+        let old = self.records[&id].request_bytes;
+        self.counters.memory -= old;
+        let masked = presentation::url(&url, Secrets::Mask);
+        let private_url = (masked != url).then_some(url);
+        let version_len = self.records[&id].request.version.len();
+        let fixed = masked.len() * 2
+            + private_url.as_ref().map_or(0, String::len)
+            + host.len() * 2
+            + path.len() * 2
+            + method.len() * 2
+            + version_len;
+        // The new head may not fit; keep what fits, as for any head.
+        self.make_room(fixed);
+        self.counters.memory += fixed;
+        let headers = self.capture_headers(raw_headers, 0, true);
+        let record = self.records.get_mut(&id).unwrap();
+        record.head_bytes = record.head_bytes - old + fixed + headers.bytes;
+        record.request_bytes = fixed + headers.bytes;
+        record.request.method = method.to_owned();
+        record.request.url.clone_from(&masked);
+        record.request.host.clone_from(&host);
+        record.request.path.clone_from(&path);
+        record.request.headers = headers.display;
+        record.private_url = private_url;
+        record.private_headers[Side::Request as usize] = headers.private;
+        record.opaque_request_headers = headers.opaque;
+        record.request_headers_truncated = headers.truncated;
+        record.headers_truncated |= headers.truncated;
+        record.metadata.method = method.to_owned();
+        record.metadata.url = masked;
+        record.metadata.host = host;
+        record.metadata.path = path;
+        self.changed(id);
+    }
+
+    /// Charges a body held for editing to the shared budget.
+    pub fn reserve_hold(&mut self, bytes: usize) -> bool {
+        if !self.make_room(bytes) {
+            return false;
+        }
+        self.counters.memory += bytes;
+        true
+    }
+
+    pub fn release_hold(&mut self, bytes: usize) {
+        self.counters.memory -= bytes;
+    }
+
+    pub fn hold_skipped(&mut self) {
+        self.counters.holds_skipped += 1;
+        self.revision += 1;
+    }
+
+    pub fn hold_timed_out(&mut self) {
+        self.counters.holds_timed_out += 1;
+        self.revision += 1;
+    }
+
     pub fn flow(&self, id: u64, reveal: bool) -> Option<Flow> {
         let record = self.records.get(&id)?;
         let mut request = record.request.clone();
@@ -835,6 +953,7 @@ impl Store {
             message_count: record.message_count,
             websocket: record.websocket,
             auth_scheme,
+            rules: record.applied.clone(),
         })
     }
 }
@@ -1105,5 +1224,64 @@ mod tests {
         );
         assert_eq!(store.flow(lone, false).unwrap().auth_scheme, None);
         assert_eq!(store.flow(lone, true).unwrap().auth_scheme, None);
+    }
+
+    #[test]
+    fn marks_rules_and_records_the_request_that_was_sent() {
+        use crate::rules::{Action, Rule};
+        let mut store = Store::default();
+        let id = start(&mut store);
+        let rule = Rule {
+            id: 9,
+            name: "Hold".into(),
+            enabled: true,
+            method: None,
+            url: "*".into(),
+            app: None,
+            action: Action::Breakpoint {
+                request: true,
+                response: true,
+            },
+        };
+        store.mark(Some(id), &rule, "Held 1.0 s".into());
+        store.mark(Some(id), &rule, "executed".into());
+        store.mark(None, &rule, "ignored while paused".into());
+        let flow = store.flow(id, false).unwrap();
+        assert_eq!(flow.metadata.rules, vec![(9, crate::RuleKind::Breakpoint)]);
+        assert_eq!(flow.rules.len(), 1);
+        assert_eq!(flow.rules[0].note, "Held 1.0 s; executed");
+
+        let mut headers = HeaderMap::new();
+        headers.insert("authorization", "Bearer edited".parse().unwrap());
+        headers.insert("x-plain", "1".parse().unwrap());
+        store.update_request(
+            Some(id),
+            "POST",
+            "http://y:81/new?token=abc&q=1".into(),
+            "y:81".into(),
+            "/new".into(),
+            &headers,
+        );
+        let masked = store.flow(id, false).unwrap();
+        assert_eq!(masked.metadata.method, "POST");
+        assert_eq!(masked.metadata.host, "y:81");
+        assert!(!masked.metadata.url.contains("abc"));
+        assert_eq!(masked.request.headers[0].1, crate::MASK);
+        let revealed = store.flow(id, true).unwrap();
+        assert_eq!(revealed.request.url, "http://y:81/new?token=abc&q=1");
+        assert_eq!(revealed.request.headers[0].1, "Bearer edited");
+
+        assert!(store.reserve_hold(1024));
+        store.release_hold(1024);
+        store.hold_skipped();
+        store.hold_timed_out();
+        assert_eq!(
+            (store.counters.holds_skipped, store.counters.holds_timed_out),
+            (1, 1)
+        );
+        store.remove(id);
+        assert_eq!(store.counters.memory, 0);
+        store.memory_limit = 10;
+        assert!(!store.reserve_hold(11));
     }
 }

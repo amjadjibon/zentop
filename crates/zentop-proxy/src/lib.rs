@@ -1,5 +1,6 @@
 //! In-memory traffic sessions with a loopback HTTP proxy, CONNECT tunnels, and optional TLS decryption.
 mod attribution;
+mod breakpoints;
 mod content;
 mod decryption;
 mod engine;
@@ -9,14 +10,17 @@ pub use decryption::{canonical_host, decrypt_host, skip_reason, CertificateAutho
 pub mod keychain;
 mod presentation;
 mod replay;
+pub mod rules;
 mod store;
 mod websocket;
 
+pub use breakpoints::{HeldEdits, HeldMessage};
 pub use content::ContentKind;
 pub use engine::{Options, Session};
 pub use har::{HarExport, HarOptions};
 pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata, MASK};
 pub use replay::{ReplayDraft, ReplayEdits, ReplayHeader, ReplayValue};
+pub use rules::{Rule, RuleKind, RuleSet};
 pub use websocket::{Direction, Message, Opcode};
 
 use serde::Serialize;
@@ -179,6 +183,17 @@ pub struct Flow {
     /// The request's `Authorization` scheme, such as `Bearer`. The scheme is
     /// not a credential, so it is shown even while the value is masked.
     pub auth_scheme: Option<String>,
+    /// The rules that touched this flow, with what each one did.
+    pub rules: Vec<AppliedRule>,
+}
+
+/// One rule's effect on a flow, such as "Held 4.2 s, edited".
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AppliedRule {
+    pub id: u32,
+    pub name: String,
+    pub kind: RuleKind,
+    pub note: String,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -187,6 +202,10 @@ pub struct Counters {
     pub flows_dropped: u64,
     pub unattributed: u64,
     pub evicted_bodies: u64,
+    /// Breakpoint matches passed through because the queue was full.
+    pub holds_skipped: u64,
+    /// Held messages that continued unmodified after the timeout.
+    pub holds_timed_out: u64,
     pub sent: u64,
     pub received: u64,
     pub memory: usize,

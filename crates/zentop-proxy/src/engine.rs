@@ -23,7 +23,10 @@ use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{self, Instant as TokioInstant};
 
+mod editing;
+
 use crate::decryption::{canonical_host, Decryption};
+use editing::{Editing, ResponseStage};
 use tokio_rustls::{
     rustls::{self, pki_types::ServerName},
     LazyConfigAcceptor, TlsConnector,
@@ -64,6 +67,7 @@ pub struct Session {
     address: SocketAddr,
     token: String,
     store: SharedStore,
+    editing: Arc<Editing>,
     command: mpsc::Sender<Command>,
     stop: Option<oneshot::Sender<()>>,
     thread: Option<thread::JoinHandle<()>>,
@@ -107,11 +111,15 @@ impl Session {
         let mut store = Store::default();
         store.counters.allow_local_destinations = options.allow_local_destinations;
         let store = Arc::new(Mutex::new(store));
+        let editing = Arc::new(Editing::new(
+            decryption.as_ref().map(|tls| tls.upstream.clone()),
+        ));
         let engine = Arc::new(Engine {
             address,
             auth,
             decryption,
             store: store.clone(),
+            editing: editing.clone(),
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -130,6 +138,7 @@ impl Session {
             address,
             token,
             store,
+            editing,
             command,
             stop: Some(stop),
             thread: Some(thread),
@@ -148,8 +157,64 @@ impl Session {
         format!("http://zentop:{}@{}", self.token, self.address)
     }
 
+    /// Pausing also releases every held message unmodified.
     pub fn pause(&self, pause: bool) -> bool {
+        if pause {
+            self.editing
+                .queue
+                .release_all("released when capture paused");
+        }
         self.command.try_send(Command::Pause(pause)).is_ok()
+    }
+
+    /// Replaces the live-editing rules. Turning breakpoints off releases
+    /// every held message unmodified. The CLI never calls this.
+    pub fn set_rules(&self, rules: crate::RuleSet) {
+        self.editing.set_rules(rules);
+    }
+
+    /// Held messages, newest first, with secrets masked and without bodies.
+    pub fn held_messages(&self) -> Vec<crate::HeldMessage> {
+        self.editing.queue.list()
+    }
+
+    pub fn held_message(&self, id: u64, reveal: bool) -> Option<crate::HeldMessage> {
+        self.editing.queue.message(id, reveal)
+    }
+
+    pub fn held_count(&self) -> usize {
+        self.editing.queue.len()
+    }
+
+    /// Changes whenever a message is held or resolved.
+    pub fn held_revision(&self) -> u64 {
+        self.editing.queue.revision()
+    }
+
+    /// Sends a held message on, with edits.
+    pub fn execute_held(&self, id: u64, edits: crate::HeldEdits) -> Result<(), &'static str> {
+        let message = self
+            .editing
+            .queue
+            .message(id, false)
+            .ok_or("The message is no longer held")?;
+        editing::validate_edits(&edits, message.headers.len())?;
+        if self
+            .editing
+            .queue
+            .resolve(id, crate::breakpoints::Outcome::Execute(edits))
+        {
+            Ok(())
+        } else {
+            Err("The message is no longer held")
+        }
+    }
+
+    /// Answers the client with `502` instead of sending the held message on.
+    pub fn abort_held(&self, id: u64) -> bool {
+        self.editing
+            .queue
+            .resolve(id, crate::breakpoints::Outcome::Abort)
     }
 
     pub fn clear(&self) -> bool {
@@ -244,6 +309,7 @@ struct Engine {
     auth: String,
     decryption: Option<Arc<Decryption>>,
     store: SharedStore,
+    editing: Arc<Editing>,
 }
 
 struct Connection {
@@ -500,10 +566,10 @@ impl Engine {
             return Ok(self.decrypt_tunnel(request, target, connection, capture, attribution_wait));
         }
         Ok(self
-            .route(
+            .exchange(
                 request.map(BodyExt::boxed_unsync),
                 target,
-                Some(connection),
+                connection,
                 capture,
                 None,
             )
@@ -635,7 +701,7 @@ impl Engine {
         let id = capture
             .id
             .ok_or("Resume capture before replaying a request")?;
-        let mut response = self.route(request, target, None, capture, tls).await;
+        let mut response = self.route(request, target, None, capture, tls, None).await;
         while let Some(frame) = response.body_mut().frame().await {
             frame.map_err(|error| error.to_string())?;
         }
@@ -815,11 +881,16 @@ impl Engine {
             return Ok(reply(status, reason));
         }
         let tls = self.decryption.as_ref().map(|tls| tls.upstream.clone());
+        // Requests inside the tunnel are ordinary requests to its host.
+        let inner = Target {
+            tunnel: false,
+            ..target.as_ref().clone()
+        };
         Ok(self
-            .route(
+            .exchange(
                 request.map(BodyExt::boxed_unsync),
-                target.as_ref().clone(),
-                Some(connection),
+                inner,
+                connection,
                 capture,
                 tls,
             )
@@ -833,6 +904,7 @@ impl Engine {
         connection: Option<Arc<Connection>>,
         capture: Arc<Capture>,
         tls: Option<Arc<rustls::ClientConfig>>,
+        stage: Option<ResponseStage>,
     ) -> Response<MessageBody> {
         let dial_started = Instant::now();
         let (status, state, message) = match time::timeout(DIAL_TIMEOUT, self.dial(&target)).await {
@@ -860,6 +932,7 @@ impl Engine {
                                 Some(h2),
                                 connection,
                                 capture,
+                                stage,
                             )
                             .await;
                         }
@@ -879,7 +952,10 @@ impl Engine {
                 if target.tunnel {
                     return tunnel(request, upstream, connection, capture);
                 }
-                return forward_or_fail(request, target, upstream, None, connection, capture).await;
+                return forward_or_fail(
+                    request, target, upstream, None, connection, capture, stage,
+                )
+                .await;
             }
             Ok(Err(DialError::Refused)) => {
                 self.store.lock().unwrap().refuse();
@@ -1322,6 +1398,7 @@ async fn forward_or_fail(
     tls_h2: Option<bool>,
     connection: Option<Arc<Connection>>,
     capture: Arc<Capture>,
+    stage: Option<ResponseStage>,
 ) -> Response<MessageBody> {
     match forward(
         request,
@@ -1330,6 +1407,7 @@ async fn forward_or_fail(
         tls_h2,
         connection,
         capture.clone(),
+        stage,
     )
     .await
     {
@@ -1349,6 +1427,7 @@ async fn forward(
     tls_h2: Option<bool>,
     connection: Option<Arc<Connection>>,
     capture: Arc<Capture>,
+    stage: Option<ResponseStage>,
 ) -> Result<Response<MessageBody>, Box<dyn std::error::Error + Send + Sync>> {
     let version = request.version();
     let upgrade = connection.is_some()
@@ -1420,17 +1499,17 @@ async fn forward(
     {
         return Err(io::Error::other("Origin selected an unsolicited upgrade").into());
     }
-    {
-        let mut store = capture.store.lock().unwrap();
-        store.response(
-            capture.id,
-            response.status().as_u16(),
-            response.headers(),
-            capture.started.elapsed(),
-        );
-        store.response_version(capture.id, response.version());
-    }
     if let Some(client) = client_upgrade.filter(|_| upgraded) {
+        {
+            let mut store = capture.store.lock().unwrap();
+            store.response(
+                capture.id,
+                response.status().as_u16(),
+                response.headers(),
+                capture.started.elapsed(),
+            );
+            store.response_version(capture.id, response.version());
+        }
         let compression = (offers_websocket
             && header_tokens(response.headers(), header::UPGRADE)
                 .any(|value| value.eq_ignore_ascii_case("websocket")))
@@ -1464,22 +1543,60 @@ async fn forward(
             reply(StatusCode::OK, "").into_body(),
         ));
     }
-    let (mut head, incoming) = response.into_parts();
+    let (head, incoming) = response.into_parts();
+    Ok(deliver(
+        head,
+        incoming.boxed_unsync(),
+        capture,
+        Some(driver),
+        version,
+        stage,
+    )
+    .await)
+}
+
+/// Runs response rules, records the response head the client receives, and
+/// streams its body through the capture.
+async fn deliver(
+    mut head: http::response::Parts,
+    body: MessageBody,
+    capture: Arc<Capture>,
+    driver: Option<UpstreamDriver>,
+    version: Version,
+    stage: Option<ResponseStage>,
+) -> Response<MessageBody> {
+    let body = match stage {
+        Some(stage) => match stage.apply(&mut head, body, &capture).await {
+            Ok(body) => body,
+            Err(replacement) => return *replacement,
+        },
+        None => body,
+    };
+    {
+        let mut store = capture.store.lock().unwrap();
+        store.response(
+            capture.id,
+            head.status.as_u16(),
+            &head.headers,
+            capture.started.elapsed(),
+        );
+        store.response_version(capture.id, head.version);
+    }
     strip_hop_headers(&mut head.headers);
     head.version = version;
-    if incoming.is_end_stream() {
+    if body.is_end_stream() {
         capture.finish(FlowState::Complete);
     }
-    Ok(Response::from_parts(
+    Response::from_parts(
         head,
         StreamingBody {
-            incoming: incoming.boxed_unsync(),
+            incoming: body,
             side: Side::Response,
             capture,
-            _driver: Some(driver),
+            _driver: driver,
         }
         .boxed_unsync(),
-    ))
+    )
 }
 
 fn tunnel(
