@@ -26,6 +26,7 @@
     "menuBarEnabled": true,
     "keepRunning": false,
     "processView": "flat",
-    "trafficPort": null
+    "trafficPort": null,
+    "trafficDecryptHosts": []
   }
 }

@@ -1,4 +1,6 @@
 //! App-owned capture with a separate virtualized traffic window.
+mod certificate;
+
 use super::{copy_button, monitor, process_view::Identity, theme, Windows};
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants};
@@ -26,6 +28,8 @@ impl Global for CaptureGlobal {}
 
 pub(super) struct Capture {
     pub session: Option<Session>,
+    decryption: Option<Arc<zentop_proxy::Decryption>>,
+    certificates: certificate::CertificateSetup,
     generation: u64,
     _quit: Subscription,
 }
@@ -33,6 +37,8 @@ pub(super) struct Capture {
 pub(super) fn init(cx: &mut App) {
     let capture = cx.new(|cx: &mut Context<Capture>| Capture {
         session: None,
+        decryption: None,
+        certificates: Default::default(),
         generation: 0,
         _quit: cx.on_app_quit(|this, _| {
             this.session.take();
@@ -49,6 +55,7 @@ pub(super) fn global(cx: &App) -> Entity<Capture> {
 fn stop(cx: &mut App) {
     global(cx).update(cx, |capture, cx| {
         capture.session.take();
+        capture.decryption.take();
         capture.generation += 1;
         cx.notify();
     });
@@ -86,6 +93,7 @@ pub(super) fn overview(cx: &App) -> impl IntoElement {
 
 pub(super) fn open(process: Option<Identity>, cx: &mut App) {
     super::companion::close(cx);
+    certificate::load(&global(cx), cx);
     let existing = cx.global::<Windows>().traffic.clone();
     let focused = existing.is_some_and(|(handle, view)| {
         if !super::focus(Some(handle), cx) {
@@ -201,6 +209,11 @@ pub struct Traffic {
     allow_local: bool,
     port: Entity<InputState>,
     filters: [Entity<InputState>; 4],
+    decrypt_input: Entity<InputState>,
+    show_certificate: bool,
+    exported_pem: Option<std::path::PathBuf>,
+    icons: std::collections::HashMap<Identity, Option<crate::native_icons::Icon>>,
+    icon_task: Option<Task<()>>,
     status: Option<u16>,
     kind: Option<FlowKind>,
     errors: bool,
@@ -223,6 +236,7 @@ impl Traffic {
                 .placeholder("OS-assigned")
                 .default_value(saved_port.map(|p| p.to_string()).unwrap_or_default())
         });
+        let decrypt_input = cx.new(|cx| InputState::new(window, cx).placeholder("api.example.com"));
         let filters = ["Search traffic", "Process", "Host", "Method"]
             .map(|placeholder| cx.new(|cx| InputState::new(window, cx).placeholder(placeholder)));
         let mut subscriptions = vec![cx.observe(&capture, |this, _, cx| this.refresh(cx))];
@@ -260,6 +274,11 @@ impl Traffic {
             allow_local: false,
             port,
             filters,
+            decrypt_input,
+            show_certificate: false,
+            exported_pem: None,
+            icons: Default::default(),
+            icon_task: None,
             status: None,
             kind: None,
             errors: false,
@@ -278,6 +297,8 @@ impl Traffic {
             self.generation = capture.generation;
             self.revision = 0;
             self.rows.clear();
+            self.icon_task = None;
+            self.icons.clear();
             self.select(None);
             self.allow_local = false;
             self.counters = Counters::default();
@@ -316,6 +337,7 @@ impl Traffic {
                 cx.notify();
             }
         }
+        self.resolve_icons(cx);
     }
 
     fn select(&mut self, id: Option<u64>) {
@@ -325,6 +347,50 @@ impl Traffic {
         self.reveal = false;
         self.include_secrets = false;
         self.tab = Tab::Request;
+    }
+
+    fn resolve_icons(&mut self, cx: &mut Context<Self>) {
+        if self.icon_task.is_some() {
+            return;
+        }
+        if self.icons.len() > 2_000 {
+            let retained: std::collections::HashSet<_> = self
+                .rows
+                .iter()
+                .filter_map(|row| identity(&row.process))
+                .collect();
+            self.icons.retain(|id, _| retained.contains(id));
+        }
+        let mut ids = std::collections::HashSet::new();
+        let batch: Vec<_> = self
+            .rows
+            .iter()
+            .filter_map(|row| identity(&row.process))
+            .filter(|id| !self.icons.contains_key(id) && ids.insert(*id))
+            .take(crate::native_icons::MAX_BATCH)
+            .map(|(pid, start_time)| crate::native_icons::IconRequest { pid, start_time })
+            .collect();
+        if batch.is_empty() {
+            return;
+        }
+        let state = monitor::global(cx).read(cx).state();
+        self.icon_task = Some(cx.spawn(async move |this, cx| {
+            let icons = cx
+                .background_executor()
+                .spawn(async move {
+                    let resolved = crate::native_icons::resolve_batch(&state, batch.clone());
+                    let attempted = batch.into_iter().map(|r| ((r.pid, r.start_time), None));
+                    attempted
+                        .chain(resolved)
+                        .collect::<std::collections::HashMap<_, _>>()
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                this.icons.extend(icons);
+                this.icon_task.take();
+                cx.notify();
+            });
+        }));
     }
 
     fn refresh_detail(&mut self, cx: &mut Context<Self>) {
@@ -404,14 +470,32 @@ impl Traffic {
     }
 
     fn start(&mut self, port: Option<u16>, cx: &mut Context<Self>) {
-        match Session::start(Options {
+        let options = Options {
             port,
             allow_local_destinations: self.allow_local,
-        }) {
+        };
+        let decryption = self
+            .capture
+            .read(cx)
+            .certificates
+            .bind(certificate::hosts(cx));
+        let (decryption, session, error) = match decryption {
+            Ok(decryption) => {
+                let session = Session::start_with_decryption(options, decryption.clone());
+                (Some(decryption), session, None)
+            }
+            Err(error) => (
+                None,
+                Session::start(options),
+                Some(format!("Decryption unavailable: {error}")),
+            ),
+        };
+        match session {
             Ok(session) => {
-                self.error = None;
+                self.error = error;
                 self.capture.update(cx, |capture, cx| {
                     capture.session = Some(session);
+                    capture.decryption = decryption;
                     cx.notify();
                 });
             }
@@ -508,8 +592,8 @@ impl Traffic {
                     .child(
                         h_flex()
                             .gap_5()
-                            .child(copy_line("traffic-address", "Address", address, cx))
-                            .child(copy_line("traffic-token", "Token", token, cx)),
+                            .child(copy_line("traffic-address", "Address", address, cx).w(px(245.)))
+                            .child(copy_line("traffic-token", "Token", token, cx).flex_1()),
                     )
                     .child(
                         v_flex()
@@ -615,7 +699,7 @@ impl Traffic {
                     }))
                 .child(Button::new("traffic-kind-filter").outline().small()
                     .label(kind_name(kind)).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
-                        for option in [None, Some(FlowKind::Http), Some(FlowKind::Tunnel), Some(FlowKind::Upgrade)] {
+                        for option in [None, Some(FlowKind::Http), Some(FlowKind::Tunnel), Some(FlowKind::DecryptedHttps), Some(FlowKind::Upgrade)] {
                             let entity = kind_entity.clone();
                             menu = menu.item(PopupMenuItem::new(kind_name(option)).checked(kind == option)
                                 .on_click(move |_, _, cx| entity.update(cx, |this, cx| {
@@ -770,10 +854,7 @@ impl Traffic {
     fn detail(&self, detail: &Detail, cx: &mut Context<Self>) -> Div {
         let flow = &detail.flow;
         let Metadata { kind, state, .. } = &flow.metadata;
-        let reason = match state {
-            FlowState::Refused(reason) | FlowState::Failed(reason) => Some(*reason),
-            _ => None,
-        };
+        let reason = state.error_reason().map(str::to_owned);
         let owner_note = match flow.metadata.process {
             Attribution::Unknown(reason) => Some(reason),
             _ => None,
@@ -831,7 +912,9 @@ impl Traffic {
                 })
                 .when(*kind == FlowKind::Tunnel && self.tab != Tab::Timing, |d| {
                     d.child(div().text_xs().text_color(cx.theme().muted_foreground)
-                        .child("CONNECT traffic is not decrypted."))
+                        .child(flow.metadata.host.rsplit_once(':')
+                            .and_then(|(host, _)| zentop_proxy::skip_reason(host))
+                            .unwrap_or("CONNECT traffic is not decrypted.")))
                 }))
     }
 }
@@ -844,6 +927,7 @@ impl Render for Traffic {
             .text_color(cx.theme().foreground)
             .child(TitleBar::new().child(div().text_sm().child("Traffic")))
             .child(self.header(cx))
+            .child(self.certificate_panel(cx))
             .child(self.toolbar(cx))
             .child(self.table(cx))
             .when_some(self.detail.as_ref(), |window, detail| {
@@ -867,15 +951,17 @@ fn kind_name(kind: Option<FlowKind>) -> &'static str {
         Some(FlowKind::Http) => "HTTP",
         Some(FlowKind::Tunnel) => "Tunnel",
         Some(FlowKind::Upgrade) => "Upgrade",
-        Some(FlowKind::DecryptedHttps) => "HTTPS",
+        Some(FlowKind::DecryptedHttps) => "Decrypted HTTPS",
     }
 }
 
 fn copy_line(id: &'static str, label: &'static str, value: String, cx: &App) -> Div {
     h_flex()
+        .min_w_0()
         .gap_2()
         .child(
             div()
+                .flex_shrink_0()
                 .text_xs()
                 .text_color(cx.theme().muted_foreground)
                 .child(label),
@@ -885,10 +971,11 @@ fn copy_line(id: &'static str, label: &'static str, value: String, cx: &App) -> 
                 .text_xs()
                 .font_family(cx.theme().mono_font_family.clone())
                 .min_w_0()
+                .flex_1()
                 .truncate()
                 .child(value.clone()),
         )
-        .child(copy_button(id, label, value))
+        .child(div().flex_shrink_0().child(copy_button(id, label, value)))
 }
 
 fn columns(cx: &App) -> Div {
@@ -927,12 +1014,25 @@ fn flow_row(
         (_, Some(400..=499)) => theme::palette(cx).warning,
         _ => cx.theme().foreground,
     };
+    let icon = identity(&row.process)
+        .and_then(|owner| entity.read(cx).icons.get(&owner))
+        .and_then(Clone::clone);
     let process = h_flex()
         .w(px(150.))
         .flex_shrink_0()
         .gap_1()
         .overflow_hidden()
-        .child(Icon::new(IconName::AppWindow).size_4().flex_shrink_0())
+        .child(if let Some(image) = icon {
+            gpui_kit::img(image)
+                .size_4()
+                .flex_shrink_0()
+                .into_any_element()
+        } else {
+            Icon::new(IconName::AppWindow)
+                .size_4()
+                .flex_shrink_0()
+                .into_any_element()
+        })
         .child(if let Some(owner) = identity(&row.process) {
             Button::new(("traffic-process", id as usize))
                 .link()
@@ -946,6 +1046,18 @@ fn flow_row(
                 .child(row.process.name().to_owned())
                 .into_any_element()
         });
+    let open = entity.clone();
+    let action = (row.kind == FlowKind::Tunnel).then(|| {
+        zentop_proxy::decrypt_host(
+            row.host
+                .rsplit_once(':')
+                .map_or(&row.host, |(host, _)| host),
+        )
+    });
+    let listed = action
+        .as_ref()
+        .and_then(|result| result.as_ref().ok())
+        .is_some_and(|host| certificate::hosts(cx).contains(host));
     columns(cx)
         .id(("traffic-flow", id as usize))
         .cursor_pointer()
@@ -972,11 +1084,45 @@ fn flow_row(
         .child(process)
         .child(cell(row.method.clone(), 77.))
         .child(cell(row.host.clone(), 176.))
-        .child(path_cell(if row.kind == FlowKind::Tunnel {
-            "Not decrypted".into()
-        } else {
-            row.path.clone()
-        }))
+        .child(
+            h_flex()
+                .flex_1()
+                .min_w_0()
+                .gap_1()
+                .overflow_hidden()
+                .child(path_cell(if row.kind == FlowKind::Tunnel {
+                    "Not decrypted".into()
+                } else if row.kind == FlowKind::DecryptedHttps {
+                    format!("Decrypted · {}", row.path)
+                } else {
+                    row.path.clone()
+                }))
+                .when_some(action, |row, action| match action {
+                    Ok(host) if !listed => row.child(
+                        Button::new(("traffic-decrypt-host", id as usize))
+                            .outline()
+                            .small()
+                            .label("Decrypt this host")
+                            .on_click(move |_, _, cx| {
+                                open.update(cx, |this, cx| {
+                                    this.show_certificate = true;
+                                    this.edit_host(&host, true, cx);
+                                })
+                            }),
+                    ),
+                    Err(reason) => row.child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .truncate()
+                            .child(if reason.contains("skip list") {
+                                "Skip list"
+                            } else {
+                                "DNS host required"
+                            }),
+                    ),
+                    _ => row,
+                }),
+        )
         .child(
             cell(
                 row.status

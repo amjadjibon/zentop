@@ -32,6 +32,18 @@ fn merge(config: &mut Value, patch: &Value) {
                 }
                 continue;
             }
+            #[cfg(target_os = "macos")]
+            if group == "behavior" && key == "trafficDecryptHosts" {
+                if let Some(hosts) = value.as_array() {
+                    let hosts: std::collections::BTreeSet<_> = hosts
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(|host| zentop_proxy::decrypt_host(host).ok())
+                        .collect();
+                    config[group][key] = serde_json::json!(hosts);
+                }
+                continue;
+            }
             let valid = match key.as_str() {
                 "itemsPerPage" => value
                     .as_u64()
@@ -205,8 +217,24 @@ mod tests {
         fs::remove_dir_all(dir).unwrap();
     }
 
+    #[cfg(target_os = "macos")]
     #[test]
-    fn traffic_settings_accept_only_the_optional_port() {
+    fn saved_decrypt_hosts_are_exact_canonical_and_unique() {
+        let mut config = defaults();
+        merge(
+            &mut config,
+            &serde_json::json!({"behavior":{"trafficDecryptHosts": [
+                "Example.COM.", "example.com", "BüCHER.example", "*.example.com", "apple.com", 42
+            ]}}),
+        );
+        assert_eq!(
+            config["behavior"]["trafficDecryptHosts"],
+            serde_json::json!(["example.com", "xn--bcher-kva.example"]),
+        );
+    }
+
+    #[test]
+    fn traffic_settings_validate_the_optional_port() {
         let mut config = defaults();
         merge(
             &mut config,
