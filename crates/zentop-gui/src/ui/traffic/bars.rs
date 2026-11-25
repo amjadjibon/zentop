@@ -418,19 +418,29 @@ impl Traffic {
                         cx.notify();
                     })),
             )
-            .child(div().flex_1().min_w_0().px_2().truncate().when_some(
-                self.operation.as_ref(),
-                |row, result| {
-                    row.text_color(if result.is_ok() {
-                        muted
-                    } else {
-                        theme::palette(cx).danger
-                    })
-                    .child(match result {
-                        Ok(message) | Err(message) => message.clone(),
-                    })
-                },
-            ))
+            .child(
+                div()
+                    .id("traffic-operation")
+                    .flex_1()
+                    .min_w_0()
+                    .px_2()
+                    .truncate()
+                    .when_some(self.operation.as_ref(), |row, result| {
+                        let (Ok(message) | Err(message)) = result;
+                        // The bar truncates long messages; hover shows all of it.
+                        let full = message.clone();
+                        row.text_color(if result.is_ok() {
+                            muted
+                        } else {
+                            theme::palette(cx).danger
+                        })
+                        .tooltip(move |window, cx| {
+                            gpui_kit::component::tooltip::Tooltip::new(full.clone())
+                                .build(window, cx)
+                        })
+                        .child(message.clone())
+                    }),
+            )
             .child(
                 div()
                     .flex_shrink_0()
