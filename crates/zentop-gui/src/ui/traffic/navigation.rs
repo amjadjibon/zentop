@@ -252,6 +252,9 @@ mod tests {
             timing: Default::default(),
             bytes: (1, 2),
             state: FlowState::Complete,
+            url: format!("http://{host}/"),
+            content: Default::default(),
+            websocket: false,
         }
     }
 

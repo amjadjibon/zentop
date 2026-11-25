@@ -56,11 +56,7 @@ enum Command {
     Pause(bool),
     Clear,
     AllowLocal(bool),
-    Replay(
-        u64,
-        crate::ReplayEdits,
-        oneshot::Sender<Result<u64, String>>,
-    ),
+    Replay(crate::replay::Source, oneshot::Sender<Result<u64, String>>),
 }
 
 /// Owns the dedicated runtime thread. Dropping this handle closes the session.
@@ -183,9 +179,27 @@ impl Session {
         if edits.size() > 1024 * 1024 + 80 * 1024 {
             return Err("Edited request exceeds the capture limits");
         }
+        self.send_replay(crate::replay::Source::Flow(id, edits))
+    }
+
+    /// Sends a request composed from scratch, recorded as a Zentop flow.
+    pub fn compose(
+        &self,
+        draft: crate::ReplayDraft,
+    ) -> Result<oneshot::Receiver<Result<u64, String>>, &'static str> {
+        if draft.size() > 1024 * 1024 + 80 * 1024 {
+            return Err("Composed request exceeds the capture limits");
+        }
+        self.send_replay(crate::replay::Source::Composed(draft))
+    }
+
+    fn send_replay(
+        &self,
+        source: crate::replay::Source,
+    ) -> Result<oneshot::Receiver<Result<u64, String>>, &'static str> {
         let (reply, result) = oneshot::channel();
         self.command
-            .try_send(Command::Replay(id, edits, reply))
+            .try_send(Command::Replay(source, reply))
             .map_err(|_| "Proxy command queue is busy")?;
         Ok(result)
     }
@@ -348,7 +362,7 @@ impl Engine {
                     Command::Pause(paused) => self.store.lock().unwrap().pause(paused),
                     Command::Clear => self.store.lock().unwrap().clear(),
                     Command::AllowLocal(allow) => self.store.lock().unwrap().counters.allow_local_destinations = allow,
-                    Command::Replay(id, edits, reply) => {
+                    Command::Replay(source, reply) => {
                         let Ok(replay_slot) = replay_slots.clone().try_acquire_owned() else {
                             let _ = reply.send(Err("Too many requests are being replayed".into()));
                             continue;
@@ -362,7 +376,7 @@ impl Engine {
                         let engine = self.clone();
                         clients.spawn(async move {
                             let (_slot, _replay_slot) = (slot, replay_slot);
-                            let result = time::timeout(IDLE_TIMEOUT, engine.repeat(id, edits, connection_id)).await
+                            let result = time::timeout(IDLE_TIMEOUT, engine.repeat(source, connection_id)).await
                                 .unwrap_or_else(|_| Err("Repeated request timed out".into()));
                             let _ = reply.send(result);
                         });
@@ -572,11 +586,15 @@ impl Engine {
 
     async fn repeat(
         &self,
-        id: u64,
-        edits: crate::ReplayEdits,
+        source: crate::replay::Source,
         connection_id: u64,
     ) -> Result<u64, String> {
-        let request = self.store.lock().unwrap().replay_request(id, edits)?;
+        let request = match source {
+            crate::replay::Source::Flow(id, edits) => {
+                self.store.lock().unwrap().replay_request(id, edits)?
+            }
+            crate::replay::Source::Composed(draft) => draft.request()?,
+        };
         let https = request.uri().scheme_str() == Some("https");
         if request.method() == Method::CONNECT || has_upgrade(request.headers()) {
             return Err("Replay supports HTTP requests without CONNECT or upgrades".into());

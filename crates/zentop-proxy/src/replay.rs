@@ -102,6 +102,109 @@ impl ReplayDraft {
     }
 }
 
+impl ReplayDraft {
+    /// The starting point for a request composed from scratch.
+    pub fn empty() -> Self {
+        Self {
+            method: "GET".into(),
+            url: "http://".into(),
+            headers: Vec::new(),
+            body: Some(String::new()),
+        }
+    }
+
+    pub(crate) fn size(&self) -> usize {
+        self.method.len()
+            + self.url.len()
+            + self.body.as_ref().map_or(0, String::len)
+            + self
+                .headers
+                .iter()
+                .map(|(name, value)| name.len() + value.len() + 4)
+                .sum::<usize>()
+    }
+
+    /// Builds a composed request. It goes through the same destination,
+    /// decrypt-list and TLS checks as any replay.
+    pub(crate) fn request(self) -> Result<http::Request<bytes::Bytes>, &'static str> {
+        let uri: http::Uri = self
+            .url
+            .trim()
+            .parse()
+            .map_err(|_| "Enter an absolute http:// or https:// URL")?;
+        if !matches!(uri.scheme_str(), Some("http" | "https")) || uri.authority().is_none() {
+            return Err("Enter an absolute http:// or https:// URL");
+        }
+        let mut request = http::Request::builder()
+            .method(self.method.trim())
+            .uri(uri)
+            .body(bytes::Bytes::from(self.body.unwrap_or_default()))
+            .map_err(|_| "Enter a valid HTTP method")?;
+        for (name, value) in self.headers {
+            if name.trim().is_empty() {
+                continue;
+            }
+            let name =
+                http::HeaderName::try_from(name.trim()).map_err(|_| "Enter a valid header name")?;
+            if name == http::header::PROXY_AUTHORIZATION || name == http::header::CONTENT_LENGTH {
+                continue;
+            }
+            let value =
+                http::HeaderValue::from_str(&value).map_err(|_| "Enter a valid header value")?;
+            request.headers_mut().append(name, value);
+        }
+        Ok(request)
+    }
+}
+
+/// Where a replayed request comes from.
+#[derive(Debug)]
+pub(crate) enum Source {
+    Flow(u64, ReplayEdits),
+    Composed(ReplayDraft),
+}
+
 pub(crate) fn supported(kind: FlowKind) -> bool {
     matches!(kind, FlowKind::Http | FlowKind::DecryptedHttps)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn composed_requests_need_absolute_http_urls_and_drop_proxy_credentials() {
+        let draft = ReplayDraft::empty();
+        assert!(draft.size() > 0);
+        assert!(draft.request().is_err());
+        for url in ["ftp://example.com/", "/relative", "example.com"] {
+            let draft = ReplayDraft {
+                url: url.into(),
+                ..ReplayDraft::empty()
+            };
+            assert!(draft.request().is_err(), "{url}");
+        }
+        let draft = ReplayDraft {
+            method: "POST".into(),
+            url: " https://example.com/v1?q=1 ".into(),
+            headers: vec![
+                ("Proxy-Authorization".into(), "Basic x".into()),
+                ("content-length".into(), "99".into()),
+                ("x-test".into(), "1".into()),
+                ("".into(), "ignored".into()),
+            ],
+            body: Some("{}".into()),
+        };
+        let request = draft.request().unwrap();
+        assert_eq!(request.method(), http::Method::POST);
+        assert_eq!(request.uri().to_string(), "https://example.com/v1?q=1");
+        assert_eq!(request.headers().len(), 1);
+        assert_eq!(request.body().as_ref(), b"{}");
+        let bad = ReplayDraft {
+            method: "BAD METHOD".into(),
+            url: "http://example.com/".into(),
+            ..ReplayDraft::empty()
+        };
+        assert!(bad.request().is_err());
+    }
 }

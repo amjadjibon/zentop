@@ -5,7 +5,7 @@ use std::time::SystemTime;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use serde::Serialize;
 
-use crate::{Attribution, Body, Flow, FlowKind, FlowState, Headers, Timing};
+use crate::{Attribution, Body, ContentKind, Flow, FlowKind, FlowState, Headers, Timing};
 
 #[derive(Clone, Debug, Serialize)]
 pub struct Metadata {
@@ -23,6 +23,15 @@ pub struct Metadata {
     pub timing: Timing,
     pub bytes: (u64, u64),
     pub state: FlowState,
+    /// The request URL with secret query values masked. The CLI omits it,
+    /// as it omits queries everywhere.
+    #[serde(skip)]
+    pub url: String,
+    /// Classified by the store as heads and the request body arrive.
+    #[serde(skip)]
+    pub content: ContentKind,
+    #[serde(skip)]
+    pub websocket: bool,
 }
 
 #[derive(Clone, Copy)]

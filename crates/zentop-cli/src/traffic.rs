@@ -149,12 +149,19 @@ mod tests {
                 },
                 bytes: (5, 5),
                 state: FlowState::Complete,
+                url: "http://localhost:8000/socket?token=[redacted]".into(),
+                content: zentop_proxy::ContentKind::Other,
+                websocket: true,
             },
             request_headers: None,
             response_headers: None,
         };
         let json = serde_json::to_value(entry).unwrap();
         assert_eq!(json["kind"], "upgrade");
+        // The UI-only fields never reach CLI output.
+        assert!(json.get("url").is_none());
+        assert!(json.get("content").is_none());
+        assert!(json.get("websocket").is_none());
         assert_eq!(json["state"]["kind"], "complete");
         assert_eq!(
             json["timing"],

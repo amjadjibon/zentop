@@ -4,6 +4,7 @@ use std::time::{Duration, SystemTime};
 
 use http::HeaderMap;
 
+use crate::content::Classifier;
 use crate::presentation::{self, Metadata, Secrets};
 use crate::{
     Attribution, Body, Counters, Flow, FlowKind, FlowState, Headers, RequestHead, ResponseHead,
@@ -43,6 +44,7 @@ struct Record {
     message_work: usize,
     messages_cleared: bool,
     websocket: bool,
+    classifier: Classifier,
     reported: bool,
     revision: u64,
 }
@@ -221,7 +223,8 @@ impl Store {
         let masked = presentation::url(&request.url, Secrets::Mask);
         let private_url =
             (masked != request.url).then(|| std::mem::replace(&mut request.url, masked));
-        let fixed = request.url.len()
+        // The masked URL is held twice: in the request head and in row metadata.
+        let fixed = request.url.len() * 2
             + private_url.as_ref().map_or(0, String::len)
             + host.len() * 2
             + path.len() * 2
@@ -238,6 +241,8 @@ impl Store {
         if process != PENDING_ATTRIBUTION && matches!(process, Attribution::Unknown(_)) {
             self.counters.unattributed += 1;
         }
+        let classifier = Classifier::new(&path, content_type(raw_headers));
+        let content = classifier.kind(kind);
         self.records.insert(
             id,
             Record {
@@ -256,6 +261,9 @@ impl Store {
                     timing: Timing::default(),
                     bytes: (0, 0),
                     state: FlowState::Active,
+                    url: request.url.clone(),
+                    content,
+                    websocket: false,
                 },
                 request,
                 response: None,
@@ -280,6 +288,7 @@ impl Store {
                 message_work: 0,
                 messages_cleared: false,
                 websocket: false,
+                classifier,
                 reported: false,
                 revision: 0,
             },
@@ -337,6 +346,7 @@ impl Store {
         let Some(id) = id.filter(|id| self.records.contains_key(id)) else {
             return;
         };
+        let content = content_type(headers);
         let headers = if self.counters.paused {
             CapturedHeaders {
                 truncated: !headers.is_empty(),
@@ -346,6 +356,8 @@ impl Store {
             self.capture_headers(headers, 0, false)
         };
         let record = self.records.get_mut(&id).unwrap();
+        record.classifier.response(content);
+        record.metadata.content = record.classifier.kind(record.metadata.kind);
         record.head_bytes += headers.bytes;
         record.headers_truncated |= headers.truncated;
         record.private_headers[Side::Response as usize] = headers.private;
@@ -590,6 +602,8 @@ impl Store {
         };
         let record = self.records.get_mut(&id).unwrap();
         record.metadata.kind = FlowKind::Upgrade;
+        record.metadata.content = record.classifier.kind(FlowKind::Upgrade);
+        record.metadata.websocket = websocket;
         record.websocket = websocket;
         self.bodies.retain(|(owner, _)| *owner != id);
         for side in [Side::Request, Side::Response] {
@@ -648,9 +662,24 @@ impl Store {
     }
 
     pub fn request_progress(&mut self, id: Option<u64>, complete: bool, trailers: bool) {
-        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
-            record.request_complete |= complete;
-            record.request_has_trailers |= trailers;
+        let Some(record) = id.and_then(|id| self.records.get_mut(&id)) else {
+            return;
+        };
+        let finished = complete && !record.request_complete;
+        record.request_complete |= complete;
+        record.request_has_trailers |= trailers;
+        if !finished {
+            return;
+        }
+        // Classify once, from the complete body, when the request ends.
+        if let Body::Captured(body) = &record.bodies[Side::Request as usize] {
+            record.classifier.request_body(body);
+            let content = record.classifier.kind(record.metadata.kind);
+            if content != record.metadata.content {
+                record.metadata.content = content;
+                let id = record.metadata.id;
+                self.changed(id);
+            }
         }
     }
 
@@ -775,6 +804,25 @@ impl Store {
                 }
             }
         }
+        let auth_scheme = record
+            .request
+            .headers
+            .iter()
+            .position(|(name, _)| name == "authorization")
+            .and_then(|index| {
+                let value = record.private_headers[Side::Request as usize]
+                    .iter()
+                    .find(|(position, _)| *position == index)
+                    .map_or(&record.request.headers[index].1, |(_, value)| value);
+                // A lone token is the credential itself, never a scheme.
+                let (scheme, credentials) = value.trim().split_once(char::is_whitespace)?;
+                (!credentials.trim().is_empty()
+                    && scheme.len() <= 32
+                    && scheme
+                        .bytes()
+                        .all(|byte| byte.is_ascii_alphanumeric() || b"-_.".contains(&byte)))
+                .then(|| scheme.to_owned())
+            });
         Some(Flow {
             metadata: record.metadata.clone(),
             request,
@@ -786,8 +834,15 @@ impl Store {
             messages: record.messages.clone(),
             message_count: record.message_count,
             websocket: record.websocket,
+            auth_scheme,
         })
     }
+}
+
+fn content_type(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(http::header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
 }
 
 #[cfg(test)]
@@ -952,5 +1007,103 @@ mod tests {
         assert_eq!(store.records.len(), FLOW_LIMIT);
         assert_eq!(store.counters.flows_dropped, 1);
         assert_eq!(store.drain_events().len(), 2);
+    }
+
+    fn start_with(
+        store: &mut Store,
+        kind: FlowKind,
+        url: &str,
+        path: &str,
+        headers: &[(&'static str, &str)],
+    ) -> u64 {
+        let mut map = HeaderMap::new();
+        for (name, value) in headers {
+            map.append(
+                http::HeaderName::from_static(name),
+                http::HeaderValue::from_str(value).unwrap(),
+            );
+        }
+        store
+            .start(
+                0,
+                Attribution::Unknown("test"),
+                kind,
+                RequestHead {
+                    method: "POST".into(),
+                    url: url.into(),
+                    host: "x:80".into(),
+                    path: path.into(),
+                    version: "HTTP/1.1".into(),
+                    headers: Vec::new(),
+                },
+                &map,
+            )
+            .unwrap()
+    }
+
+    #[test]
+    fn classifies_content_once_per_flow_event() {
+        use crate::ContentKind;
+        let mut store = Store::default();
+        let graphql = start_with(
+            &mut store,
+            FlowKind::Http,
+            "http://x/api",
+            "/api",
+            &[("content-type", "application/json")],
+        );
+        let row = |store: &Store, id| store.flow(id, false).unwrap().metadata;
+        assert_eq!(row(&store, graphql).content, ContentKind::Json);
+        store.body(Some(graphql), Side::Request, br#"{"query":"{ me }"}"#);
+        store.request_progress(Some(graphql), true, false);
+        assert_eq!(row(&store, graphql).content, ContentKind::GraphQl);
+        let mut json = HeaderMap::new();
+        json.insert(
+            http::header::CONTENT_TYPE,
+            "application/json".parse().unwrap(),
+        );
+        store.response(Some(graphql), 200, &json, Duration::ZERO);
+        assert_eq!(row(&store, graphql).content, ContentKind::GraphQl);
+
+        let page = start_with(&mut store, FlowKind::Http, "http://x/", "/", &[]);
+        let mut html = HeaderMap::new();
+        html.insert(http::header::CONTENT_TYPE, "text/html".parse().unwrap());
+        store.response(Some(page), 200, &html, Duration::ZERO);
+        assert_eq!(row(&store, page).content, ContentKind::Document);
+
+        let tunnel = start_with(&mut store, FlowKind::Tunnel, "x:443", "", &[]);
+        assert_eq!(row(&store, tunnel).content, ContentKind::Other);
+
+        let socket = start_with(&mut store, FlowKind::Http, "http://x/ws", "/ws", &[]);
+        store.upgraded(Some(socket), true);
+        let metadata = row(&store, socket);
+        assert!(metadata.websocket);
+        assert_eq!(metadata.content, ContentKind::Other);
+    }
+
+    #[test]
+    fn rows_carry_masked_urls_and_details_expose_only_the_auth_scheme() {
+        let mut store = Store::default();
+        let before = store.counters.memory;
+        let id = start_with(
+            &mut store,
+            FlowKind::Http,
+            "http://x/a?token=secret&page=2",
+            "/a",
+            &[("authorization", "Bearer secret-value")],
+        );
+        let flow = store.flow(id, false).unwrap();
+        assert_eq!(flow.metadata.url, "http://x/a?token=[redacted]&page=2");
+        assert_eq!(flow.auth_scheme.as_deref(), Some("Bearer"));
+        assert!(store.counters.memory - before >= flow.metadata.url.len() * 2);
+        let lone = start_with(
+            &mut store,
+            FlowKind::Http,
+            "http://x/",
+            "/",
+            &[("authorization", "secret-value")],
+        );
+        assert_eq!(store.flow(lone, false).unwrap().auth_scheme, None);
+        assert_eq!(store.flow(lone, true).unwrap().auth_scheme, None);
     }
 }

@@ -1,5 +1,6 @@
 //! In-memory traffic sessions with a loopback HTTP proxy, CONNECT tunnels, and optional TLS decryption.
 mod attribution;
+mod content;
 mod decryption;
 mod engine;
 mod har;
@@ -11,6 +12,7 @@ mod replay;
 mod store;
 mod websocket;
 
+pub use content::ContentKind;
 pub use engine::{Options, Session};
 pub use har::{HarExport, HarOptions};
 pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata};
@@ -174,6 +176,9 @@ pub struct Flow {
     pub messages: Vec<Arc<Message>>,
     pub message_count: u64,
     pub websocket: bool,
+    /// The request's `Authorization` scheme, such as `Bearer`. The scheme is
+    /// not a credential, so it is shown even while the value is masked.
+    pub auth_scheme: Option<String>,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
