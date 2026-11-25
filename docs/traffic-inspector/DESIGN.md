@@ -717,7 +717,7 @@ switch in the toolbar. While it is off, breakpoint rules match nothing.
 
 A Map Local rule answers from a file without contacting the origin.
 
-- **Settings.** An absolute file path, a status (default 200), an optional
+- **Settings.** An absolute file path, a status (200–599, default 200), an optional
   content type, and up to 32 extra headers.
   - The content type defaults to a guess from the extension, or
     `application/octet-stream`.
@@ -754,7 +754,7 @@ A rewrite rule holds up to 32 actions, each applied to the request or the
 response:
 
 - **Headers:** add, replace (set, removing other values), or remove.
-- **Status:** set the response status code (100–599).
+- **Status:** set the response status code (200–599).
 - **Body:** replace text with a literal or regex find and replace. Regex
   replacements can use `$1` capture groups.
   - Bodies are rewritten only when they are at most 1 MB and valid UTF-8 text.

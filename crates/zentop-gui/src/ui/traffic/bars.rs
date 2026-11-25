@@ -363,8 +363,8 @@ impl Traffic {
             ("refused", counters.refused),
             ("dropped", counters.flows_dropped),
             ("bodies evicted", counters.evicted_bodies),
-            ("holds passed over the limit", counters.holds_skipped),
-            ("holds timed out", counters.holds_timed_out),
+            ("passed the hold limit", counters.holds_skipped),
+            ("timed out at breakpoints", counters.holds_timed_out),
         ]
         .into_iter()
         .filter(|(_, count)| *count > 0)

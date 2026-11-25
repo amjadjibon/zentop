@@ -190,7 +190,7 @@ details from the request **Summary**, or use **Show traffic** from the
 process details sheet.
 
 Right-click a row for Copy URL, Copy as cURL (⇧⌘C), Repeat (⌘R), Edit and
-resend (⌘E), pinning, Decrypt this host and Export HAR.
+resend (⌘E), pinning, Decrypt this host, the rule tools below and Export HAR.
 
 **Repeat** sends the original retained HTTP or decrypted HTTPS request.
 **Edit and resend** opens a request editor with the method, URL, headers and
@@ -219,6 +219,68 @@ authenticated connections close after 60 seconds without an active request.
 Open CONNECT tunnels and upgraded connections can stay idle. The dropped
 flow count tracks flows evicted from the capture.
 
+## Edit traffic live
+
+Rules change plain HTTP and decrypted HTTPS traffic as it passes through
+Zentop. They never touch CONNECT tunnels, WebSocket upgrades, Repeat or
+Compose, and they never change which hosts are decrypted. The CLI doesn't run
+rules.
+
+Click **Rules** in the toolbar to open the Rules window. Choose **New** to
+create a rule, or right-click a row and choose **Breakpoint this URL**,
+**Map Local…**, **Map Remote…** or **Rewrite…** to start from that flow.
+**Breakpoint this URL** saves a request and response breakpoint at once. The
+other choices open an unsaved draft. Click **Save** to validate the rule,
+store it in the GUI settings and apply it to the running capture. Use the
+checkboxes, the arrows and **Delete** to enable, reorder and remove rules.
+
+Every rule matches a method (blank for any), a URL pattern and, optionally, an
+app name. In a pattern, `*` matches any characters, including `/`.
+
+| Pattern | Matches |
+| --- | --- |
+| `https://api.example.com/v1/*` | Every path under `/v1/` on that host over HTTPS. |
+| `*.example.com/*` | Every subdomain of `example.com` over either scheme. |
+| `http://localhost:8080/search?q=*` | `/search` with any `q` value. |
+| `api.example.com` | Every request to that host. |
+
+The query is ignored unless the pattern contains `?`, and the default ports 80
+and 443 are left out. Rules apply in list order. The first matching Map Local
+or Map Remote rule picks the destination. Every matching rewrite rule applies
+next, then breakpoints.
+
+- **Breakpoint** holds matching requests, responses or both.
+  - Held messages open in the **Breakpoints** window (⇧⌘B), which comes
+    forward when something is held. In the editor, change the method, URL,
+    status, headers or body, then click **Execute**. **Abort** answers the
+    program with `502`.
+  - A held message continues unmodified after 2 minutes. Up to 32 messages
+    can be held at once, and more pass straight through.
+  - Bodies up to 1 MB can be edited. Larger bodies are sent unchanged.
+  - **⌘B**, or the breakpoint button in the toolbar, turns every breakpoint
+    off or on. Turning breakpoints off, or pausing capture, releases held
+    messages unmodified.
+- **Map Local** answers from a file without contacting the server. Choose a
+  regular file of up to 10 MB, a status, an optional content type and extra
+  headers. The file is read when a request matches. If it's missing or too
+  large, the program gets `502` with the reason.
+- **Map Remote** sends requests to another scheme, host, port or path, with or
+  without the query. The new destination follows the same rules as any
+  request: local addresses need **Allow local destinations**, and HTTPS
+  servers are verified with the macOS trust store.
+- **Rewrite** adds, replaces or removes headers, sets the response status,
+  sets or removes query parameters, and replaces body text literally or with
+  a regular expression (`$1` inserts a capture group).
+  - Bodies are rewritten only when they're text of up to 1 MB.
+  - Compressed bodies are decoded and sent uncompressed.
+  - Zentop recomputes `Content-Length`.
+
+Rows touched by a rule show a small icon for each kind. The request
+**Summary** lists each rule and what it did, such as "Held 4.2 s, executed
+with edits". **Favorites → Saved** in the sidebar lists the rules, with
+checkboxes to turn them on or off and the number of flows each one touched.
+Click a rule there to show only those flows.
+
 ## CLI
 
 ```sh
@@ -246,7 +308,8 @@ client. User-domain SSL trust changes only when you approve a certificate
 Trust, Replace or Remove action.
 
 The token and flows are kept in memory. GUI settings save the optional
-fixed port and exact-host decrypt list. Zentop keeps the root key in
+fixed port, the exact-host decrypt list, pins and rules. Rules hold no
+captured traffic, and Map Local saves only the file path. Zentop keeps the root key in
 Keychain and records public certificate data separately to enable recovery
 after an interrupted certificate change. Captured data leaves Zentop through the copy controls, replay, HAR exports
 or CLI output. Proxy credentials are consumed before capture. Authorization, Cookie,
