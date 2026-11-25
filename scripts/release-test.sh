@@ -22,7 +22,7 @@ fixture() {
   mkdir -p "$root"
   printf '[workspace.package]\nversion = "%s"\n' "$2" >"$root/Cargo.toml"
   local package
-  for package in zentop-core zentop-gui zentop-tui zentop-cli; do
+  for package in zentop-core zentop-gui zentop-tui zentop-cli zentop-proxy; do
     mkdir -p "$root/crates/$package"
     printf '[package]\nname = "%s"\nversion.workspace = true\n' "$package" >"$root/crates/$package/Cargo.toml"
     printf '[[package]]\nname = "%s"\nversion = "%s"\n' "$package" "${3:-$2}" >>"$root/Cargo.lock"

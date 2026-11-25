@@ -45,7 +45,7 @@ file_size() {
 check_version() {
   local tag="${1:-}" cargo lock package
   cargo=$(awk '/^\[workspace.package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/.*= *"|".*/,"");print;exit}' "$ROOT/Cargo.toml")
-  for package in zentop-core zentop-gui zentop-tui zentop-cli; do
+  for package in zentop-core zentop-gui zentop-tui zentop-cli zentop-proxy; do
     lock=$(awk -v name="$package" '$0 == "name = \"" name "\"" {getline; gsub(/version = "|"/,""); print; exit}' "$ROOT/Cargo.lock")
     [[ -n "$cargo" && "$cargo" == "$lock" ]] || die "Versions differ (Cargo.toml, Cargo.lock for $package): ${cargo:-?}, ${lock:-?}"
     grep -q '^version.workspace = true$' "$ROOT/crates/$package/Cargo.toml" ||

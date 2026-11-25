@@ -25,6 +25,7 @@
     "refreshRate": 3000,
     "menuBarEnabled": true,
     "keepRunning": false,
-    "processView": "flat"
+    "processView": "flat",
+    "trafficPort": null
   }
 }

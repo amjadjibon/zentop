@@ -14,5 +14,9 @@ clap.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 
+[target.'cfg(target_os = "macos")'.dependencies]
+signal-hook = "0.3"
+zentop-proxy = { path = "../zentop-proxy" }
+
 [target.'cfg(target_os = "linux")'.dependencies]
 smol = "2"

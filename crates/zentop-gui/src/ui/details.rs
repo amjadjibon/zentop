@@ -104,7 +104,23 @@ pub fn open(id: Identity, window: &mut Window, cx: &mut App) {
                             ),
                     ),
             )
-            .child(body(p, all, &connections, &environment_open, cx))
+            .child(
+                v_flex()
+                    .when(cfg!(target_os = "macos"), |content| {
+                        #[cfg(target_os = "macos")]
+                        let content = content.child(
+                            Button::new("show-process-traffic")
+                                .outline()
+                                .small()
+                                .label("Show traffic")
+                                .on_click(move |_, _, cx| {
+                                    cx.defer(move |cx| super::traffic::open(Some(id), cx))
+                                }),
+                        );
+                        content
+                    })
+                    .child(body(p, all, &connections, &environment_open, cx)),
+            )
     });
 }
 

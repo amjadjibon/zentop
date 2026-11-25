@@ -141,6 +141,8 @@ impl Overview {
     fn new(window: &mut Window, cx: &mut Context<Self>) -> Self {
         let monitor = monitor::global(cx);
         let subscriptions = vec![
+            #[cfg(target_os = "macos")]
+            cx.observe(&super::traffic::global(cx), |_, _, cx| cx.notify()),
             cx.observe(&monitor, |this, _, cx| {
                 this.load_icons(cx);
                 cx.notify();
@@ -487,6 +489,11 @@ impl Render for Overview {
                                 .child("Select to inspect. Process CPU can exceed 100%."),
                         ),
                 )
+                .when(cfg!(target_os = "macos"), |overview| {
+                    #[cfg(target_os = "macos")]
+                    let overview = overview.child(super::traffic::overview(cx));
+                    overview
+                })
                 .child(
                     h_flex()
                         .p_3()

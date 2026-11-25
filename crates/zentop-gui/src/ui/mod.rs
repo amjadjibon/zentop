@@ -13,6 +13,8 @@ mod ssh_hosts;
 mod stats;
 mod table;
 pub mod theme;
+#[cfg(target_os = "macos")]
+mod traffic;
 mod tray;
 
 use gpui_kit::component::TitleBar;
@@ -42,6 +44,9 @@ actions!(
     ]
 );
 
+#[cfg(target_os = "macos")]
+actions!(zentop, [OpenTraffic]);
+
 fn png(bytes: &'static [u8]) -> Arc<gpui_kit::Image> {
     Arc::new(gpui_kit::Image::from_bytes(
         gpui_kit::ImageFormat::Png,
@@ -67,6 +72,8 @@ struct Windows {
     disktree: Option<AnyWindowHandle>,
     ssh_hosts: Option<AnyWindowHandle>,
     overview: Option<AnyWindowHandle>,
+    #[cfg(target_os = "macos")]
+    traffic: Option<(AnyWindowHandle, WeakEntity<traffic::Traffic>)>,
     /// A tray click that dismissed the overview must not immediately reopen it.
     overview_closed_at: Option<Instant>,
 }
@@ -78,6 +85,11 @@ pub fn init(cx: &mut App) {
     // Keep the tray in step with the menu-bar preference.
     cx.observe(&monitor, |_, cx| tray::sync(cx)).detach();
     tray::init(cx);
+    #[cfg(target_os = "macos")]
+    {
+        traffic::init(cx);
+        cx.on_action(|_: &OpenTraffic, cx: &mut App| traffic::open(None, cx));
+    }
 
     cx.bind_keys([
         KeyBinding::new("cmd-q", Quit, None),
@@ -147,6 +159,8 @@ pub fn init(cx: &mut App) {
                 MenuItem::action("Process Tree", ViewTree),
                 MenuItem::action("DiskTree…", OpenDiskTree),
                 MenuItem::action("SSH Hosts…", OpenSshHosts),
+                #[cfg(target_os = "macos")]
+                MenuItem::action("Traffic…", OpenTraffic),
                 MenuItem::separator(),
                 MenuItem::action("Menu-bar Overview", ShowOverview),
             ],
@@ -164,6 +178,10 @@ pub fn init(cx: &mut App) {
 
     // Without the menu-bar companion there is nothing left to monitor from.
     cx.on_window_closed(|cx, _| {
+        #[cfg(target_os = "macos")]
+        if traffic::global(cx).read(cx).session.is_some() {
+            return;
+        }
         if cx.windows().is_empty() && !tray::keeps_running(cx) {
             cx.quit();
         }

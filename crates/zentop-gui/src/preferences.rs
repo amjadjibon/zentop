@@ -38,6 +38,9 @@ fn merge(config: &mut Value, patch: &Value) {
                     .is_some_and(|n| [15, 25, 50, 100, 250, 500].contains(&n)),
                 "refreshRate" => value.as_u64().is_some_and(|n| (1000..=30000).contains(&n)),
                 "menuBarEnabled" | "keepRunning" => value.is_boolean(),
+                "trafficPort" => {
+                    value.is_null() || value.as_u64().is_some_and(|n| (1..=65535).contains(&n))
+                }
                 "processView" => matches!(value.as_str(), Some("flat" | "tree")),
                 _ => false,
             };
@@ -200,6 +203,24 @@ mod tests {
         assert!(persist(&dir, &defaults()).is_err());
         assert_eq!(load(&path).unwrap(), config);
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn traffic_settings_accept_only_the_optional_port() {
+        let mut config = defaults();
+        merge(
+            &mut config,
+            &json!({"behavior": {
+                "trafficPort": 9090, "trafficToken": "secret", "allowLocalDestinations": true
+            }}),
+        );
+        assert_eq!(config["behavior"]["trafficPort"], 9090);
+        assert!(config["behavior"].get("trafficToken").is_none());
+        assert!(config["behavior"].get("allowLocalDestinations").is_none());
+        merge(&mut config, &json!({"behavior": {"trafficPort": 65536}}));
+        assert_eq!(config["behavior"]["trafficPort"], 9090);
+        merge(&mut config, &json!({"behavior": {"trafficPort": null}}));
+        assert!(config["behavior"]["trafficPort"].is_null());
     }
 
     #[test]

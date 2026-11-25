@@ -4,6 +4,7 @@ members = [
     "crates/zentop-gui",
     "crates/zentop-tui",
     "crates/zentop-cli",
+    "crates/zentop-proxy",
 ]
 default-members = ["crates/zentop-gui"]
 resolver = "2"

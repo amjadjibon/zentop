@@ -1,6 +1,8 @@
 //! One-shot system and process reports backed by the shared sampler.
 #[cfg(target_os = "linux")]
 mod docker;
+#[cfg(target_os = "macos")]
+mod traffic;
 
 use clap::{Parser, Subcommand, ValueEnum};
 use serde::Serialize;
@@ -46,6 +48,16 @@ enum Command {
     Connections {
         #[arg(value_parser = clap::value_parser!(u32).range(1..))]
         pid: u32,
+    },
+    /// Inspect manually routed HTTP traffic and HTTPS tunnels
+    #[cfg(target_os = "macos")]
+    Traffic {
+        /// Fixed loopback port (defaults to an OS-assigned port)
+        #[arg(long, value_parser = clap::value_parser!(u16).range(1..))]
+        port: Option<u16>,
+        /// Include redacted HTTP headers
+        #[arg(long)]
+        headers: bool,
     },
     /// List processes, busiest first
     Processes {
@@ -102,6 +114,8 @@ fn capture() -> io::Result<Snapshot> {
 
 fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
     match args.command.unwrap_or(Command::System) {
+        #[cfg(target_os = "macos")]
+        Command::Traffic { port, headers } => traffic::run(port, args.json, headers, output)?,
         Command::Connections { pid } => connection_report(pid, args.json, output)?,
         Command::Stream { protocol, samples } => stream(protocol, samples, output)?,
         Command::System => {
