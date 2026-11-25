@@ -209,10 +209,11 @@ impl Traffic {
                 Button::new("traffic-certificate-toggle")
                     .ghost()
                     .small()
+                    // The popover's section heading already names this panel.
                     .label(if self.show_certificate {
-                        "Hide certificate and hosts"
+                        "Hide details"
                     } else {
-                        "Certificate and hosts"
+                        "Show details"
                     })
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.show_certificate = !this.show_certificate;
