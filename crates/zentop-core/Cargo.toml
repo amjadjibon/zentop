@@ -29,7 +29,7 @@ objc2-user-notifications = { version = "0.3.2", default-features = false, featur
 block2 = { version = "0.6", optional = true }
 
 [target.'cfg(not(target_os = "macos"))'.dependencies]
-# Keep notification support compatible with the workspace's Rust 1.88 floor.
+# Pinned when the floor was Rust 1.88; unpin once Linux and Windows builds are tested.
 notify-rust = { version = "=4.11.7", optional = true }
 
 [target.'cfg(any(target_os = "linux", target_os = "windows"))'.dependencies]

@@ -4,7 +4,7 @@ Zentop has no published release yet, so for now you build it from source. When r
 
 ## Build from source
 
-You need [Rust](https://rustup.rs) 1.88 or newer.
+You need [Rust](https://rustup.rs) 1.100 or newer.
 
 ```sh
 git clone https://github.com/amjadjibon/zentop.git

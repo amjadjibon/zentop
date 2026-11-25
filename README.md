@@ -52,7 +52,7 @@ cd zentop
 cargo run --release
 ```
 
-You need **Rust 1.88+**. On Linux, first install the GPUI and tray build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb, Vulkan, GTK 3 and AppIndicator headers); the [development guide](.github/DEVELOPMENT.md) lists the exact packages.
+You need **Rust 1.100+**. On Linux, first install the GPUI and tray build dependencies (fontconfig, freetype, Wayland, xkbcommon, xcb, Vulkan, GTK 3 and AppIndicator headers); the [development guide](.github/DEVELOPMENT.md) lists the exact packages.
 
 [GitHub Releases](https://github.com/amjadjibon/zentop/releases) will ship an Apple silicon DMG, built by GitHub Actions. On Intel Macs, Linux and Windows, build from source; cargo-packager can make installers locally. See the [installation guide](docs/install.md).
 

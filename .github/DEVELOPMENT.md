@@ -1,6 +1,6 @@
 # Developing and releasing Zentop
 
-Use Rust 1.88 or newer. Zentop is a Cargo workspace:
+Use Rust 1.100 or newer. Zentop is a Cargo workspace:
 
 - `crates/zentop-core`: system/process/GPU monitoring, sampling and history; no GPUI dependency.
 - `crates/zentop-gui`: the GPUI Kit desktop app, icons and preferences. All windows
