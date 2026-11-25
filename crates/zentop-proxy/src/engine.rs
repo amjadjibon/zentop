@@ -23,6 +23,12 @@ use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 use tokio::task::{AbortHandle, JoinSet};
 use tokio::time::{self, Instant as TokioInstant};
 
+use crate::decryption::{canonical_host, Decryption};
+use tokio_rustls::{
+    rustls::{self, pki_types::ServerName},
+    LazyConfigAcceptor, TlsConnector,
+};
+
 use crate::presentation::Metadata;
 use crate::store::{Side, Store};
 use crate::{
@@ -64,6 +70,17 @@ pub struct Session {
 
 impl Session {
     pub fn start(options: Options) -> io::Result<Self> {
+        Self::start_inner(options, None)
+    }
+
+    pub fn start_with_decryption(
+        options: Options,
+        decryption: Arc<Decryption>,
+    ) -> io::Result<Self> {
+        Self::start_inner(options, Some(decryption))
+    }
+
+    fn start_inner(options: Options, decryption: Option<Arc<Decryption>>) -> io::Result<Self> {
         let listener = StdListener::bind((Ipv4Addr::LOCALHOST, options.port.unwrap_or(0)))
             .map_err(|error| {
                 let address = options.port.filter(|port| *port != 0).map_or_else(
@@ -92,6 +109,7 @@ impl Session {
         let engine = Arc::new(Engine {
             address,
             auth,
+            decryption,
             store: store.clone(),
         });
         let runtime = tokio::runtime::Builder::new_current_thread()
@@ -179,6 +197,7 @@ impl Drop for Session {
 struct Engine {
     address: SocketAddr,
     auth: String,
+    decryption: Option<Arc<Decryption>>,
     store: SharedStore,
 }
 
@@ -377,103 +396,335 @@ impl Engine {
             }
             return Ok(response);
         }
-        let activity = ActiveRequest::begin(&connection.activity);
-        let started = Instant::now();
-        let process = connection.owner.borrow().clone();
+        let decrypt = if let Some(tls) = self
+            .decryption
+            .as_ref()
+            .filter(|tls| target.tunnel && tls.selected(&target.host))
+        {
+            let tls = tls.clone();
+            let host = target.host.clone();
+            tokio::task::spawn_blocking(move || tls.available(&host))
+                .await
+                .unwrap_or_default()
+        } else {
+            false
+        };
         let kind = if target.tunnel {
             FlowKind::Tunnel
         } else {
             FlowKind::Http
         };
-        let id = {
-            let mut store = self.store.lock().unwrap();
-            store.start(
-                connection.id,
-                process,
-                kind,
-                RequestHead {
-                    method: request.method().to_string(),
-                    url: request.uri().to_string(),
-                    host: target.authority.clone(),
-                    path: if target.tunnel {
-                        String::new()
-                    } else {
-                        request.uri().path().to_owned()
-                    },
-                    version: format!("{:?}", request.version()),
-                    headers: Vec::new(),
+        let capture = self.capture(
+            &request,
+            &target,
+            &connection,
+            if decrypt {
+                FlowKind::DecryptedHttps
+            } else {
+                kind
+            },
+        );
+        let attribution_wait = connection.wait_for_attribution(&self.store).await;
+        if let Some(elapsed) = attribution_wait {
+            self.store
+                .lock()
+                .unwrap()
+                .waited_for_attribution(capture.id, elapsed);
+        }
+        if decrypt {
+            return Ok(self.decrypt_tunnel(request, target, connection, capture, attribution_wait));
+        }
+        Ok(self.route(request, target, connection, capture, None).await)
+    }
+
+    fn capture(
+        &self,
+        request: &Request<Incoming>,
+        target: &Target,
+        connection: &Connection,
+        kind: FlowKind,
+    ) -> Arc<Capture> {
+        let activity = ActiveRequest::begin(&connection.activity);
+        let started = Instant::now();
+        let id = self.store.lock().unwrap().start(
+            connection.id,
+            connection.owner.borrow().clone(),
+            kind,
+            RequestHead {
+                method: request.method().to_string(),
+                url: if kind == FlowKind::DecryptedHttps && request.method() != Method::CONNECT {
+                    format!(
+                        "https://{}{}",
+                        target.authority,
+                        request.uri().path_and_query().map_or("/", |v| v.as_str())
+                    )
+                } else {
+                    request.uri().to_string()
                 },
-                request.headers(),
-            )
-        };
-        let capture = Arc::new(Capture {
+                host: target.authority.clone(),
+                path: if request.method() == Method::CONNECT {
+                    String::new()
+                } else {
+                    request.uri().path().to_owned()
+                },
+                version: format!("{:?}", request.version()),
+                headers: Vec::new(),
+            },
+            request.headers(),
+        );
+        Arc::new(Capture {
             id,
             started,
             store: self.store.clone(),
             _activity: activity,
+        })
+    }
+
+    fn decrypt_tunnel(
+        self: Arc<Self>,
+        mut request: Request<Incoming>,
+        target: Target,
+        connection: Arc<Connection>,
+        capture: Arc<Capture>,
+        attribution_wait: Option<Duration>,
+    ) -> Response<MessageBody> {
+        let upgraded = hyper::upgrade::on(&mut request);
+        tokio::spawn(async move {
+            let Ok(client) = upgraded.await else {
+                capture.finish(FlowState::Failed(
+                    "Client could not establish CONNECT tunnel",
+                ));
+                return;
+            };
+            let Some(decryption) = self.decryption.as_ref() else {
+                return;
+            };
+            let hello =
+                LazyConfigAcceptor::new(rustls::server::Acceptor::default(), TokioIo::new(client));
+            let Ok(Ok(hello)) = time::timeout(DIAL_TIMEOUT, hello).await else {
+                capture.finish(FlowState::Failed(
+                    "Could not read the program's TLS ClientHello",
+                ));
+                return;
+            };
+            if hello
+                .client_hello()
+                .server_name()
+                .and_then(|name| canonical_host(name).ok())
+                .as_deref()
+                != Some(&target.host)
+            {
+                self.store.lock().unwrap().refuse();
+                capture.finish(FlowState::Refused("TLS server name does not match CONNECT"));
+                return;
+            }
+            let leaf = {
+                let decryption = decryption.clone();
+                let host = target.host.clone();
+                tokio::task::spawn_blocking(move || decryption.leaf(&host)).await
+            };
+            let Ok(Ok(Some(config))) = leaf else {
+                capture.finish(FlowState::Failed(
+                    "Decryption is unavailable; reconnect to use a tunnel",
+                ));
+                return;
+            };
+            let client = match time::timeout(DIAL_TIMEOUT, hello.into_stream(config)).await {
+                Ok(Ok(client)) => client,
+                Ok(Err(error)) => {
+                    let reason = match error
+                        .get_ref()
+                        .and_then(|e| e.downcast_ref::<rustls::Error>())
+                    {
+                        Some(rustls::Error::AlertReceived(
+                            rustls::AlertDescription::BadCertificate
+                            | rustls::AlertDescription::UnsupportedCertificate
+                            | rustls::AlertDescription::CertificateRevoked
+                            | rustls::AlertDescription::CertificateExpired
+                            | rustls::AlertDescription::CertificateUnknown
+                            | rustls::AlertDescription::UnknownCA
+                            | rustls::AlertDescription::AccessDenied,
+                        )) => "The program rejected Zentop's certificate",
+                        _ => "The program's TLS handshake failed",
+                    };
+                    capture.finish(FlowState::Failed(reason));
+                    return;
+                }
+                Err(_) => {
+                    capture.finish(FlowState::Failed("The program's TLS handshake timed out"));
+                    return;
+                }
+            };
+            // Successful handshakes have per-request rows; retain CONNECT rows for failures.
+            self.store.lock().unwrap().discard_active(capture.id);
+            drop(capture);
+            let mut server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            server
+                .http1()
+                .timer(TokioTimer::new())
+                .max_buf_size(128 * 1024)
+                .header_read_timeout(None);
+            server
+                .http2()
+                .timer(TokioTimer::new())
+                .enable_connect_protocol()
+                .max_header_list_size(128 * 1024)
+                .max_concurrent_streams(32);
+            let server = if client.get_ref().1.alpn_protocol() == Some(b"h2") {
+                server.http2_only()
+            } else {
+                server.http1_only()
+            };
+            let deadlines = connection.activity.subscribe();
+            let target = Arc::new(target);
+            let attribution_wait = Mutex::new(attribution_wait);
+            let http = server.serve_connection(
+                TokioIo::new(client),
+                service_fn(move |request| {
+                    let attribution_wait = attribution_wait.lock().unwrap().take();
+                    self.clone().handle_inner(
+                        request,
+                        target.clone(),
+                        connection.clone(),
+                        attribution_wait,
+                    )
+                }),
+            );
+            tokio::select! {
+                () = expire_client(deadlines) => {},
+                _ = http => {},
+            }
         });
-        // Keep the client socket open for the scan before any upstream response can finish it.
-        if let Some(elapsed) = connection.wait_for_attribution(&self.store).await {
+        reply(StatusCode::OK, "")
+    }
+
+    async fn handle_inner(
+        self: Arc<Self>,
+        mut request: Request<Incoming>,
+        target: Arc<Target>,
+        connection: Arc<Connection>,
+        attribution_wait: Option<Duration>,
+    ) -> Result<Response<MessageBody>, std::convert::Infallible> {
+        request.headers_mut().remove(header::PROXY_AUTHORIZATION);
+        let capture = self.capture(&request, &target, &connection, FlowKind::DecryptedHttps);
+        if let Some(elapsed) = attribution_wait {
             self.store
                 .lock()
                 .unwrap()
-                .waited_for_attribution(id, elapsed);
+                .waited_for_attribution(capture.id, elapsed);
         }
+        let extended_connect = request.extensions().get::<hyper::ext::Protocol>().is_some();
+        let rejection = if request.method() == Method::CONNECT && !extended_connect {
+            Some((
+                StatusCode::METHOD_NOT_ALLOWED,
+                "Nested CONNECT is not supported",
+            ))
+        } else if !target.matches_inner(&request) {
+            Some((
+                StatusCode::MISDIRECTED_REQUEST,
+                "Request authority does not match CONNECT",
+            ))
+        } else if request.headers().contains_key(header::UPGRADE) || extended_connect {
+            Some((StatusCode::NOT_IMPLEMENTED,
+                "WebSockets on decrypted hosts aren't supported yet; remove the host from the decrypt list"))
+        } else if self
+            .decryption
+            .as_ref()
+            .is_none_or(|tls| !tls.selected(&target.host))
+        {
+            Some((
+                StatusCode::MISDIRECTED_REQUEST,
+                "Decryption was disabled; reconnect to use a tunnel",
+            ))
+        } else {
+            None
+        };
+        if let Some((status, reason)) = rejection {
+            self.store.lock().unwrap().refuse();
+            capture.fail(status, FlowState::Refused(reason));
+            return Ok(reply(status, reason));
+        }
+        let tls = self.decryption.as_ref().map(|tls| tls.upstream.clone());
+        Ok(self
+            .route(request, target.as_ref().clone(), connection, capture, tls)
+            .await)
+    }
+
+    async fn route(
+        &self,
+        request: Request<Incoming>,
+        target: Target,
+        connection: Arc<Connection>,
+        capture: Arc<Capture>,
+        tls: Option<Arc<rustls::ClientConfig>>,
+    ) -> Response<MessageBody> {
         let dial_started = Instant::now();
-        let upstream = tokio::time::timeout(DIAL_TIMEOUT, self.dial(&target)).await;
-        let upstream = match upstream {
-            Ok(Ok(stream)) => stream,
+        let (status, state, message) = match time::timeout(DIAL_TIMEOUT, self.dial(&target)).await {
+            Ok(Ok(upstream)) => {
+                self.store
+                    .lock()
+                    .unwrap()
+                    .connected(capture.id, dial_started.elapsed());
+                if let Some(tls) = tls {
+                    let tls_started = Instant::now();
+                    match connect_tls(tls, &target.host, upstream).await {
+                        Ok(stream) => {
+                            self.store
+                                .lock()
+                                .unwrap()
+                                .tls(capture.id, tls_started.elapsed());
+                            let h2 = stream.get_ref().1.alpn_protocol() == Some(b"h2");
+                            return forward_or_fail(
+                                request,
+                                target,
+                                stream,
+                                Some(h2),
+                                connection,
+                                capture,
+                            )
+                            .await;
+                        }
+                        Err(error) => {
+                            let reason: String = format!("Upstream TLS failed: {error}")
+                                .chars()
+                                .take(512)
+                                .collect();
+                            capture.fail(
+                                StatusCode::BAD_GATEWAY,
+                                FlowState::UpstreamTls(reason.clone()),
+                            );
+                            return reply(StatusCode::BAD_GATEWAY, reason);
+                        }
+                    }
+                }
+                if target.tunnel {
+                    return tunnel(request, upstream, connection, capture);
+                }
+                return forward_or_fail(request, target, upstream, None, connection, capture).await;
+            }
             Ok(Err(DialError::Refused)) => {
                 self.store.lock().unwrap().refuse();
-                capture.fail(
-                    StatusCode::FORBIDDEN,
-                    FlowState::Refused("Destination is blocked by the local address policy"),
-                );
-                return Ok(reply(
-                    StatusCode::FORBIDDEN,
-                    "Destination is blocked by the local address policy",
-                ));
+                let reason = "Destination is blocked by the local address policy";
+                (StatusCode::FORBIDDEN, FlowState::Refused(reason), reason)
             }
             Ok(Err(error)) => {
                 let reason = match error {
                     DialError::Resolve => "Destination name could not be resolved",
                     _ => "Could not connect to destination",
                 };
-                capture.fail(StatusCode::BAD_GATEWAY, FlowState::Failed(reason));
-                return Ok(reply(StatusCode::BAD_GATEWAY, reason));
+                (StatusCode::BAD_GATEWAY, FlowState::Failed(reason), reason)
             }
             Err(_) => {
-                capture.fail(
+                let reason = "Destination connection timed out";
+                (
                     StatusCode::GATEWAY_TIMEOUT,
-                    FlowState::Failed("Destination connection timed out"),
-                );
-                return Ok(reply(
-                    StatusCode::GATEWAY_TIMEOUT,
-                    "Destination connection timed out",
-                ));
+                    FlowState::Failed(reason),
+                    reason,
+                )
             }
         };
-        self.store
-            .lock()
-            .unwrap()
-            .connected(id, dial_started.elapsed());
-        if target.tunnel {
-            return Ok(tunnel(request, upstream, connection, capture));
-        }
-
-        match forward(request, target, upstream, connection, capture.clone()).await {
-            Ok(response) => Ok(response),
-            Err(_) => {
-                capture.fail(
-                    StatusCode::BAD_GATEWAY,
-                    FlowState::Failed("Upstream HTTP request failed"),
-                );
-                Ok(reply(
-                    StatusCode::BAD_GATEWAY,
-                    "Upstream HTTP request failed",
-                ))
-            }
-        }
+        capture.fail(status, state);
+        reply(status, message)
     }
 
     async fn dial(&self, target: &Target) -> Result<TcpStream, DialError> {
@@ -588,6 +839,7 @@ fn embedded_ipv4(ip: Ipv6Addr) -> [Option<Ipv4Addr>; 2] {
     [Some(address), None]
 }
 
+#[derive(Clone)]
 struct Target {
     authority: String,
     host: String,
@@ -623,7 +875,7 @@ impl Target {
         {
             return Err("Request target is too long");
         }
-        let (host, port) = canonical(authority)?;
+        let (host, port) = canonical(authority, 80)?;
         let authority = if host.contains(':') {
             format!("[{host}]:{port}")
         } else {
@@ -636,9 +888,40 @@ impl Target {
             tunnel,
         })
     }
+    fn matches_inner(&self, request: &Request<Incoming>) -> bool {
+        let uri = request.uri();
+        let matches = |authority: &Authority| {
+            canonical(authority, 443)
+                .is_ok_and(|(host, port)| host == self.host && port == self.port)
+        };
+        if uri.scheme_str().is_some_and(|scheme| scheme != "https")
+            || uri.authority().is_some_and(|authority| !matches(authority))
+            || !uri.path().starts_with('/')
+            || uri
+                .path_and_query()
+                .is_some_and(|path| path.as_str().len() > 16 * 1024)
+            || request.method().as_str().len() > 256
+        {
+            return false;
+        }
+        let mut hosts = request.headers().get_all(header::HOST).iter();
+        let host = hosts.next();
+        if hosts.next().is_some()
+            || host.is_some_and(|host| {
+                !Authority::try_from(host.as_bytes()).is_ok_and(|authority| matches(&authority))
+            })
+        {
+            return false;
+        }
+        if request.version() == Version::HTTP_2 {
+            uri.authority().is_some() && uri.scheme_str() == Some("https")
+        } else {
+            host.is_some()
+        }
+    }
 }
 
-fn canonical(authority: &Authority) -> Result<(String, u16), &'static str> {
+fn canonical(authority: &Authority, default_port: u16) -> Result<(String, u16), &'static str> {
     let raw = authority.host();
     if authority.as_str().contains('@')
         || (raw.len() != authority.as_str().len() && authority.port_u16().is_none())
@@ -650,22 +933,21 @@ fn canonical(authority: &Authority) -> Result<(String, u16), &'static str> {
             .map_err(|_| "Invalid IPv6 destination")?
             .to_string()
     } else {
-        let host = idna::domain_to_ascii_strict(raw.strip_suffix('.').unwrap_or(raw))
-            .map_err(|_| "Invalid destination hostname")?;
-        if host.is_empty() || host.len() > 253 {
-            return Err("Invalid destination hostname");
+        if let Ok(ip) = raw.parse::<Ipv4Addr>() {
+            ip.to_string()
+        } else {
+            canonical_host(raw)?
         }
-        host.to_ascii_lowercase()
     };
-    let port = authority.port_u16().unwrap_or(80);
+    let port = authority.port_u16().unwrap_or(default_port);
     if port == 0 {
         return Err("Invalid destination port");
     }
     Ok((host, port))
 }
 
-fn reply(status: StatusCode, text: &'static str) -> Response<MessageBody> {
-    let body = Full::new(Bytes::from_static(text.as_bytes()))
+fn reply(status: StatusCode, text: impl Into<Bytes>) -> Response<MessageBody> {
+    let body = Full::new(text.into())
         .map_err(|never| match never {})
         .boxed_unsync();
     let mut response = Response::new(body);
@@ -822,15 +1104,56 @@ impl HttpBody for StreamingBody {
     }
 }
 
+async fn connect_tls(
+    config: Arc<rustls::ClientConfig>,
+    host: &str,
+    stream: TcpStream,
+) -> io::Result<tokio_rustls::client::TlsStream<TcpStream>> {
+    let name = ServerName::try_from(host.to_owned()).map_err(io::Error::other)?;
+    time::timeout(
+        DIAL_TIMEOUT,
+        TlsConnector::from(config).connect(name, stream),
+    )
+    .await?
+}
+
+async fn forward_or_fail(
+    request: Request<Incoming>,
+    target: Target,
+    upstream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    tls_h2: Option<bool>,
+    connection: Arc<Connection>,
+    capture: Arc<Capture>,
+) -> Response<MessageBody> {
+    match forward(
+        request,
+        target,
+        upstream,
+        tls_h2,
+        connection,
+        capture.clone(),
+    )
+    .await
+    {
+        Ok(response) => response,
+        Err(_) => {
+            let reason = "Upstream HTTP request failed";
+            capture.fail(StatusCode::BAD_GATEWAY, FlowState::Failed(reason));
+            reply(StatusCode::BAD_GATEWAY, reason)
+        }
+    }
+}
+
 async fn forward(
     mut request: Request<Incoming>,
     target: Target,
-    upstream: TcpStream,
+    upstream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
+    tls_h2: Option<bool>,
     connection: Arc<Connection>,
     capture: Arc<Capture>,
 ) -> Result<Response<MessageBody>, Box<dyn std::error::Error + Send + Sync>> {
     let version = request.version();
-    let upgrade = version == Version::HTTP_11 && has_upgrade(request.headers());
+    let upgrade = tls_h2.is_none() && version == Version::HTTP_11 && has_upgrade(request.headers());
     let client_upgrade = upgrade.then(|| hyper::upgrade::on(&mut request));
     let protocols = if upgrade {
         header_tokens(request.headers(), header::UPGRADE)
@@ -841,14 +1164,17 @@ async fn forward(
     };
     let (mut head, incoming) = request.into_parts();
     strip_upgrade_headers(&mut head.headers, upgrade);
-    head.uri = head
-        .uri
-        .path_and_query()
-        .map_or("/", |path| path.as_str())
-        .parse()?;
-    head.version = Version::HTTP_11;
-    head.headers
-        .insert(header::HOST, HeaderValue::from_str(&target.authority)?);
+    let path = head.uri.path_and_query().map_or("/", |path| path.as_str());
+    if tls_h2 == Some(true) {
+        head.uri = format!("https://{}{path}", target.authority).parse()?;
+        head.version = Version::HTTP_2;
+        head.headers.remove(header::HOST);
+    } else {
+        head.uri = path.parse()?;
+        head.version = Version::HTTP_11;
+        head.headers
+            .insert(header::HOST, HeaderValue::from_str(&target.authority)?);
+    }
     let request = Request::from_parts(
         head,
         StreamingBody {
@@ -858,10 +1184,18 @@ async fn forward(
             _driver: None,
         },
     );
-    let (mut sender, upstream) =
-        hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await?;
-    let driver = UpstreamDriver(tokio::spawn(upstream.with_upgrades()).abort_handle());
-    let mut response = sender.send_request(request).await?;
+    let (mut response, driver) = if tls_h2 == Some(true) {
+        let (mut sender, upstream) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(upstream))
+                .await?;
+        let driver = UpstreamDriver(tokio::spawn(upstream).abort_handle());
+        (sender.send_request(request).await?, driver)
+    } else {
+        let (mut sender, upstream) =
+            hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await?;
+        let driver = UpstreamDriver(tokio::spawn(upstream.with_upgrades()).abort_handle());
+        (sender.send_request(request).await?, driver)
+    };
     let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
     if upgraded
         && (!has_upgrade(response.headers())
@@ -901,9 +1235,7 @@ async fn forward(
     }
     let (mut head, incoming) = response.into_parts();
     strip_hop_headers(&mut head.headers);
-    if version == Version::HTTP_2 {
-        head.version = version;
-    }
+    head.version = version;
     if incoming.is_end_stream() {
         capture.finish(FlowState::Complete);
     }
@@ -925,7 +1257,6 @@ fn tunnel(
     connection: Arc<Connection>,
     capture: Arc<Capture>,
 ) -> Response<MessageBody> {
-    // This is the handoff point for a later TLS engine. Phase 1 only relays bytes.
     let upgraded = hyper::upgrade::on(&mut request);
     capture.store.lock().unwrap().response(
         capture.id,
@@ -1011,7 +1342,7 @@ mod tests {
             idna::domain_to_ascii_strict("bücher.example").unwrap(),
             "xn--bcher-kva.example"
         );
-        assert!(canonical(&"example.com:abc".parse().unwrap()).is_err());
+        assert!(canonical(&"example.com:abc".parse().unwrap(), 80).is_err());
     }
 
     #[test]

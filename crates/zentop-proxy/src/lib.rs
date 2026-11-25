@@ -1,6 +1,10 @@
-//! In-memory traffic sessions, with a loopback HTTP front end and blind CONNECT.
+//! In-memory traffic sessions with a loopback HTTP proxy, CONNECT tunnels, and optional TLS decryption.
 mod attribution;
+mod decryption;
 mod engine;
+pub use decryption::{canonical_host, decrypt_host, skip_reason, CertificateAuthority, Decryption};
+#[cfg(target_os = "macos")]
+pub mod keychain;
 mod presentation;
 mod store;
 
@@ -54,11 +58,20 @@ pub enum FlowState {
     Complete,
     Refused(&'static str),
     Failed(&'static str),
+    UpstreamTls(String),
 }
 
 impl FlowState {
+    pub fn error_reason(&self) -> Option<&str> {
+        match self {
+            Self::Refused(reason) | Self::Failed(reason) => Some(reason),
+            Self::UpstreamTls(reason) => Some(reason),
+            Self::Active | Self::Complete => None,
+        }
+    }
+
     pub fn has_error(&self) -> bool {
-        matches!(self, Self::Refused(_) | Self::Failed(_))
+        self.error_reason().is_some()
     }
 }
 

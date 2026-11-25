@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use serde::Serialize;
-use zentop_proxy::{FlowKind, FlowState, Headers, Metadata, Options, Session};
+use zentop_proxy::{FlowKind, Headers, Metadata, Options, Session};
 
 #[derive(Serialize)]
 struct Entry {
@@ -79,7 +79,7 @@ fn print_entry(entry: &Entry, output: &mut impl Write) -> io::Result<()> {
         FlowKind::Upgrade => write!(output, "  Upgraded connection")?,
         _ => {}
     }
-    if let FlowState::Refused(reason) | FlowState::Failed(reason) = flow.state {
+    if let Some(reason) = flow.state.error_reason() {
         write!(output, "  {reason}")?;
     }
     writeln!(output)?;
@@ -101,7 +101,7 @@ mod tests {
     use super::*;
     use clap::Parser;
     use std::time::SystemTime;
-    use zentop_proxy::{Attribution, Timing};
+    use zentop_proxy::{Attribution, FlowState, Timing};
 
     #[test]
     fn traffic_accepts_allow_local_and_json() {

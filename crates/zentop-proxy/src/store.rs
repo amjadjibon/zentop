@@ -323,6 +323,20 @@ impl Store {
         }
     }
 
+    pub fn discard_active(&mut self, id: Option<u64>) {
+        if let Some(id) = id {
+            self.remove(id);
+        }
+    }
+
+    pub fn tls(&mut self, id: Option<u64>, elapsed: Duration) {
+        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
+            record.metadata.timing.tls = Some(elapsed);
+            let id = record.metadata.id;
+            self.changed(id);
+        }
+    }
+
     pub fn connected(&mut self, id: Option<u64>, elapsed: Duration) {
         if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
             record.metadata.timing.connect = Some(elapsed);
@@ -406,13 +420,28 @@ impl Store {
     }
 
     pub fn finish(&mut self, id: Option<u64>, state: FlowState, total: Duration) {
-        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
-            if record.metadata.state == FlowState::Active {
-                record.metadata.state = state;
-                record.metadata.timing.total = total;
-                let id = record.metadata.id;
-                self.changed(id);
-            }
+        let Some(id) = id.filter(|id| {
+            self.records
+                .get(id)
+                .is_some_and(|r| r.metadata.state == FlowState::Active)
+        }) else {
+            return;
+        };
+        let extra = match &state {
+            FlowState::UpstreamTls(reason) => reason.len(),
+            _ => 0,
+        };
+        let (state, reserved) = if self.make_room(extra) {
+            (state, extra)
+        } else {
+            (FlowState::Failed("Upstream TLS failed"), 0)
+        };
+        if let Some(record) = self.records.get_mut(&id) {
+            record.metadata.state = state;
+            record.metadata.timing.total = total;
+            record.head_bytes += reserved;
+            self.counters.memory += reserved;
+            self.changed(id);
         }
     }
 

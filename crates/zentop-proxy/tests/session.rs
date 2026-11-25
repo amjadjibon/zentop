@@ -738,3 +738,348 @@ fn occupied_port_error_names_port_and_new_sessions_get_new_tokens() {
     assert!(error.to_string().contains("OS-assigned"));
     assert_ne!(session.token(), proxy(false).token());
 }
+
+type ProxyTlsStream = tokio_rustls::client::TlsStream<TokioIo<hyper::upgrade::Upgraded>>;
+
+fn tls_client(
+    certificate: Option<rustls::pki_types::CertificateDer<'static>>,
+    alpn: &[u8],
+) -> rustls::ClientConfig {
+    let mut roots = rustls::RootCertStore::empty();
+    if let Some(certificate) = certificate {
+        roots.add(certificate).unwrap();
+    }
+    let mut config = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .unwrap()
+    .with_root_certificates(roots)
+    .with_no_client_auth();
+    config.alpn_protocols = vec![alpn.to_vec()];
+    config
+}
+
+struct DecryptedTest {
+    session: Session,
+    port: u16,
+    root: rustls::pki_types::CertificateDer<'static>,
+}
+
+impl DecryptedTest {
+    async fn new(origin_h2: bool, trust_origin: bool, blocks: usize) -> Self {
+        let origin_cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
+        let origin_trust = trust_origin.then(|| origin_cert.cert.der().clone());
+        let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
+            rustls::crypto::ring::default_provider(),
+        ))
+        .with_safe_default_protocol_versions()
+        .unwrap()
+        .with_no_client_auth()
+        .with_single_cert(
+            vec![origin_cert.cert.der().clone()],
+            rustls::pki_types::PrivatePkcs8KeyDer::from(origin_cert.signing_key.serialize_der())
+                .into(),
+        )
+        .unwrap();
+        tls.alpn_protocols = vec![if origin_h2 {
+            b"h2".to_vec()
+        } else {
+            b"http/1.1".to_vec()
+        }];
+        let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (stream, _) = listener.accept().await.unwrap();
+            let Ok(tls) = TlsAcceptor::from(Arc::new(tls)).accept(stream).await else {
+                return;
+            };
+            let server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
+            let http = service_fn(move |request: Request<hyper::body::Incoming>| async move {
+                assert_eq!(
+                    request.version(),
+                    if origin_h2 {
+                        http::Version::HTTP_2
+                    } else {
+                        http::Version::HTTP_11
+                    }
+                );
+                assert_eq!(request.uri().path(), "/capture");
+                assert!(request.headers().get("proxy-authorization").is_none());
+                assert_eq!(
+                    request.into_body().collect().await.unwrap().to_bytes(),
+                    "request body"
+                );
+                Ok::<_, Infallible>(
+                    Response::builder()
+                        .header("set-cookie", "session=secret")
+                        .header("x-origin", "local TLS origin")
+                        .body(Stream(blocks))
+                        .unwrap(),
+                )
+            });
+            let _ = server.serve_connection(TokioIo::new(tls), http).await;
+        });
+
+        let mut ca = rcgen::CertificateParams::default();
+        ca.is_ca = rcgen::IsCa::Ca(rcgen::BasicConstraints::Constrained(0));
+        ca.extended_key_usages = vec![rcgen::ExtendedKeyUsagePurpose::ServerAuth];
+        let key = rcgen::KeyPair::generate().unwrap();
+        let certificate = ca.self_signed(&key).unwrap();
+        let authority = zentop_proxy::CertificateAuthority::new(
+            certificate.der(),
+            key,
+            time::OffsetDateTime::now_utc() + time::Duration::days(365),
+        )
+        .unwrap();
+        let decryption = Arc::new(zentop_proxy::Decryption::with_client_config(tls_client(
+            origin_trust,
+            b"h2",
+        )));
+        decryption.set_authority(Some(authority));
+        decryption.set_hosts(["LOCALHOST.".to_owned()]);
+        let session = Session::start_with_decryption(
+            Options {
+                allow_local_destinations: true,
+                ..Options::default()
+            },
+            decryption,
+        )
+        .unwrap();
+        Self {
+            session,
+            port,
+            root: certificate.der().clone(),
+        }
+    }
+
+    async fn connect(
+        &self,
+        sni: &'static str,
+        h2: bool,
+        trust_proxy: bool,
+    ) -> std::io::Result<ProxyTlsStream> {
+        let (mut sender, _driver) = client(self.session.address()).await;
+        let response = sender
+            .send_request(
+                Request::builder()
+                    .method("CONNECT")
+                    .uri(format!("LOCALHOST.:{}", self.port))
+                    .header("proxy-authorization", auth(&self.session))
+                    .body(Full::default())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let upgrade = hyper::upgrade::on(response).await.unwrap();
+        let protocol: &[u8] = if h2 { b"h2" } else { b"http/1.1" };
+        let roots = trust_proxy.then(|| self.root.clone());
+        TlsConnector::from(Arc::new(tls_client(roots, protocol)))
+            .connect(sni.try_into().unwrap(), TokioIo::new(upgrade))
+            .await
+    }
+
+    fn post(&self, h2: bool) -> Request<Full<Bytes>> {
+        let authority = format!("localhost:{}", self.port);
+        let uri = if h2 {
+            format!("https://{authority}/capture?token=secret")
+        } else {
+            "/capture?token=secret".to_owned()
+        };
+        Request::post(uri)
+            .header("host", authority)
+            .header("authorization", "secret")
+            .header("proxy-authorization", "must not be captured")
+            .body(Full::new(Bytes::from_static(b"request body")))
+            .unwrap()
+    }
+}
+
+async fn check_decrypted_stream(h2: bool, origin_h2: bool, blocks: usize) {
+    let test = DecryptedTest::new(origin_h2, true, blocks).await;
+    let tls = test.connect("localhost", h2, true).await.unwrap();
+    assert_eq!(
+        tls.get_ref().1.alpn_protocol().unwrap(),
+        if h2 { b"h2".as_slice() } else { b"http/1.1" }
+    );
+    let response = if h2 {
+        let (mut sender, driver) =
+            hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(tls))
+                .await
+                .unwrap();
+        tokio::spawn(driver);
+        sender.send_request(test.post(true)).await.unwrap()
+    } else {
+        let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+            .await
+            .unwrap();
+        tokio::spawn(driver);
+        sender.send_request(test.post(false)).await.unwrap()
+    };
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.headers()["x-origin"], "local TLS origin");
+    let mut body = response.into_body();
+    let mut total = 0;
+    while let Some(frame) = body.frame().await {
+        total += frame.unwrap().into_data().unwrap().len();
+        assert!(test.session.counters().memory < 2 * 1024 * 1024);
+    }
+    assert_eq!(total, blocks * 64 * 1024);
+    wait(|| {
+        test.session
+            .flow(1, false)
+            .is_some_and(|flow| flow.metadata.state == FlowState::Complete)
+    })
+    .await;
+    assert!(test.session.flow(0, false).is_none());
+    let flow = test.session.flow(1, false).unwrap();
+    assert_eq!(flow.metadata.kind, FlowKind::DecryptedHttps);
+    assert_eq!(flow.metadata.status, Some(200));
+    assert!(flow.metadata.timing.tls.is_some());
+    assert!(!flow.request.url.contains("secret"));
+    assert_eq!(
+        flow.request
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .unwrap()
+            .1,
+        "[redacted]"
+    );
+    assert!(!flow
+        .request
+        .headers
+        .iter()
+        .any(|(name, _)| name == "proxy-authorization"));
+    assert_eq!(flow.request_body.kept(), b"request body");
+    assert_eq!(
+        flow.response
+            .unwrap()
+            .headers
+            .iter()
+            .find(|(name, _)| name == "set-cookie")
+            .unwrap()
+            .1,
+        "[redacted]"
+    );
+    if total > 1024 * 1024 {
+        assert!(
+            matches!(flow.response_body, Body::Truncated { kept, total: bytes }
+            if kept.len() == 1024 * 1024 && bytes == total as u64)
+        );
+    } else {
+        assert_eq!(flow.response_body.kept().len(), total);
+    }
+}
+
+#[tokio::test]
+async fn decrypted_tls_negotiates_both_http_versions_on_each_leg() {
+    for client_h2 in [false, true] {
+        for origin_h2 in [false, true] {
+            check_decrypted_stream(client_h2, origin_h2, 1).await;
+        }
+    }
+}
+
+#[tokio::test]
+async fn decrypted_stream_larger_than_the_capture_budget_still_forwards() {
+    check_decrypted_stream(true, true, 65 * 16).await;
+}
+
+#[tokio::test]
+async fn decrypted_connection_enforces_names_and_refuses_upgrades() {
+    let test = DecryptedTest::new(false, true, 1).await;
+    assert!(test.connect("other.example", false, true).await.is_err());
+    let mismatched = test.session.flow(0, false).unwrap();
+    assert!(matches!(
+        mismatched.metadata.state,
+        FlowState::Refused("TLS server name does not match CONNECT")
+    ));
+    let tls = test.connect("localhost", false, true).await.unwrap();
+    let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(driver);
+    for (request, status) in [
+        (Request::get("/").header("host", "other.example"), 421),
+        (Request::get("/").header("host", "localhost"), 421),
+        (
+            Request::get(format!("https://other.example:{}/", test.port))
+                .header("host", format!("localhost:{}", test.port)),
+            421,
+        ),
+        (
+            Request::get("/")
+                .header("host", format!("localhost:{}", test.port))
+                .header("host", "other.example"),
+            421,
+        ),
+        (
+            Request::builder()
+                .method("CONNECT")
+                .uri(format!("localhost:{}", test.port)),
+            405,
+        ),
+        (
+            Request::get("/")
+                .header("host", format!("localhost:{}", test.port))
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket"),
+            501,
+        ),
+    ] {
+        let response = sender
+            .send_request(request.body(Full::<Bytes>::default()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), status);
+        let body = response.collect().await.unwrap().to_bytes();
+        if status == 501 {
+            assert!(
+                String::from_utf8_lossy(&body).contains("remove the host from the decrypt list")
+            );
+        }
+    }
+    let tls = test.connect("localhost", true, true).await.unwrap();
+    let (mut sender, driver) =
+        hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(tls))
+            .await
+            .unwrap();
+    tokio::spawn(driver);
+    for req in [
+        Request::get(format!("https://other.example:{}/", test.port)),
+        Request::get(format!("https://localhost:{}/", test.port)).header("host", "other.example"),
+    ] {
+        let response = sender
+            .send_request(req.body(Full::<Bytes>::default()).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(response.status(), 421);
+        response.collect().await.unwrap();
+    }
+    assert_eq!(test.session.counters().refused, 9);
+}
+
+#[tokio::test]
+async fn upstream_tls_failure_and_client_certificate_rejection_are_visible() {
+    let test = DecryptedTest::new(false, false, 1).await;
+    assert!(test.connect("localhost", false, false).await.is_err());
+    wait(|| {
+        test.session.flow(0, false).is_some_and(|flow| {
+            flow.metadata.state == FlowState::Failed("The program rejected Zentop's certificate")
+        })
+    })
+    .await;
+    let tls = test.connect("localhost", false, true).await.unwrap();
+    let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(driver);
+    let response = sender.send_request(test.post(false)).await.unwrap();
+    assert_eq!(response.status(), StatusCode::BAD_GATEWAY);
+    assert!(
+        matches!(test.session.flow(2, false).unwrap().metadata.state,
+        FlowState::UpstreamTls(reason) if reason.contains("UnknownIssuer"))
+    );
+}
