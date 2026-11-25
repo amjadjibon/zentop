@@ -598,6 +598,28 @@ toggled by **Filter** (⌘F) in the bottom bar.
 | ↑ / ↓ | Move the selection |
 | Esc | Clear the filters |
 
+### Implementation notes
+
+- **Classification.** The store keeps a classifier per flow and updates the
+  row's kind when the request head, the complete request body (once, for
+  the GraphQL `query` check) and the response head arrive. A form request
+  stays Form whatever it returns; otherwise the response type wins, then the
+  request type. Tunnels and upgrades are Other. Rows also carry the masked
+  URL and a WebSocket flag; the CLI's JSON skips all three.
+- **Tabs.** One transport (All, HTTP, HTTPS, WebSocket) and at most one
+  content kind combine; clicking a selected kind clears it.
+- **Pins.** Apps pin by name (attributed apps only), domains by registrable
+  domain. `settings.json` keeps at most 200 validated names of each.
+- **Auth tab.** Details expose the `Authorization` scheme without its
+  credentials. A lone token is treated as the credential, never a scheme.
+- **Compose.** `Session::compose` sends a request built from scratch
+  through the replay path, so destination policy, the decrypt list and TLS
+  verification apply as for Repeat.
+- **Layout.** With details on the right, the request and response panes
+  stack vertically. Column visibility and pane sizes last for the window.
+- **Selection.** Single selection only; "x/y rows selected" counts the
+  selected flow when it is visible.
+
 ## Later: system-wide capture
 
 Deferred until designed separately. Requirements the review established:

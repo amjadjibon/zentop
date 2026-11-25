@@ -1,16 +1,18 @@
 # Traffic inspector
 
 On macOS, open **View → Traffic…** or choose **Traffic** in the menu-bar
-overview. Click **Start**. Zentop shows its loopback address, the session token
-and shell commands to route a program through it. To reuse a port, enter it
+overview. Click the status pill at the top of the window (**Stopped**,
+**Capturing · address** or **Paused**) to open **Proxy setup**, then click
+**Start**. Proxy setup shows the loopback address, the session token and
+shell commands to route a program through it. To reuse a port, enter it
 under **Fixed port** and click **Save port**. A blank field lets macOS select
 an available port.
 
 Capture continues when you close the Traffic window. Click the Dock icon to
 reopen the main window, then choose **View → Traffic…**. Stop capture from
-the Traffic window or menu-bar overview, or quit Zentop. **Pause** keeps
-forwarding and counting traffic while suspending recording. **Clear** drops
-completed flows and stops body capture for flows already in progress.
+Proxy setup or the menu-bar overview, or quit Zentop. **Pause** (⌘.) keeps
+forwarding and counting traffic while suspending recording. **Clear** (⌘K)
+drops completed flows and stops body capture for flows already in progress.
 **Stop** closes open connections and frees the capture.
 
 ## Route a program
@@ -60,14 +62,14 @@ proxy configuration.
 
 ## Decrypt HTTPS in the GUI
 
-1. Open **Certificate and hosts** in the Traffic window. Click **Create** to
+1. Open **Certificate and hosts** in Proxy setup. Click **Create** to
    generate a root certificate and its non-exportable private key in macOS
    Keychain.
 2. Click **Trust** to ask macOS to trust the certificate for SSL in your user
    account. For a single tool, use **Export certificate** and the commands
    below instead.
 3. Type an exact DNS hostname in the decrypt list and click **Add host**, or
-   click **Decrypt this host** on a CONNECT row. Reconnect the program after
+   choose **Decrypt this host** from a tunnel row's context menu or details. Reconnect the program after
    adding or removing a host. Subdomains need their own entries.
 4. Start capture and route the program through Zentop. **Decrypted** rows
    show individual requests and responses, including headers, bodies and TLS
@@ -148,29 +150,58 @@ clients can connect using prior knowledge. Zentop forwards plain HTTP over
 HTTP/1.1 to the origin. HTTP/1.1 upgrades such as WebSockets show
 the handshake, timing and byte counts. The **Messages** tab shows WebSocket
 frames in both directions, including text, binary hex, ping, pong and close
-codes. A
-**Not decrypted** CONNECT row shows the destination, byte counts and
-timing of a tunnel whose TLS goes directly to the server. Process
+codes. A **Tunnel** row shows the destination, byte counts and timing of a
+CONNECT tunnel whose TLS goes directly to the server. Process
 attribution is best effort and may name a helper process.
 Short-lived connections, shared sockets and sockets Zentop cannot inspect may
 show **Unknown process**.
 
-Use the **Apps** or **Domains** sidebar to narrow the capture. Counts update
-live, and hosts sharing a registrable domain group together. Use search or
-filter by process, host, method, status class, kind or errors. Click a column
-heading to sort, use Up and Down to select a row, and press Enter to open
-Request details. Press ⌘K or Esc to clear filters. Drag the divider between the
-table and details to resize the panes. Click a process name to open its
-details, or use **Show traffic** from the process details sheet.
+The tab strip filters by transport (**All**, **HTTP**, **HTTPS**,
+**WebSocket**) and content (**JSON**, **Form**, **XML**, **JS**, **CSS**,
+**GraphQL**, **Document**, **Media**, **Other**). GraphQL covers `/graphql`
+paths, `application/graphql` bodies and JSON bodies with a top-level `query`
+string. Tunnels appear under HTTPS and Other.
+
+The sidebar lists **Apps**, each expanding to the domains it contacted, and
+**Domains**, each expanding to its hosts. Counts update live, and hosts
+sharing a registrable domain group together. Pin an app or domain from its
+context menu, or the pin button that appears on hover, to keep it under
+**Favorites**. Pins are saved in the GUI settings as names only. The field at
+the bottom of the sidebar (⇧⌘F) narrows the tree.
+
+**Filter** (⌘F) in the bottom bar shows search and filters for app, host,
+method, status class and errors. **Reset filters** or Esc clears every
+filter and the sidebar selection. Click a column heading to sort; the column
+button at the end of the header, or right-clicking it, shows or hides
+columns. Use Up and Down to move the selection. **Auto Select** keeps the
+newest matching flow selected. The bottom bar shows the selected and visible
+row counts, capture memory against the 64 MB budget and throughput over the
+last second.
+
+Details show the method, status and full URL, then **Request** and
+**Response** side by side. Request tabs show headers, the decoded query,
+the body, parsed cookies, the authorization scheme, raw HTTP text and a
+summary. Response tabs show headers, the body, parsed Set-Cookie
+attributes, raw HTTP text, WebSocket messages and timing. The body viewer
+picks a format automatically, or choose JSON (a foldable tree), Text, Form,
+Hex or Image. Use the toolbar buttons to place details below or beside the
+table, or hide them, and drag the dividers to resize. Open a process's
+details from the request **Summary**, or use **Show traffic** from the
+process details sheet.
+
+Right-click a row for Copy URL, Copy as cURL (⇧⌘C), Repeat (⌘R), Edit and
+resend (⌘E), pinning, Decrypt this host and Export HAR.
 
 **Repeat** sends the original retained HTTP or decrypted HTTPS request.
 **Edit and resend** opens a request editor with the method, URL, headers and
-body. Untouched masked values are sent with their original values. Replay
+body. **Compose** in the toolbar opens the same editor with an empty request,
+which goes through the same destination and decrypt-list checks. Untouched masked values are sent with their original values. Replay
 uses the current destination policy, and HTTPS requires the host to remain
 on the decrypt list. Responses appear in new **Repeated** rows from Zentop.
 Tunnels, upgrades and incomplete captured requests are unavailable for replay.
 
-Use **Export selected HAR** or **Export filtered HAR** to save a HAR 1.2 file.
+Use **Export HAR…** from a row's context menu, or **Export filtered HAR…** in
+the filter bar, to save a HAR 1.2 file.
 Secret headers and query values are masked. **Include bodies** is off by
 default. Review any HAR file before sharing it.
 
