@@ -1641,20 +1641,23 @@ async fn relay_pair(
     };
     let (client_read, client_write) = tokio::io::split(client);
     let (server_read, server_write) = tokio::io::split(server);
+    let closing = std::sync::atomic::AtomicBool::new(false);
     let result = tokio::try_join!(
         relay(
             client_read,
             server_write,
             capture,
             Side::Request,
-            inspectors(crate::Direction::ClientToServer)
+            inspectors(crate::Direction::ClientToServer),
+            &closing,
         ),
         relay(
             server_read,
             client_write,
             capture,
             Side::Response,
-            inspectors(crate::Direction::ServerToClient)
+            inspectors(crate::Direction::ServerToClient),
+            &closing,
         ),
     );
     capture.finish(if result.is_ok() {
@@ -1664,17 +1667,50 @@ async fn relay_pair(
     });
 }
 
+/// Relays one direction of an opaque connection. `closing` is shared by both
+/// directions: once either side has ended its stream, the other side tearing
+/// its socket down (a broken pipe or reset while the last bytes, such as a TLS
+/// close_notify, cross) is how connections normally end, not a failure.
 async fn relay(
     mut source: impl AsyncRead + Unpin,
     mut target: impl AsyncWrite + Unpin,
     capture: &Capture,
     side: Side,
+    inspector: Option<crate::websocket::Inspector>,
+    closing: &std::sync::atomic::AtomicBool,
+) -> io::Result<()> {
+    use std::sync::atomic::Ordering;
+    let result = relay_bytes(&mut source, &mut target, capture, side, inspector, closing).await;
+    match result {
+        Err(error) if closing.load(Ordering::Acquire) && peer_closed(error.kind()) => Ok(()),
+        result => result,
+    }
+}
+
+fn peer_closed(kind: io::ErrorKind) -> bool {
+    matches!(
+        kind,
+        io::ErrorKind::BrokenPipe
+            | io::ErrorKind::ConnectionReset
+            | io::ErrorKind::ConnectionAborted
+            | io::ErrorKind::NotConnected
+            | io::ErrorKind::UnexpectedEof
+    )
+}
+
+async fn relay_bytes(
+    source: &mut (impl AsyncRead + Unpin),
+    target: &mut (impl AsyncWrite + Unpin),
+    capture: &Capture,
+    side: Side,
     mut inspector: Option<crate::websocket::Inspector>,
+    closing: &std::sync::atomic::AtomicBool,
 ) -> io::Result<()> {
     let mut buffer = [0u8; 8192];
     loop {
         let read = source.read(&mut buffer).await?;
         if read == 0 {
+            closing.store(true, std::sync::atomic::Ordering::Release);
             return target.shutdown().await;
         }
         let mut offset = 0;
@@ -1699,6 +1735,50 @@ async fn relay(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A peer whose socket is already gone: every write fails like a closed TCP socket.
+    struct Gone;
+    impl AsyncWrite for Gone {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+        }
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::ErrorKind::NotConnected.into()))
+        }
+    }
+
+    #[tokio::test]
+    async fn peer_teardown_after_close_is_a_normal_end() {
+        use std::sync::atomic::AtomicBool;
+        let capture = Capture {
+            id: None,
+            started: Instant::now(),
+            store: Arc::new(Mutex::new(Store::default())),
+            _activity: None,
+        };
+        // The other direction already ended: the last bytes meeting a closed
+        // socket is how connections finish.
+        let closing = AtomicBool::new(true);
+        let mut source: &[u8] = b"close_notify";
+        relay(&mut source, Gone, &capture, Side::Request, None, &closing)
+            .await
+            .unwrap();
+        // Mid-transfer, the same error is a real failure.
+        let open = AtomicBool::new(false);
+        let mut source: &[u8] = b"payload";
+        assert!(
+            relay(&mut source, Gone, &capture, Side::Request, None, &open)
+                .await
+                .is_err()
+        );
+    }
 
     #[test]
     fn targets_require_proxy_form_and_normalize_authority() {
