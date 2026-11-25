@@ -60,6 +60,75 @@ authentication. Use `zentop` as the username and the session token as the
 password. Applications that ignore proxy environment variables need their own
 proxy configuration.
 
+## Open an app with Zentop
+
+Chromium browsers and Electron apps, such as Google Chrome, Brave, Microsoft
+Edge, Claude, Slack, Visual Studio Code and Discord, ignore `http_proxy` and
+can't send the token. In the GUI on macOS, **Open App** in the Traffic
+toolbar starts one of them pointed at Zentop instead. Your Mac's network and
+proxy settings don't change.
+
+1. Click **Open App** and choose an app. The menu lists the Chromium
+   browsers and Electron apps in `/Applications` and `~/Applications`.
+   **Choose App…** opens any other app, with a warning that it may ignore
+   the proxy and nothing is captured.
+2. If capture is stopped, Zentop starts it with the window's settings.
+3. Zentop opens the app with `--proxy-server=http://127.0.0.1:<port>` and
+   `--disable-quic`. The app's traffic appears under its name in **Apps**,
+   with no token. The Client column still names the helper process that made
+   each connection.
+
+Zentop admits only the processes of the app it opened: the app itself, its
+helpers and its child processes inside the app bundle. Every other program,
+including a shell in an editor's terminal, still needs the token and gets
+`407` without it.
+
+- **Browsers** open as a separate window with a fresh temporary profile,
+  with no bookmarks, sign-ins or extensions. Your normal browser keeps
+  running untouched. Zentop deletes the temporary profile when the browser
+  quits, or on its next start if Zentop quit first.
+- **Electron apps** open with their normal data, so you stay signed in. They
+  run one instance at a time. If the app is already running, Zentop asks
+  before quitting it, then asks it to quit as its Quit command would (it may
+  ask you to save work). Zentop never force-quits an app. If it hasn't quit
+  after 10 seconds, nothing is opened.
+
+**Launched** in Proxy setup lists each app Zentop opened, with its PID and
+whether it's capturing. **Stop Capturing** stops admitting it: its new
+connections get `407`, and Chrome shows a proxy sign-in prompt. **Quit…**
+asks first, then quits it.
+
+When you stop capture, apps Zentop opened can't reach the network until you
+quit them and open them normally. A notice says so, with **Quit Launched
+Apps…**. Quitting Zentop leaves them running.
+
+### HTTPS in opened apps
+
+HTTPS to hosts outside the decrypt list stays a tunnel, and the app checks
+the real server's certificate itself. For a decrypt-list host, the app must
+accept Zentop's certificate. Either click **Trust** in **Certificate and
+hosts**, which works for every app and changes your user trust settings, or
+check **Accept Zentop's certificate in launched apps** in the **Open App**
+menu before opening the app. That passes
+`--ignore-certificate-errors-spki-list` for a key that exists only in
+Zentop's memory for this capture, and changes no trust settings. Chrome
+shows an "unsupported command-line flag" bar.
+
+Some apps refuse that switch. Claude, for example, quits as soon as it
+opens. Zentop then says the app quit right after opening; turn the option
+off and open it again.
+
+Electron apps that make requests from Node.js, rather than from their web
+pages, ignore the proxy switch, so those requests aren't captured. Apps that
+pin certificates reject Zentop's certificate either way.
+
+### Terms of service
+
+Inspecting your own traffic is fine. Replaying or automating requests
+against a service's private API with your account (Repeat, Edit and resend,
+breakpoints and rules) may breach that service's terms. Use official APIs for
+automation, and never capture other people's traffic.
+
 ## Decrypt HTTPS in the GUI
 
 1. Open **Certificate and hosts** in Proxy setup. Click **Create** to
@@ -304,8 +373,10 @@ The CLI always tunnels HTTPS.
 Capture is off by default. When enabled, Zentop resolves host names and forwards
 requests for the programs you route through it. It listens on IPv4 loopback
 with a fresh random token each session. Proxy routing is configured in the
-client. User-domain SSL trust changes only when you approve a certificate
-Trust, Replace or Remove action.
+client, or passed to an app Zentop opens, never in system settings. Apps
+opened with Zentop are admitted without the token only while capture runs.
+User-domain SSL trust changes only when you approve a certificate Trust,
+Replace or Remove action.
 
 The token and flows are kept in memory. GUI settings save the optional
 fixed port, the exact-host decrypt list, pins and rules. Rules hold no

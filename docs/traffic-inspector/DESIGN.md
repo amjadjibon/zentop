@@ -1025,6 +1025,17 @@ developer's own Chrome profile and running Chrome, so it wasn't run. Electron
 apps keep their own data directory, so whether they honour the flag is
 verified per app. If one doesn't, use option (a).
 
+**Verified live** with Chrome 158 on macOS 26, through Open App with a
+temporary profile and an isolated keychain, with no trust change: with the
+option on, `https://example.com` on the decrypt list loaded and its rows
+were decrypted; with it off, Chrome rejected Zentop's certificate and the row
+said so. That confirms the session leaf key (a leaf SPKI) is what Chrome
+needs. Claude desktop 2.26454 quits about 100 ms after start when given
+`--ignore-certificate-errors-spki-list`, and runs normally with only
+`--proxy-server` and `--disable-quic`. So an app that exits within 3 seconds
+of launching gets a message, and when the option was on, the message
+suggests turning it off.
+
 **Caveats.**
 - Apps that pin certificates reject Zentop's leaf whatever you choose, and
   the row says the program rejected Zentop's certificate.
@@ -1042,13 +1053,15 @@ verified per app. If one doesn't, use option (a).
   - If capture is stopped, launching starts it first with the window's
     settings.
 - **Proxy setup** gains a **Launched** list. Each row shows the app's icon,
-  name, PID and state (Capturing, Not capturing, Exited), with:
+  name, PID and state (Capturing or Not capturing). An app leaves the list
+  when it exits. Each row has:
   - **Stop capturing**, which drops the family; and
   - **Quit…**, which asks first and then quits that instance gracefully.
 - **Sidebar.** Flows from a launched family carry the launched app's name.
   The Apps tree groups them under it, for example **Google Chrome** with
   its icon. The Client column still shows the helper process that owned the
-  socket.
+  socket. Both use the launched app's icon, since a helper that has just
+  started may not be in the sampled process table yet.
 - **When capture stops** while launched apps still run, a notice says they
   can't reach the network until relaunched normally, with **Quit launched
   apps…** (one confirmation for all).
