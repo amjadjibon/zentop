@@ -32,7 +32,7 @@ pub(crate) enum Secrets {
 }
 
 pub(crate) fn secret_header(name: &str) -> bool {
-    matches!(name, "authorization" | "cookie" | "set-cookie")
+    matches!(name, "authorization" | "cookie" | "set-cookie") || secret_key(name)
 }
 
 pub(crate) const MASK: &str = "[redacted]";
@@ -126,7 +126,10 @@ fn shell(value: &str) -> String {
 }
 
 pub fn copy_as_curl(flow: &Flow, include_secrets: bool) -> Option<String> {
-    if flow.metadata.kind == FlowKind::Tunnel {
+    if !matches!(
+        flow.metadata.kind,
+        FlowKind::Http | FlowKind::DecryptedHttps
+    ) {
         return None;
     }
     let secrets = if include_secrets {
@@ -295,19 +298,40 @@ mod tests {
                 ("content-encoding".into(), encoding.into()),
                 ("content-type".into(), "application/json".into()),
             ];
-            let body = preview(&Body::Captured(bytes), &headers).unwrap();
+            let body = preview(&Body::Captured(bytes.into()), &headers).unwrap();
             assert_eq!(body.text, "{\n  \"a\": 1,\n  \"b\": 2\n}");
             assert!(!body.binary && !body.limited);
         }
         let mut gzip = flate2::write::GzEncoder::new(Vec::new(), Default::default());
         gzip.write_all(&vec![b'a'; PREVIEW_LIMIT + 100]).unwrap();
         let body = preview(
-            &Body::Captured(gzip.finish().unwrap()),
+            &Body::Captured(gzip.finish().unwrap().into()),
             &vec![("content-encoding".into(), "gzip".into())],
         )
         .unwrap();
         assert!(body.limited);
         assert_eq!(body.text.len(), PREVIEW_LIMIT);
+    }
+
+    #[test]
+    fn masks_or_omits_secret_looking_headers() {
+        for name in [
+            "x-api-key",
+            "api-key",
+            "x-auth-token",
+            "x-access-token",
+            "x-csrf-token",
+        ] {
+            let raw = vec![
+                (name.into(), "private".into()),
+                ("x-tokenizer".into(), "public".into()),
+            ];
+            let masked = headers(&raw, Secrets::Mask);
+            assert_eq!(masked[0].1, MASK);
+            assert_eq!(masked[1], raw[1]);
+            assert_eq!(headers(&raw, Secrets::Omit), raw[1..]);
+            assert_eq!(headers(&raw, Secrets::Show), raw);
+        }
     }
 
     #[test]

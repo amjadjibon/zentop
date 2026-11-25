@@ -8,7 +8,10 @@ pub use engine::{Options, Session};
 pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata};
 
 use serde::Serialize;
+use std::sync::Arc;
 use std::time::Duration;
+
+const PENDING_ATTRIBUTION: Attribution = Attribution::Unknown("Attribution pending");
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "reason", rename_all = "snake_case")]
@@ -40,6 +43,7 @@ impl Attribution {
 pub enum FlowKind {
     Http,
     Tunnel,
+    Upgrade,
     DecryptedHttps,
 }
 
@@ -58,12 +62,33 @@ impl FlowState {
     }
 }
 
-#[derive(Clone, Debug, Default, Serialize)]
+#[derive(Clone, Debug, Default)]
 pub struct Timing {
     pub connect: Option<Duration>,
     pub tls: Option<Duration>,
     pub ttfb: Option<Duration>,
     pub total: Duration,
+}
+
+impl Serialize for Timing {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Milliseconds {
+            connect_ms: Option<f64>,
+            tls_ms: Option<f64>,
+            ttfb_ms: Option<f64>,
+            total_ms: f64,
+        }
+
+        let ms = |duration: Duration| duration.as_secs_f64() * 1_000.;
+        Milliseconds {
+            connect_ms: self.connect.map(ms),
+            tls_ms: self.tls.map(ms),
+            ttfb_ms: self.ttfb.map(ms),
+            total_ms: ms(self.total),
+        }
+        .serialize(serializer)
+    }
 }
 
 /// Coalesced row changes, or a replacement after attachment or queue overflow.
@@ -90,16 +115,16 @@ pub struct ResponseHead {
     pub headers: Headers,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Body {
-    Captured(Vec<u8>),
-    Truncated { kept: Vec<u8>, total: u64 },
+    Captured(Arc<Vec<u8>>),
+    Truncated { kept: Arc<Vec<u8>>, total: u64 },
     Skipped(&'static str),
 }
 
 impl Default for Body {
     fn default() -> Self {
-        Self::Captured(Vec::new())
+        Self::Captured(Arc::default())
     }
 }
 
@@ -127,7 +152,7 @@ pub struct Flow {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Counters {
     pub refused: u64,
-    pub dropped: u64,
+    pub flows_dropped: u64,
     pub unattributed: u64,
     pub evicted_bodies: u64,
     pub sent: u64,

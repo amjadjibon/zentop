@@ -58,6 +58,9 @@ enum Command {
         /// Include redacted HTTP headers
         #[arg(long)]
         headers: bool,
+        /// Allow local destinations for this session
+        #[arg(long)]
+        allow_local: bool,
     },
     /// List processes, busiest first
     Processes {
@@ -115,7 +118,19 @@ fn capture() -> io::Result<Snapshot> {
 fn run(args: Args, output: &mut impl Write) -> io::Result<()> {
     match args.command.unwrap_or(Command::System) {
         #[cfg(target_os = "macos")]
-        Command::Traffic { port, headers } => traffic::run(port, args.json, headers, output)?,
+        Command::Traffic {
+            port,
+            headers,
+            allow_local,
+        } => traffic::run(
+            zentop_proxy::Options {
+                port,
+                allow_local_destinations: allow_local,
+            },
+            args.json,
+            headers,
+            output,
+        )?,
         Command::Connections { pid } => connection_report(pid, args.json, output)?,
         Command::Stream { protocol, samples } => stream(protocol, samples, output)?,
         Command::System => {

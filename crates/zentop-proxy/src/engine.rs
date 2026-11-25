@@ -1,6 +1,5 @@
-use std::future::Future;
 use std::io;
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, TcpListener as StdListener};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdListener};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
@@ -11,7 +10,7 @@ use base64::{prelude::*, Engine as _};
 use bytes::Bytes;
 use http::header::{self, HeaderValue};
 use http::uri::Authority;
-use http::{HeaderMap, Method, Request, Response, StatusCode, Uri, Version};
+use http::{HeaderMap, Method, Request, Response, StatusCode, Version};
 use http_body_util::combinators::UnsyncBoxBody;
 use http_body_util::{BodyExt, Full};
 use hyper::body::{Body as HttpBody, Frame, Incoming, SizeHint};
@@ -21,15 +20,19 @@ use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{lookup_host, TcpListener, TcpStream};
 use tokio::sync::{mpsc, oneshot, watch, Semaphore};
 use tokio::task::{AbortHandle, JoinSet};
+use tokio::time::{self, Instant as TokioInstant};
 
 use crate::presentation::Metadata;
 use crate::store::{Side, Store};
-use crate::{Attribution, Counters, Flow, FlowKind, FlowState, Headers, RequestHead};
+use crate::{
+    Attribution, Counters, Flow, FlowKind, FlowState, Headers, RequestHead, PENDING_ATTRIBUTION,
+};
 
 const CONNECTIONS: usize = 256;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
-const PENDING: Attribution = Attribution::Unknown("Attribution pending");
+const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 type SharedStore = Arc<Mutex<Store>>;
 type MessageBody = UnsyncBoxBody<Bytes, hyper::Error>;
@@ -148,6 +151,11 @@ impl Session {
         self.store.lock().unwrap().flow(id, show_secrets)
     }
 
+    /// Returns a new detail snapshot only when the selected flow has changed.
+    pub fn flow_since(&self, id: u64, reveal: bool, revision: Option<u64>) -> Option<(u64, Flow)> {
+        self.store.lock().unwrap().flow_since(id, reveal, revision)
+    }
+
     pub fn take_finished(&self, headers: bool) -> Finished {
         let mut store = self.store.lock().unwrap();
         store.drain_events();
@@ -175,8 +183,60 @@ struct Engine {
 struct Connection {
     id: u64,
     owner: watch::Receiver<Attribution>,
-    // A CONNECT stream keeps its slot after Hyper yields the upgraded socket.
+    activity: watch::Sender<Activity>,
+    // A tunnel or upgrade keeps its slot after Hyper yields the upgraded socket.
     _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
+#[derive(Clone, Copy)]
+enum Activity {
+    WaitingForAuth(TokioInstant),
+    Active(usize),
+    Idle(TokioInstant),
+}
+
+struct ActiveRequest(watch::Sender<Activity>);
+
+impl ActiveRequest {
+    fn begin(activity: &watch::Sender<Activity>) -> Self {
+        activity.send_modify(|state| {
+            *state = match *state {
+                Activity::Active(count) => Activity::Active(count + 1),
+                _ => Activity::Active(1),
+            };
+        });
+        Self(activity.clone())
+    }
+}
+
+impl Drop for ActiveRequest {
+    fn drop(&mut self) {
+        self.0.send_modify(|state| {
+            *state = match *state {
+                Activity::Active(count) if count > 1 => Activity::Active(count - 1),
+                _ => Activity::Idle(TokioInstant::now() + IDLE_TIMEOUT),
+            };
+        });
+    }
+}
+
+async fn expire_client(mut activity: watch::Receiver<Activity>) {
+    loop {
+        let state = *activity.borrow_and_update();
+        let deadline = match state {
+            Activity::WaitingForAuth(deadline) | Activity::Idle(deadline) => Some(deadline),
+            Activity::Active(_) => None,
+        };
+        if let Some(deadline) = deadline {
+            tokio::select! {
+                biased;
+                result = activity.changed() => if result.is_err() { return; },
+                () = time::sleep_until(deadline) => return,
+            }
+        } else if activity.changed().await.is_err() {
+            return;
+        }
+    }
 }
 
 impl Engine {
@@ -220,23 +280,31 @@ impl Engine {
                     };
                     let id = next_id;
                     next_id += 1;
-                    let (sender, owner) = watch::channel(PENDING);
+                    let (sender, owner) = watch::channel(PENDING_ATTRIBUTION);
                     if self.store.lock().unwrap().counters.paused {
                         sender.send_replace(Attribution::unknown("Accepted while capture was paused"));
                     } else if let Err(error) = pending.try_send((id, peer, sender)) {
                         error.into_inner().2.send_replace(Attribution::unknown("Attribution queue was full"));
                     }
-                    let connection = Arc::new(Connection { id, owner, _slot: slot });
+                    let (activity, deadlines) = watch::channel(Activity::WaitingForAuth(
+                        TokioInstant::now() + AUTH_TIMEOUT,
+                    ));
+                    let connection = Arc::new(Connection { id, owner, activity, _slot: slot });
                     let engine = self.clone();
                     clients.spawn(async move {
                         let mut server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
                         server.http1().timer(TokioTimer::new()).max_buf_size(128 * 1024)
-                            .header_read_timeout(Duration::from_secs(10));
+                            .header_read_timeout(None);
                         server.http2().timer(TokioTimer::new()).enable_connect_protocol()
                             .max_header_list_size(128 * 1024).max_concurrent_streams(32);
-                        let _ = server.serve_connection_with_upgrades(TokioIo::new(stream), service_fn(move |request| {
+                        let http = server.serve_connection_with_upgrades(TokioIo::new(stream), service_fn(move |request| {
                             engine.clone().handle(request, connection.clone())
-                        })).await;
+                        }));
+                        tokio::select! {
+                            biased;
+                            () = expire_client(deadlines) => {}
+                            _ = http => {}
+                        }
                     });
                 }
             }
@@ -265,8 +333,14 @@ impl Engine {
                 header::PROXY_AUTHENTICATE,
                 HeaderValue::from_static("Basic realm=\"Zentop\""),
             );
+            if request.version() != Version::HTTP_2 {
+                response
+                    .headers_mut()
+                    .insert(header::CONNECTION, HeaderValue::from_static("close"));
+            }
             return Ok(response);
         }
+        let activity = ActiveRequest::begin(&connection.activity);
         let started = Instant::now();
         let process = connection.owner.borrow().clone();
         let kind = if target.tunnel {
@@ -276,9 +350,9 @@ impl Engine {
         };
         let id = {
             let mut store = self.store.lock().unwrap();
-            let id = store.start(
+            store.start(
                 connection.id,
-                process.clone(),
+                process,
                 kind,
                 RequestHead {
                     method: request.method().to_string(),
@@ -293,28 +367,14 @@ impl Engine {
                     headers: Vec::new(),
                 },
                 request.headers(),
-            );
-            if id.is_some() && process != PENDING && matches!(process, Attribution::Unknown(_)) {
-                store.counters.unattributed += 1;
-            }
-            id
+            )
         };
         let capture = Arc::new(Capture {
             id,
             started,
             store: self.store.clone(),
+            _activity: activity,
         });
-        if !target.tunnel && request.headers().contains_key(header::UPGRADE) {
-            self.store.lock().unwrap().refuse();
-            capture.fail(
-                StatusCode::BAD_REQUEST,
-                FlowState::Refused("Use CONNECT for upgraded protocols"),
-            );
-            return Ok(reply(
-                StatusCode::BAD_REQUEST,
-                "Use CONNECT for upgraded protocols",
-            ));
-        }
         let dial_started = Instant::now();
         let upstream = tokio::time::timeout(DIAL_TIMEOUT, self.dial(&target)).await;
         let upstream = match upstream {
@@ -357,7 +417,7 @@ impl Engine {
             return Ok(tunnel(request, upstream, connection, capture));
         }
 
-        match forward(request, target, upstream, capture.clone()).await {
+        match forward(request, target, upstream, connection, capture.clone()).await {
             Ok(response) => Ok(response),
             Err(_) => {
                 capture.fail(
@@ -429,25 +489,59 @@ enum DialError {
 
 fn allowed(address: SocketAddr, own: SocketAddr, allow_local: bool) -> bool {
     let ip = address.ip().to_canonical();
-    if (ip == own.ip() || ip.is_unspecified()) && address.port() == own.port() {
-        return false;
-    }
     if ip.is_unspecified() || ip.is_multicast() {
         return false;
     }
-    allow_local
-        || match ip {
-            IpAddr::V4(ip) => {
-                !(ip.is_loopback()
-                    || ip.is_link_local()
-                    || ip.is_private()
-                    || ip.is_broadcast()
-                    || ip.octets()[0] == 0)
-            }
-            IpAddr::V6(ip) => {
-                !(ip.is_loopback() || ip.is_unicast_link_local() || ip.is_unique_local())
-            }
+    let is_own = |ip| ip == own.ip() && address.port() == own.port();
+    let ipv4 = |ip: Ipv4Addr| {
+        !is_own(IpAddr::V4(ip))
+            && !ip.is_unspecified()
+            && !ip.is_multicast()
+            && (allow_local || public_v4(ip))
+    };
+    match ip {
+        IpAddr::V4(ip) => ipv4(ip),
+        IpAddr::V6(ip) => {
+            let segments = ip.segments();
+            !is_own(IpAddr::V6(ip))
+                && (allow_local
+                    || !(ip.is_loopback()
+                        || ip.is_unicast_link_local()
+                        || ip.is_unique_local()
+                        || segments[0] & 0xffc0 == 0xfec0
+                        || segments[..4] == [0x100, 0, 0, 0]))
+                && embedded_ipv4(ip).into_iter().flatten().all(ipv4)
         }
+    }
+}
+
+fn public_v4(ip: Ipv4Addr) -> bool {
+    let [a, b, c, _] = ip.octets();
+    !(ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_private()
+        || matches!(
+            (a, b, c),
+            (0 | 240..=255, _, _) | (100, 64..=127, _) | (192, 0, 0) | (198, 18 | 19, _)
+        ))
+}
+
+fn embedded_ipv4(ip: Ipv6Addr) -> [Option<Ipv4Addr>; 2] {
+    let bytes = ip.octets();
+    let at = |offset| Ipv4Addr::from(<[u8; 4]>::try_from(&bytes[offset..offset + 4]).unwrap());
+    let address = match ip.segments() {
+        // IPv4-compatible and the RFC 6052 well-known translation prefix.
+        [0, 0, 0, 0, 0, 0, ..] | [0x64, 0xff9b, 0, 0, 0, 0, ..] => at(12),
+        // RFC 6052 /48 layout skips the reserved octet at byte 8.
+        [0x64, 0xff9b, 1, ..] => Ipv4Addr::new(bytes[6], bytes[7], bytes[9], bytes[10]),
+        [0x2002, ..] => at(2),
+        // Teredo stores the server in clear and the client with inverted bits.
+        [0x2001, 0, ..] => {
+            return [Some(at(4)), Some(Ipv4Addr::from(!u32::from(at(12))))];
+        }
+        _ => return [None, None],
+    };
+    [Some(address), None]
 }
 
 struct Target {
@@ -465,8 +559,12 @@ impl Target {
             if uri.scheme().is_some() || uri.path_and_query().is_some() {
                 return Err("CONNECT requires a host and port");
             }
-        } else if uri.scheme_str() != Some("http") {
-            return Err("Use an absolute http:// URL or CONNECT");
+        } else if uri.scheme_str() != Some("http")
+            && !(uri.scheme_str() == Some("ws")
+                && request.version() == Version::HTTP_11
+                && has_upgrade(request.headers()))
+        {
+            return Err("Use an absolute http:// URL, a ws:// upgrade, or CONNECT");
         }
         let authority = uri
             .authority()
@@ -531,6 +629,35 @@ fn reply(status: StatusCode, text: &'static str) -> Response<MessageBody> {
     response
 }
 
+fn header_tokens(headers: &HeaderMap, name: header::HeaderName) -> impl Iterator<Item = &str> {
+    headers
+        .get_all(name)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(',').map(str::trim))
+        .filter(|value| !value.is_empty())
+}
+
+fn has_upgrade(headers: &HeaderMap) -> bool {
+    header_tokens(headers, header::CONNECTION).any(|token| token.eq_ignore_ascii_case("upgrade"))
+        && header_tokens(headers, header::UPGRADE).next().is_some()
+}
+
+fn strip_upgrade_headers(headers: &mut HeaderMap, upgrade: bool) {
+    let values: Vec<_> = if upgrade {
+        headers.get_all(header::UPGRADE).iter().cloned().collect()
+    } else {
+        Vec::new()
+    };
+    strip_hop_headers(headers);
+    if upgrade {
+        headers.insert(header::CONNECTION, HeaderValue::from_static("upgrade"));
+        for value in values {
+            headers.append(header::UPGRADE, value);
+        }
+    }
+}
+
 fn strip_hop_headers(headers: &mut HeaderMap) {
     let nominated: Vec<_> = headers
         .get_all(header::CONNECTION)
@@ -561,6 +688,7 @@ struct Capture {
     id: Option<u64>,
     started: Instant,
     store: SharedStore,
+    _activity: ActiveRequest,
 }
 
 impl Capture {
@@ -651,28 +779,32 @@ impl HttpBody for StreamingBody {
 }
 
 async fn forward(
-    request: Request<Incoming>,
+    mut request: Request<Incoming>,
     target: Target,
     upstream: TcpStream,
+    connection: Arc<Connection>,
     capture: Arc<Capture>,
 ) -> Result<Response<MessageBody>, Box<dyn std::error::Error + Send + Sync>> {
-    let (mut head, incoming) = request.into_parts();
-    let http2 = head.version == Version::HTTP_2;
-    strip_hop_headers(&mut head.headers);
-    let path = head.uri.path_and_query().map_or("/", |path| path.as_str());
-    if http2 {
-        head.uri = Uri::builder()
-            .scheme("http")
-            .authority(target.authority)
-            .path_and_query(path)
-            .build()?;
-        head.headers.remove(header::HOST);
+    let version = request.version();
+    let upgrade = version == Version::HTTP_11 && has_upgrade(request.headers());
+    let client_upgrade = upgrade.then(|| hyper::upgrade::on(&mut request));
+    let protocols = if upgrade {
+        header_tokens(request.headers(), header::UPGRADE)
+            .map(str::to_owned)
+            .collect::<Vec<_>>()
     } else {
-        head.uri = path.parse()?;
-        head.version = Version::HTTP_11;
-        head.headers
-            .insert(header::HOST, HeaderValue::from_str(&target.authority)?);
-    }
+        Vec::new()
+    };
+    let (mut head, incoming) = request.into_parts();
+    strip_upgrade_headers(&mut head.headers, upgrade);
+    head.uri = head
+        .uri
+        .path_and_query()
+        .map_or("/", |path| path.as_str())
+        .parse()?;
+    head.version = Version::HTTP_11;
+    head.headers
+        .insert(header::HOST, HeaderValue::from_str(&target.authority)?);
     let request = Request::from_parts(
         head,
         StreamingBody {
@@ -682,19 +814,52 @@ async fn forward(
             _driver: None,
         },
     );
-    let (response, driver) = if http2 {
-        send_h2(upstream, request).await?
-    } else {
-        send_h1(upstream, request).await?
-    };
-    let (mut head, incoming) = response.into_parts();
+    let (mut sender, upstream) =
+        hyper::client::conn::http1::handshake(TokioIo::new(upstream)).await?;
+    let driver = UpstreamDriver(tokio::spawn(upstream.with_upgrades()).abort_handle());
+    let mut response = sender.send_request(request).await?;
+    let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
+    if upgraded
+        && (!has_upgrade(response.headers())
+            || !header_tokens(response.headers(), header::UPGRADE).all(|selected| {
+                protocols
+                    .iter()
+                    .any(|offered| offered.eq_ignore_ascii_case(selected))
+            }))
+    {
+        return Err(io::Error::other("Origin selected an unsolicited upgrade").into());
+    }
     capture.store.lock().unwrap().response(
         capture.id,
-        head.status.as_u16(),
-        &head.headers,
+        response.status().as_u16(),
+        response.headers(),
         capture.started.elapsed(),
     );
+    if let Some(client) = client_upgrade.filter(|_| upgraded) {
+        let server = hyper::upgrade::on(&mut response);
+        capture.store.lock().unwrap().upgraded(capture.id);
+        tokio::spawn(async move {
+            let _connection = connection;
+            let _driver = driver;
+            match tokio::try_join!(client, server) {
+                Ok((client, server)) => {
+                    relay_pair(TokioIo::new(client), TokioIo::new(server), &capture).await
+                }
+                Err(_) => capture.finish(FlowState::Failed("Could not establish HTTP upgrade")),
+            }
+        });
+        let (mut head, _) = response.into_parts();
+        strip_upgrade_headers(&mut head.headers, true);
+        return Ok(Response::from_parts(
+            head,
+            reply(StatusCode::OK, "").into_body(),
+        ));
+    }
+    let (mut head, incoming) = response.into_parts();
     strip_hop_headers(&mut head.headers);
+    if version == Version::HTTP_2 {
+        head.version = version;
+    }
     if incoming.is_end_stream() {
         capture.finish(FlowState::Complete);
     }
@@ -708,30 +873,6 @@ async fn forward(
         }
         .boxed_unsync(),
     ))
-}
-
-async fn send_h1(
-    stream: TcpStream,
-    request: Request<StreamingBody>,
-) -> Result<(Response<Incoming>, UpstreamDriver), hyper::Error> {
-    let (mut sender, connection) = hyper::client::conn::http1::Builder::new()
-        .handshake(TokioIo::new(stream))
-        .await?;
-    let driver = drive(connection);
-    Ok((sender.send_request(request).await?, driver))
-}
-async fn send_h2(
-    stream: TcpStream,
-    request: Request<StreamingBody>,
-) -> Result<(Response<Incoming>, UpstreamDriver), hyper::Error> {
-    let (mut sender, connection) = hyper::client::conn::http2::Builder::new(TokioExecutor::new())
-        .handshake(TokioIo::new(stream))
-        .await?;
-    let driver = drive(connection);
-    Ok((sender.send_request(request).await?, driver))
-}
-fn drive(task: impl Future<Output = Result<(), hyper::Error>> + Send + 'static) -> UpstreamDriver {
-    UpstreamDriver(tokio::spawn(task).abort_handle())
 }
 
 fn tunnel(
@@ -756,19 +897,27 @@ fn tunnel(
             ));
             return;
         };
-        let (client_read, client_write) = tokio::io::split(TokioIo::new(client));
-        let (server_read, server_write) = upstream.into_split();
-        let result = tokio::try_join!(
-            relay(client_read, server_write, &capture, Side::Request),
-            relay(server_read, client_write, &capture, Side::Response),
-        );
-        capture.finish(if result.is_ok() {
-            FlowState::Complete
-        } else {
-            FlowState::Failed("CONNECT tunnel transfer failed")
-        });
+        relay_pair(TokioIo::new(client), upstream, &capture).await;
     });
     reply(StatusCode::OK, "")
+}
+
+async fn relay_pair(
+    client: impl AsyncRead + AsyncWrite + Unpin,
+    server: impl AsyncRead + AsyncWrite + Unpin,
+    capture: &Capture,
+) {
+    let (client_read, client_write) = tokio::io::split(client);
+    let (server_read, server_write) = tokio::io::split(server);
+    let result = tokio::try_join!(
+        relay(client_read, server_write, capture, Side::Request),
+        relay(server_read, client_write, capture, Side::Response),
+    );
+    capture.finish(if result.is_ok() {
+        FlowState::Complete
+    } else {
+        FlowState::Failed("Relayed connection transfer failed")
+    });
 }
 
 async fn relay(
@@ -839,6 +988,23 @@ mod tests {
         assert!(headers.is_empty());
     }
 
+    #[tokio::test(start_paused = true)]
+    async fn authenticated_activity_extends_deadline_until_last_request_ends() {
+        let (activity, deadlines) =
+            watch::channel(Activity::WaitingForAuth(TokioInstant::now() + AUTH_TIMEOUT));
+        let expiry = tokio::spawn(expire_client(deadlines));
+        time::advance(AUTH_TIMEOUT - Duration::from_secs(1)).await;
+        let upload = ActiveRequest::begin(&activity);
+        let download = ActiveRequest::begin(&activity);
+        drop(upload);
+        time::advance(2 * IDLE_TIMEOUT).await;
+        assert!(!expiry.is_finished());
+        drop(download);
+        let idle_since = TokioInstant::now();
+        expiry.await.unwrap();
+        assert_eq!(idle_since.elapsed(), IDLE_TIMEOUT);
+    }
+
     #[test]
     fn rejects_local_and_mapped_addresses() {
         let own = "127.0.0.1:8890".parse().unwrap();
@@ -846,15 +1012,48 @@ mod tests {
             "127.0.0.1:80",
             "10.1.2.3:80",
             "169.254.1.3:80",
+            "100.64.0.0:80",
+            "100.127.255.255:80",
+            "192.0.0.255:80",
+            "198.18.0.0:80",
+            "198.19.255.255:80",
+            "240.0.0.0:80",
+            "255.255.255.254:80",
+            "255.255.255.255:80",
             "[::ffff:127.0.0.1]:80",
             "[fe80::1]:80",
             "[fd00::1]:80",
+            "[fec0::1]:80",
+            "[feff::1]:80",
+            "[100::1]:80",
+            "[64:ff9b::100.64.0.1]:80",
+            "[64:ff9b:1:c000:0:700::]:80",
+            "[2002:c612:1::1]:80",
+            "[2001:0:a00:1:0:0:fefe:fefe]:80",
+            "[2001:0:101:101:0:0:f5ff:fffe]:80",
+            "[::192.0.0.1]:80",
         ] {
             let address = local.parse().unwrap();
             assert!(!allowed(address, own, false));
             assert!(allowed(address, own, true));
         }
         assert!(!allowed(own, own, true));
-        assert!(allowed("1.1.1.1:80".parse().unwrap(), own, false));
+        assert!(!allowed(
+            "[::ffff:127.0.0.1]:8890".parse().unwrap(),
+            own,
+            true
+        ));
+        for public in [
+            "1.1.1.1:80",
+            "100.128.0.0:80",
+            "198.20.0.0:80",
+            "[64:ff9b::1.1.1.1]:80",
+            "[64:ff9b:1:101:1:100::]:80",
+            "[2002:101:101::1]:80",
+            "[2001:0:101:101:0:0:f7f7:f7f7]:80",
+            "[::1.1.1.1]:80",
+        ] {
+            assert!(allowed(public.parse().unwrap(), own, false), "{public}");
+        }
     }
 }

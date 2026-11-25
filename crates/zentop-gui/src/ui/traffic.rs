@@ -10,11 +10,11 @@ use gpui_kit::component::{
 };
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
-    div, px, size, uniform_list, AnyElement, App, AppContext, Context, Div, Entity, Global,
-    InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    div, px, size, uniform_list, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity,
+    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
     StatefulInteractiveElement, Styled, Subscription, Task, Window,
 };
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 use zentop_core::process_view::format_bytes;
 use zentop_proxy::{
     Attribution, Body, Counters, Flow, FlowKind, FlowState, Headers, Metadata, Options, RowUpdates,
@@ -133,12 +133,56 @@ impl Tab {
     }
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct DetailKey {
+    id: u64,
+    revision: u64,
+    reveal: bool,
+}
+
+struct Detail {
+    key: DetailKey,
+    flow: Arc<Flow>,
+    previews: Option<[Preview; 2]>,
+}
+
+enum Preview {
+    Note(&'static str),
+    Decoded {
+        text: SharedString,
+        binary: bool,
+        limited: bool,
+    },
+    Error(String),
+}
+
+impl Preview {
+    fn build(body: &Body, headers: &Headers) -> Self {
+        if let Body::Skipped(reason) = body {
+            return Self::Note(reason);
+        }
+        if body.kept().is_empty() {
+            return Self::Note("Empty body");
+        }
+        match zentop_proxy::preview(body, headers) {
+            Ok(preview) => Self::Decoded {
+                text: preview.text.into(),
+                binary: preview.binary,
+                limited: preview.limited,
+            },
+            Err(error) => Self::Error(error.to_string()),
+        }
+    }
+}
+
 pub struct Traffic {
     capture: Entity<Capture>,
     generation: u64,
     revision: u64,
     rows: Vec<Metadata>,
     selected: Option<u64>,
+    detail: Option<Detail>,
+    preview_task: Option<Task<()>>,
     tab: Tab,
     reveal: bool,
     include_secrets: bool,
@@ -196,6 +240,8 @@ impl Traffic {
             revision: 0,
             rows: Vec::new(),
             selected: None,
+            detail: None,
+            preview_task: None,
             tab: Tab::Request,
             reveal: false,
             include_secrets: false,
@@ -252,6 +298,7 @@ impl Traffic {
                     self.select(None);
                 }
                 self.counters = counters;
+                self.refresh_detail(cx);
                 cx.notify();
             } else if counters != self.counters {
                 self.counters = counters;
@@ -262,9 +309,59 @@ impl Traffic {
 
     fn select(&mut self, id: Option<u64>) {
         self.selected = id;
+        self.detail = None;
+        self.preview_task = None;
         self.reveal = false;
         self.include_secrets = false;
         self.tab = Tab::Request;
+    }
+
+    fn refresh_detail(&mut self, cx: &mut Context<Self>) {
+        let Some(id) = self.selected else { return };
+        let reveal = self.reveal;
+        let revision = self.detail.as_ref().and_then(|detail| {
+            (detail.key.id == id && detail.key.reveal == reveal).then_some(detail.key.revision)
+        });
+        let Some((revision, flow)) = self
+            .capture
+            .read(cx)
+            .session
+            .as_ref()
+            .and_then(|session| session.flow_since(id, reveal, revision))
+        else {
+            return;
+        };
+        let key = DetailKey {
+            id,
+            revision,
+            reveal,
+        };
+        let flow = Arc::new(flow);
+        self.detail = Some(Detail {
+            key,
+            flow: flow.clone(),
+            previews: None,
+        });
+        self.preview_task = Some(cx.spawn(async move |this, cx| {
+            let previews = cx
+                .background_executor()
+                .spawn(async move {
+                    let response = flow.response.as_ref().map(|head| &head.headers);
+                    [
+                        Preview::build(&flow.request_body, &flow.request.headers),
+                        response.map_or(Preview::Note("No response headers"), |headers| {
+                            Preview::build(&flow.response_body, headers)
+                        }),
+                    ]
+                })
+                .await;
+            let _ = this.update(cx, |this, cx| {
+                if let Some(detail) = this.detail.as_mut().filter(|detail| detail.key == key) {
+                    detail.previews = Some(previews);
+                    cx.notify();
+                }
+            });
+        }));
     }
 
     fn configured_port(&self, cx: &App) -> Result<Option<u16>, &'static str> {
@@ -507,7 +604,7 @@ impl Traffic {
                     }))
                 .child(Button::new("traffic-kind-filter").outline().small()
                     .label(kind_name(kind)).dropdown_caret(true).dropdown_menu(move |mut menu, _, _| {
-                        for option in [None, Some(FlowKind::Http), Some(FlowKind::Tunnel)] {
+                        for option in [None, Some(FlowKind::Http), Some(FlowKind::Tunnel), Some(FlowKind::Upgrade)] {
                             let entity = kind_entity.clone();
                             menu = menu.item(PopupMenuItem::new(kind_name(option)).checked(kind == option)
                                 .on_click(move |_, _, cx| entity.update(cx, |this, cx| {
@@ -540,8 +637,8 @@ impl Traffic {
                     }))))
                 .child(div().flex_1())
                 .child(div().text_xs().text_color(cx.theme().muted_foreground).child(format!(
-                    "Flows {}  ·  Refused {}  ·  Dropped {}  ·  Unattributed {}  ·  Bodies evicted {}",
-                    self.rows.len(), self.counters.refused, self.counters.dropped,
+                    "Flows {}  ·  Refused {}  ·  Flows dropped {}  ·  Unattributed flows {}  ·  Bodies evicted {}",
+                    self.rows.len(), self.counters.refused, self.counters.flows_dropped,
                     self.counters.unattributed, self.counters.evicted_bodies,
                 ))))
     }
@@ -641,7 +738,26 @@ impl Traffic {
             })
     }
 
-    fn detail(&self, flow: Flow, cx: &mut Context<Self>) -> Div {
+    fn copy_curl(&self, cx: &mut App) {
+        let Some(detail) = &self.detail else { return };
+        let raw = if self.include_secrets && !detail.key.reveal {
+            self.capture
+                .read(cx)
+                .session
+                .as_ref()
+                .and_then(|session| session.flow(detail.key.id, true))
+        } else {
+            None
+        };
+        if let Some(command) =
+            zentop_proxy::copy_as_curl(raw.as_ref().unwrap_or(&detail.flow), self.include_secrets)
+        {
+            cx.write_to_clipboard(ClipboardItem::new_string(command));
+        }
+    }
+
+    fn detail(&self, detail: &Detail, cx: &mut Context<Self>) -> Div {
+        let flow = &detail.flow;
         let Metadata { kind, state, .. } = &flow.metadata;
         let reason = match state {
             FlowState::Refused(reason) | FlowState::Failed(reason) => Some(*reason),
@@ -651,37 +767,34 @@ impl Traffic {
             Attribution::Unknown(reason) => Some(reason),
             _ => None,
         };
-        let copy_source = if self.include_secrets && !self.reveal {
-            self.capture
-                .read(cx)
-                .session
-                .as_ref()
-                .and_then(|session| session.flow(flow.metadata.id, true))
-        } else {
-            None
-        };
-        let curl =
-            zentop_proxy::copy_as_curl(copy_source.as_ref().unwrap_or(&flow), self.include_secrets);
         let request_url = flow.request.url.clone();
+        let copy_url = request_url.clone();
         v_flex().flex_1().min_h(px(180.)).overflow_hidden().border_t_1().border_color(cx.theme().border)
             .child(v_flex().px_3().pt_2().pb_1().gap_1().bg(theme::palette(cx).card)
                 .child(h_flex().gap_2()
                     .child(div().font_weight(gpui_kit::FontWeight::SEMIBOLD).text_sm().child(flow.request.method.clone()))
                     .child(div().min_w_0().flex_1().truncate().text_sm().child(request_url.clone()))
-                    .child(copy_button("traffic-copy-url", "URL", request_url))
-                    .when_some(curl, |row, curl| row
-                        .child(copy_button("traffic-copy-curl", "as cURL", curl))
-                        .child(Checkbox::new("traffic-copy-secrets").checked(self.include_secrets).label("Include secrets")
+                    .child(Button::new("traffic-copy-url").outline().small().label("Copy URL")
+                        .on_click(move |_, _, cx| cx.write_to_clipboard(ClipboardItem::new_string(copy_url.clone()))))
+                    .child(Checkbox::new("traffic-reveal").checked(self.reveal).label("Reveal secrets")
+                        .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                            this.reveal = *checked;
+                            this.detail = None;
+                            this.preview_task = None;
+                            this.refresh_detail(cx);
+                            cx.notify();
+                        }))))
+                .when(matches!(kind, FlowKind::Http | FlowKind::DecryptedHttps), |header| {
+                    header.child(h_flex().gap_2()
+                        .child(Button::new("traffic-copy-curl").outline().small().label("Copy as cURL")
+                            .on_click(cx.listener(|this, _, _, cx| this.copy_curl(cx))))
+                        .child(Checkbox::new("traffic-copy-secrets").checked(self.include_secrets)
+                            .label("Include secrets in cURL")
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
                                 this.include_secrets = *checked;
                                 cx.notify();
                             }))))
-                    .child(Button::new("traffic-reveal").outline().small()
-                        .label(if self.reveal { "Hide secrets" } else { "Show secrets" })
-                        .on_click(cx.listener(|this, _, _, cx| {
-                            this.reveal = !this.reveal;
-                            cx.notify();
-                        }))))
+                })
                 .child(div().text_xs().text_color(cx.theme().muted_foreground)
                     .child("Bodies and custom headers can contain secrets. Review them before copying."))
                 .when_some(reason, |d, reason| d.child(div().text_sm().text_color(theme::palette(cx).danger).child(reason)))
@@ -699,11 +812,11 @@ impl Traffic {
             .child(v_flex().id(("traffic-detail", flow.metadata.id as usize)).flex_1().min_h_0()
                 .overflow_y_scroll().px_3().py_2().gap_2()
                 .child(match self.tab {
-                    Tab::Request => message(&flow.request.headers, &flow.request_body, flow.headers_truncated, cx).into_any_element(),
+                    Tab::Request => message(&flow.request.headers, &flow.request_body, detail.previews.as_ref().map(|previews| &previews[0]), flow.headers_truncated, cx).into_any_element(),
                     Tab::Response => flow.response.as_ref().map(|head| {
-                        message(&head.headers, &flow.response_body, flow.headers_truncated, cx).into_any_element()
+                        message(&head.headers, &flow.response_body, detail.previews.as_ref().map(|previews| &previews[1]), flow.headers_truncated, cx).into_any_element()
                     }).unwrap_or_else(|| div().text_sm().child("No response headers").into_any_element()),
-                    Tab::Timing => timing(&flow, cx).into_any_element(),
+                    Tab::Timing => timing(flow, cx).into_any_element(),
                 })
                 .when(*kind == FlowKind::Tunnel && self.tab != Tab::Timing, |d| {
                     d.child(div().text_xs().text_color(cx.theme().muted_foreground)
@@ -714,13 +827,6 @@ impl Traffic {
 
 impl Render for Traffic {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        let detail = self.selected.and_then(|id| {
-            self.capture
-                .read(cx)
-                .session
-                .as_ref()?
-                .flow(id, self.reveal)
-        });
         v_flex()
             .size_full()
             .bg(cx.theme().background)
@@ -729,7 +835,9 @@ impl Render for Traffic {
             .child(self.header(cx))
             .child(self.toolbar(cx))
             .child(self.table(cx))
-            .when_some(detail, |window, flow| window.child(self.detail(flow, cx)))
+            .when_some(self.detail.as_ref(), |window, detail| {
+                window.child(self.detail(detail, cx))
+            })
     }
 }
 
@@ -747,6 +855,7 @@ fn kind_name(kind: Option<FlowKind>) -> &'static str {
         None => "Any kind",
         Some(FlowKind::Http) => "HTTP",
         Some(FlowKind::Tunnel) => "Tunnel",
+        Some(FlowKind::Upgrade) => "Upgrade",
         Some(FlowKind::DecryptedHttps) => "HTTPS",
     }
 }
@@ -838,6 +947,7 @@ fn flow_row(
             entity.update(cx, |this, cx| {
                 if this.selected != Some(id) {
                     this.select(Some(id));
+                    this.refresh_detail(cx);
                 }
                 cx.notify();
             })
@@ -872,7 +982,13 @@ fn flow_row(
         .into_any_element()
 }
 
-fn message(headers: &Headers, body: &Body, truncated: bool, cx: &App) -> Div {
+fn message(
+    headers: &Headers,
+    body: &Body,
+    preview: Option<&Preview>,
+    truncated: bool,
+    cx: &App,
+) -> Div {
     let mono = cx.theme().mono_font_family.clone();
     let headers_view = v_flex()
         .border_1()
@@ -905,54 +1021,59 @@ fn message(headers: &Headers, body: &Body, truncated: bool, cx: &App) -> Div {
                     format!("{name}: {value}"),
                 ))
         }));
-    let preview = if let Body::Skipped(reason) = body {
-        div().text_color(cx.theme().muted_foreground).child(*reason)
-    } else if body.kept().is_empty() {
-        div()
+    let copy = || {
+        let body = body.clone();
+        Button::new("traffic-copy-body")
+            .ghost()
+            .small()
+            .label("Copy body")
+            .on_click(move |_, _, cx| {
+                if let Some((_, value)) = zentop_proxy::copy_body(&body) {
+                    cx.write_to_clipboard(ClipboardItem::new_string(value));
+                }
+            })
+    };
+    let preview = match preview {
+        None => div()
             .text_color(cx.theme().muted_foreground)
-            .child("Empty body")
-    } else {
-        match zentop_proxy::preview(body, headers) {
-            Ok(preview) => {
-                let label = if preview.binary {
-                    "Hex preview"
-                } else {
-                    "Decoded body"
-                };
-                v_flex()
-                    .gap_1()
-                    .child(
-                        h_flex()
-                            .gap_2()
-                            .child(label)
-                            .when_some(zentop_proxy::copy_body(body), |row, (label, body)| {
-                                row.child(copy_button("traffic-copy-body", label, body))
-                            })
-                            .when(preview.limited, |d| {
-                                d.child(
-                                    div()
-                                        .text_color(theme::palette(cx).warning)
-                                        .child("Preview limited"),
-                                )
-                            }),
-                    )
-                    .child(
-                        div()
-                            .p_2()
-                            .bg(cx.theme().muted)
-                            .rounded_md()
-                            .font_family(mono)
-                            .child(preview.text),
-                    )
-            }
-            Err(error) => h_flex()
-                .gap_2()
-                .text_color(theme::palette(cx).warning)
-                .child(error.to_string())
-                .when_some(zentop_proxy::copy_body(body), |row, (label, body)| {
-                    row.child(copy_button("traffic-copy-body", label, body))
-                }),
-        }
+            .child("Preparing preview…"),
+        Some(Preview::Note(note)) => div().text_color(cx.theme().muted_foreground).child(*note),
+        Some(Preview::Decoded {
+            text,
+            binary,
+            limited,
+        }) => v_flex()
+            .gap_1()
+            .child(
+                h_flex()
+                    .gap_2()
+                    .child(if *binary {
+                        "Hex preview"
+                    } else {
+                        "Decoded body"
+                    })
+                    .child(copy())
+                    .when(*limited, |row| {
+                        row.child(
+                            div()
+                                .text_color(theme::palette(cx).warning)
+                                .child("Preview limited"),
+                        )
+                    }),
+            )
+            .child(
+                div()
+                    .p_2()
+                    .bg(cx.theme().muted)
+                    .rounded_md()
+                    .font_family(mono)
+                    .child(text.clone()),
+            ),
+        Some(Preview::Error(error)) => h_flex()
+            .gap_2()
+            .text_color(theme::palette(cx).warning)
+            .child(error.clone())
+            .child(copy()),
     };
     v_flex()
         .gap_2()

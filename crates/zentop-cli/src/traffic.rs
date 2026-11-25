@@ -16,19 +16,11 @@ struct Entry {
     response_headers: Option<Headers>,
 }
 
-pub fn run(
-    port: Option<u16>,
-    json: bool,
-    headers: bool,
-    output: &mut impl Write,
-) -> io::Result<()> {
+pub fn run(options: Options, json: bool, headers: bool, output: &mut impl Write) -> io::Result<()> {
     let stopping = Arc::new(AtomicBool::new(false));
     signal_hook::flag::register(signal_hook::consts::SIGINT, stopping.clone())?;
     signal_hook::flag::register(signal_hook::consts::SIGTERM, stopping.clone())?;
-    let session = Session::start(Options {
-        port,
-        allow_local_destinations: false,
-    })?;
+    let session = Session::start(options)?;
     eprintln!(
         "Listening on {}\nSession token: {}\nexport http_proxy={}\nexport https_proxy=$http_proxy",
         session.address(),
@@ -52,6 +44,14 @@ pub fn run(
         }
         output.flush()?;
         if stopping.load(Ordering::Relaxed) {
+            let counters = session.counters();
+            eprintln!(
+                "Refused {} · Flows dropped {} · Unattributed flows {} · Bodies evicted {}",
+                counters.refused,
+                counters.flows_dropped,
+                counters.unattributed,
+                counters.evicted_bodies,
+            );
             return Ok(());
         }
         std::thread::sleep(Duration::from_millis(100));
@@ -74,8 +74,10 @@ fn print_entry(entry: &Entry, output: &mut impl Write) -> io::Result<()> {
         flow.timing.total.as_secs_f64() * 1_000.,
         flow.process.name(),
     )?;
-    if flow.kind == FlowKind::Tunnel {
-        write!(output, "  Not decrypted")?;
+    match flow.kind {
+        FlowKind::Tunnel => write!(output, "  Not decrypted")?,
+        FlowKind::Upgrade => write!(output, "  Upgraded connection")?,
+        _ => {}
     }
     if let FlowState::Refused(reason) | FlowState::Failed(reason) = flow.state {
         write!(output, "  {reason}")?;
@@ -92,4 +94,71 @@ fn print_entry(entry: &Entry, output: &mut impl Write) -> io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::Parser;
+    use std::time::SystemTime;
+    use zentop_proxy::{Attribution, Timing};
+
+    #[test]
+    fn traffic_accepts_allow_local_and_json() {
+        let args =
+            crate::Args::try_parse_from(["zentop-cli", "traffic", "--allow-local", "--json"])
+                .unwrap();
+        assert!(args.json);
+        assert!(matches!(
+            args.command,
+            Some(crate::Command::Traffic {
+                allow_local: true,
+                ..
+            })
+        ));
+        let defaults = crate::Args::try_parse_from(["zentop-cli", "traffic"]).unwrap();
+        assert!(matches!(
+            defaults.command,
+            Some(crate::Command::Traffic {
+                allow_local: false,
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn json_includes_kind_state_and_millisecond_timings() {
+        let entry = Entry {
+            flow: Metadata {
+                id: 0,
+                connection: 0,
+                process: Attribution::Unknown("test"),
+                kind: FlowKind::Upgrade,
+                method: "GET".into(),
+                host: "localhost:8000".into(),
+                path: "/socket".into(),
+                started: SystemTime::UNIX_EPOCH,
+                status: Some(101),
+                timing: Timing {
+                    connect: Some(Duration::from_micros(14_800)),
+                    tls: None,
+                    ttfb: Some(Duration::from_millis(15)),
+                    total: Duration::from_millis(40),
+                },
+                bytes: (5, 5),
+                state: FlowState::Complete,
+            },
+            request_headers: None,
+            response_headers: None,
+        };
+        let json = serde_json::to_value(entry).unwrap();
+        assert_eq!(json["kind"], "upgrade");
+        assert_eq!(json["state"]["kind"], "complete");
+        assert_eq!(
+            json["timing"],
+            serde_json::json!({
+                "connect_ms": 14.8, "tls_ms": null, "ttfb_ms": 15.0, "total_ms": 40.0
+            })
+        );
+    }
 }

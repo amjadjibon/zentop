@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, VecDeque};
+use std::sync::Arc;
 use std::time::{Duration, SystemTime};
 
 use http::HeaderMap;
@@ -6,7 +7,7 @@ use http::HeaderMap;
 use crate::presentation::{self, Metadata, Secrets};
 use crate::{
     Attribution, Body, Counters, Flow, FlowKind, FlowState, Headers, RequestHead, ResponseHead,
-    Timing,
+    Timing, PENDING_ATTRIBUTION,
 };
 
 const MEMORY_LIMIT: usize = 64 * 1024 * 1024;
@@ -31,6 +32,7 @@ struct Record {
     headers_truncated: bool,
     head_bytes: usize,
     reported: bool,
+    revision: u64,
 }
 
 #[derive(Default)]
@@ -72,6 +74,9 @@ impl Default for Store {
 impl Store {
     fn changed(&mut self, id: u64) {
         self.revision += 1;
+        if let Some(record) = self.records.get_mut(&id) {
+            record.revision = self.revision;
+        }
         if self.event_pending.contains(&id) {
             return;
         }
@@ -79,7 +84,6 @@ impl Store {
             if let Some(old) = self.events.pop_front() {
                 self.event_pending.remove(&old);
                 self.events_overflowed = true;
-                self.counters.dropped += 1;
             }
         }
         self.events.push_back(id);
@@ -102,10 +106,12 @@ impl Store {
         self.revision += 1;
         if paused {
             // A body that spans a pause must never stitch noncontiguous bytes together.
+            let mut changed = Vec::new();
             for record in self.records.values_mut() {
                 if record.metadata.state != FlowState::Active {
                     continue;
                 }
+                changed.push(record.metadata.id);
                 for (body, total) in record
                     .bodies
                     .iter_mut()
@@ -118,6 +124,9 @@ impl Store {
                         };
                     }
                 }
+            }
+            for id in changed {
+                self.changed(id);
             }
         }
     }
@@ -183,7 +192,7 @@ impl Store {
         self.next_id += 1;
         if self.records.len() == FLOW_LIMIT {
             self.remove(*self.records.first_key_value()?.0);
-            self.counters.dropped += 1;
+            self.counters.flows_dropped += 1;
         }
         let host = request.host.clone();
         let path = request.path.clone();
@@ -200,11 +209,14 @@ impl Store {
         while !self.make_room(fixed) {
             let oldest = *self.records.first_key_value()?.0;
             self.remove(oldest);
-            self.counters.dropped += 1;
+            self.counters.flows_dropped += 1;
         }
         let headers = self.capture_headers(raw_headers, fixed);
         request.headers = headers.display;
         self.counters.memory += fixed;
+        if process != PENDING_ATTRIBUTION && matches!(process, Attribution::Unknown(_)) {
+            self.counters.unattributed += 1;
+        }
         self.records.insert(
             id,
             Record {
@@ -237,6 +249,7 @@ impl Store {
                 },
                 headers_truncated: headers.truncated,
                 reported: false,
+                revision: 0,
             },
         );
         self.changed(id);
@@ -359,8 +372,18 @@ impl Store {
             let index = self.bodies.partition_point(|(flow_id, _)| *flow_id <= id);
             self.bodies.insert(index, (id, side));
         }
-        kept.reserve_exact(add);
-        kept.extend_from_slice(&bytes[..add]);
+        if add != 0 {
+            // Copy only when recording extends a buffer shared with a detail snapshot.
+            if let Some(buffer) = Arc::get_mut(kept) {
+                buffer.reserve_exact(add);
+                buffer.extend_from_slice(&bytes[..add]);
+            } else {
+                let mut updated = Vec::with_capacity(len + add);
+                updated.extend_from_slice(kept);
+                updated.extend_from_slice(&bytes[..add]);
+                *kept = Arc::new(updated);
+            }
+        }
         self.counters.memory += add;
         if add < bytes.len() {
             let total = match side {
@@ -388,7 +411,10 @@ impl Store {
     pub fn attribute(&mut self, connection: u64, owner: Attribution) {
         let mut changed = Vec::new();
         for record in self.records.values_mut() {
-            if record.metadata.connection == connection {
+            if record.metadata.connection == connection
+                && record.metadata.process == PENDING_ATTRIBUTION
+                && owner != PENDING_ATTRIBUTION
+            {
                 record.metadata.process = owner.clone();
                 if matches!(owner, Attribution::Unknown(_)) {
                     self.counters.unattributed += 1;
@@ -440,7 +466,7 @@ impl Store {
             .filter_map(|record| {
                 if record.reported
                     || record.metadata.state == FlowState::Active
-                    || record.metadata.process == Attribution::Unknown("Attribution pending")
+                    || record.metadata.process == PENDING_ATTRIBUTION
                 {
                     return None;
                 }
@@ -460,6 +486,25 @@ impl Store {
             .collect()
     }
 
+    pub fn flow_since(&self, id: u64, reveal: bool, revision: Option<u64>) -> Option<(u64, Flow)> {
+        let current = self.records.get(&id)?.revision;
+        if revision == Some(current) {
+            return None;
+        }
+        Some((current, self.flow(id, reveal)?))
+    }
+
+    pub fn upgraded(&mut self, id: Option<u64>) {
+        let Some(id) = id.filter(|id| self.records.contains_key(id)) else {
+            return;
+        };
+        self.records.get_mut(&id).unwrap().metadata.kind = FlowKind::Upgrade;
+        self.bodies.retain(|(owner, _)| *owner != id);
+        for side in [Side::Request, Side::Response] {
+            self.skip_body(id, side, "Upgraded connection; frames not captured");
+        }
+    }
+
     pub fn flow(&self, id: u64, reveal: bool) -> Option<Flow> {
         let record = self.records.get(&id)?;
         let mut request = record.request.clone();
@@ -477,20 +522,12 @@ impl Store {
                 }
             }
         }
-        let copy_body = |body: &Body| match body {
-            Body::Captured(bytes) => Body::Captured(bytes.clone()),
-            Body::Truncated { kept, total } => Body::Truncated {
-                kept: kept.clone(),
-                total: *total,
-            },
-            Body::Skipped(reason) => Body::Skipped(reason),
-        };
         Some(Flow {
             metadata: record.metadata.clone(),
             request,
             response,
-            request_body: copy_body(&record.bodies[0]),
-            response_body: copy_body(&record.bodies[1]),
+            request_body: record.bodies[0].clone(),
+            response_body: record.bodies[1].clone(),
             headers_truncated: record.headers_truncated,
         })
     }
@@ -517,6 +554,86 @@ mod tests {
                 &HeaderMap::new(),
             )
             .unwrap()
+    }
+
+    #[test]
+    fn selected_snapshots_share_bodies_and_require_a_new_revision() {
+        let mut store = Store::default();
+        let selected = start(&mut store);
+        let unrelated = start(&mut store);
+        store.body(Some(selected), Side::Response, &[1; 128]);
+        let (revision, original) = store.flow_since(selected, false, None).unwrap();
+        let other_view = store.flow(selected, true).unwrap();
+        assert_eq!(
+            original.response_body.kept().as_ptr(),
+            other_view.response_body.kept().as_ptr()
+        );
+
+        store.body(Some(unrelated), Side::Request, &[2; 32]);
+        assert!(store.flow_since(selected, false, Some(revision)).is_none());
+
+        store.body(Some(selected), Side::Response, &[3; 32]);
+        let (appended, updated) = store.flow_since(selected, false, Some(revision)).unwrap();
+        assert_eq!(original.response_body.kept(), &[1; 128]);
+        assert_eq!(&updated.response_body.kept()[128..], &[3; 32]);
+
+        store.pause(true);
+        let (paused, updated) = store.flow_since(selected, false, Some(appended)).unwrap();
+        assert!(matches!(
+            updated.response_body,
+            Body::Truncated { total: 160, .. }
+        ));
+        store.clear();
+        let (_, updated) = store.flow_since(selected, false, Some(paused)).unwrap();
+        assert!(matches!(
+            updated.response_body,
+            Body::Skipped("Cleared during capture")
+        ));
+    }
+
+    #[test]
+    fn counts_only_final_unknown_attributions_once_per_flow() {
+        let mut store = Store::default();
+        let pending_request = |store: &mut Store, connection| {
+            let request = store.flow(0, false).unwrap().request;
+            store
+                .start(
+                    connection,
+                    PENDING_ATTRIBUTION,
+                    FlowKind::Http,
+                    request,
+                    &HeaderMap::new(),
+                )
+                .unwrap()
+        };
+        let already_unknown = start(&mut store);
+        store.attribute(0, Attribution::Unknown("duplicate"));
+        assert_eq!(store.counters.unattributed, 1);
+        assert_eq!(
+            store.flow(already_unknown, false).unwrap().metadata.process,
+            Attribution::Unknown("test")
+        );
+        let pending_unknown = pending_request(&mut store, 1);
+        let pending_known = pending_request(&mut store, 2);
+        assert_eq!(store.counters.unattributed, 1);
+        store.finish(Some(pending_unknown), FlowState::Complete, Duration::ZERO);
+        assert!(store.finished(false).is_empty());
+
+        store.attribute(1, Attribution::Unknown("final"));
+        store.attribute(1, Attribution::Unknown("duplicate"));
+        let known = Attribution::Known {
+            name: "test".into(),
+            pid: 9,
+            start_time: 1,
+            unique_id: 2,
+        };
+        store.attribute(2, known.clone());
+        assert_eq!(store.counters.unattributed, 2);
+        assert_eq!(store.finished(false).len(), 1);
+        assert_eq!(
+            store.flow(pending_known, false).unwrap().metadata.process,
+            known
+        );
     }
 
     #[test]
@@ -564,12 +681,19 @@ mod tests {
         assert!(flow.headers_truncated);
         assert!(flow.response.unwrap().headers.is_empty());
 
-        for _ in 0..FLOW_LIMIT {
+        let mut revision = 0;
+        store.updates(&mut revision);
+        for _ in 0..(FLOW_LIMIT - 1) {
             start(&mut store);
         }
+        assert_eq!(store.counters.flows_dropped, 0);
+        assert!(
+            matches!(store.updates(&mut revision), Some(crate::RowUpdates::Snapshot(rows)) if rows.len() == FLOW_LIMIT)
+        );
+        start(&mut store);
         assert!(store.flow(first, false).is_none());
         assert_eq!(store.records.len(), FLOW_LIMIT);
-        assert!(store.counters.dropped > 0);
-        assert_eq!(store.drain_events().len(), EVENT_LIMIT);
+        assert_eq!(store.counters.flows_dropped, 1);
+        assert_eq!(store.drain_events().len(), 2);
     }
 }
