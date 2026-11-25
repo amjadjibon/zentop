@@ -29,7 +29,8 @@ listens and no certificate exists.
 - **System-wide capture** (changing the Mac's proxy settings). It needs
   privileged, crash-proof restore and a way to authorize browsers; see
   [Later: system-wide capture](#later-system-wide-capture).
-- Editing traffic: breakpoints, rewrite rules, Map Local / Map Remote.
+- Editing traffic before phase 3B (see [Phase 3B: live editing](#phase-3b-live-editing)).
+  The CLI never edits traffic.
 - A Terminal launcher and decryption from the CLI.
 - HTTP/3 and QUIC, packet capture, non-HTTP protocols.
 - iOS devices and simulators, Linux and Windows. The proxy is portable code,
@@ -45,9 +46,9 @@ listens and no certificate exists.
    trust and removal, exact-host decrypt list, decoded text previews.
 3. **Phase 3A:** capture navigation, request replay, HAR export and WebSocket messages.
 4. **Phase 3C:** a dense, professional HTTP-debugger window (see below).
-5. **Phase 3B:** breakpoints, Map Local and rewrite rules.
+5. **Phase 3B:** breakpoints, Map Local, Map Remote and rewrite rules (GUI only).
 6. **Later, each designed separately:** system-wide capture, a Terminal
-   launcher, decryption from the CLI and live traffic editing tools.
+   launcher, and decryption or traffic editing from the CLI.
 
 Each phase is useful without the next. Phase 1 alone answers "which program is
 talking to which host, and how much?"
@@ -525,7 +526,7 @@ toggled by **Filter** (⌘F) in the bottom bar.
   - **Pinned:** apps and domains you pin, from the context menu or a pin
     button. Saved in the GUI `settings.json` with no traffic data, just as the
     decrypt list is.
-  - **Saved:** reserved for phase 3B rules.
+  - **Saved:** phase 3B rules, with enable toggles and touched-flow counts.
 - **All.**
   - **Apps:** each app expands to the domains it contacted, with counts.
   - **Domains:** each registrable domain expands to its hosts.
@@ -619,6 +620,234 @@ toggled by **Filter** (⌘F) in the bottom bar.
   stack vertically. Column visibility and pane sizes last for the window.
 - **Selection.** Single selection only; "x/y rows selected" counts the
   selected flow when it is visible.
+
+## Phase 3B: live editing
+
+Phase 3B adds four tools that change traffic as it passes through Zentop:
+breakpoints, Map Local, Map Remote and rewrite rules. They share one rules
+model and run only in the GUI. The CLI never runs rules.
+
+### Rules model
+
+A rule has a stable numeric ID, a name, an enabled flag, a match and an action.
+
+- **Method:** one method token such as `POST`, or any method.
+- **URL pattern:** `*` matches any run of characters, including `/`. Nothing
+  else is special. Patterns match `scheme://host[:port]/path?query`.
+  - The scheme and host are compared case-insensitively. The path and query
+    are compared exactly.
+  - The default port (80 for `http`, 443 for `https`) is left out, as browsers
+    show it.
+  - A pattern without `://` matches any scheme. A pattern without `/` after
+    the host matches any path. A pattern without `?` ignores the query.
+- **App (optional):** the attributed process name, compared without regard to
+  case. Unknown processes never match a rule that names an app.
+
+**Scope.**
+- Rules apply only to traffic Zentop sees in plaintext: plain HTTP requests
+  and requests inside decrypted HTTPS connections.
+- They never apply to CONNECT tunnels, HTTP/1.1 upgrade handshakes
+  (WebSockets), Repeat or Compose.
+- Rules are evaluated after the decryption decision. They never add hosts to
+  the decrypt list or bypass the skip list.
+- Pausing capture keeps rules other than breakpoints in effect. Pausing only
+  suspends recording.
+
+**Order.** Enabled rules are considered in list order.
+1. **Destination.** The first matching Map Local or Map Remote rule decides
+   where the request goes. Later mapping rules are ignored.
+2. **Rewrite.** Every matching rewrite rule applies in list order: request
+   actions before the request is sent, response actions when the response
+   head arrives.
+3. **Breakpoint.** A matching breakpoint holds the request after its rewrites,
+   and the response after its rewrites.
+
+Map Local sends nothing upstream, so request rewrites and request breakpoints
+are skipped. The local response still passes through response rewrites and
+response breakpoints.
+
+**Marks.** The store records each rule that touched a flow, with its kind and a
+short note, such as "Held 4.2 s, edited" or "Body skipped: not text".
+- Rows carry a compact list of the rule IDs and kinds. The URL column shows a
+  small badge per kind (breakpoint, Map Local, Map Remote, rewrite).
+- The request Summary gains a **Rules** line listing each rule and its note.
+- The recorded request and response are what Zentop actually sent: the
+  request after mapping, rewrites and breakpoint edits, and the response the
+  client received.
+
+### Breakpoints
+
+A breakpoint rule holds requests, responses or both. **⌘B** toggles a master
+switch in the toolbar. While it is off, breakpoint rules match nothing.
+
+- **Holding.** A held message appears in the **Breakpoints** window, which
+  comes forward when something is held. Held messages are listed newest first,
+  each with a countdown to its timeout.
+- **Editing.** The editor extends Edit and resend.
+  - Requests: method, URL, headers and body.
+  - Responses: status, headers and body.
+  - Secret values are masked by the shared redaction policy. Untouched masked
+    values keep their original values, as in Edit and resend.
+- **Execute** sends the edited message.
+  - An edited URL goes through destination policy again. An `https://` URL is
+    fetched with platform-verified TLS.
+- **Abort** answers the client with `502` and the body "Zentop breakpoint
+  aborted this request" or "…response".
+  - An aborted response is replaced, never forwarded. Its head has not reached
+    the client while it is held, so a `502` is still possible.
+- **Timeout.** Holds time out after 2 minutes. The message then continues
+  unmodified, and the flow records the timeout.
+- **Cap.** At most 32 messages are held at once. Beyond that, matching messages
+  pass through unmodified, and a counter records each one.
+- **Bodies.**
+  - A body of up to 1 MB is read before the hold, charged to the shared 64 MB
+    budget while held, and is editable.
+  - A body that is larger, or doesn't fit the budget, isn't editable. Execute
+    sends any head edits with the original body streamed after them.
+  - A `Content-Length` over 1 MB is never read before the hold.
+- **Session controls.**
+  - **Pause** and the master switch release every held message unmodified,
+    and suspend new holds.
+  - **Stop** closes held connections with the rest of the session.
+  - **Clear** leaves holds alone.
+- **Concurrency.** A hold waits in its own connection's task, or its own
+  HTTP/2 stream. Other connections and streams keep flowing.
+
+### Map Local
+
+A Map Local rule answers from a file without contacting the origin.
+
+- **Settings.** An absolute file path, a status (default 200), an optional
+  content type, and up to 32 extra headers.
+  - The content type defaults to a guess from the extension, or
+    `application/octet-stream`.
+- **Reading.** The file is read at request time on a blocking worker, never
+  the runtime thread.
+- **Limits.** Only regular files of at most 10 MB are served.
+- **Failures.** A missing file, a directory or other non-regular file, an
+  oversized file or a read error answers `502` with the reason. The flow
+  records the reason as its failure.
+- **Request body.** The request body is drained and recorded within the normal
+  capture limits.
+- **Scope.** Directory mapping is out of scope for this phase.
+
+### Map Remote
+
+A Map Remote rule changes the destination before Zentop dials. It can change
+the scheme, host, port and path, and can keep or drop the query.
+
+- **Port.** A blank port keeps the original port when the scheme and host are
+  unchanged. Otherwise it uses the scheme's default port.
+- **Destination policy.** The new destination goes through the same policy as
+  any request. A local or private address needs **Allow local destinations**.
+- **TLS.** An `https://` destination is fetched with platform-verified TLS
+  (`rustls-platform-verifier`), with hostname checks.
+  - Mapping plain HTTP to HTTPS is allowed.
+  - Mapping decrypted HTTPS to plain HTTP is allowed.
+  - Verification is never relaxed. Tests inject a verifier that trusts a test
+    CA, as phase 2 does.
+- **Host header.** Zentop sets `Host` (or `:authority`) to the new destination.
+
+### Rewrite
+
+A rewrite rule holds up to 32 actions, each applied to the request or the
+response:
+
+- **Headers:** add, replace (set, removing other values), or remove.
+- **Status:** set the response status code (100–599).
+- **Body:** replace text with a literal or regex find and replace. Regex
+  replacements can use `$1` capture groups.
+  - Bodies are rewritten only when they are at most 1 MB and valid UTF-8 text.
+  - `gzip`, `deflate` and `br` bodies are decoded to at most 1 MB and then
+    sent uncompressed, without `Content-Encoding`.
+  - A rewritten body over 4 MB is discarded.
+  - A body that can't be rewritten is passed through unchanged, and the flow
+    notes why.
+- **Query parameters** (request only): add or replace a parameter, or remove
+  one.
+
+**Framing.** After a body change, Zentop removes `Content-Length` and
+`Transfer-Encoding`. Hyper then frames the new body with an exact length, on
+both HTTP/1.1 and HTTP/2.
+
+### Persistence
+
+- Rules are saved in GUI `settings.json` under `behavior.trafficRules`.
+  Captured traffic is never saved there.
+- At most 200 rules are kept. Each one is validated when loaded and when
+  saved, and invalid rules are dropped.
+- Limits per field:
+  - name: 100 characters;
+  - URL pattern: 2 KB;
+  - app name: 255 characters;
+  - header values: 8 KB;
+  - regexes: 1 KB, compiled with a 256 KB program limit and a 1 MB DFA limit.
+- Map Local stores only the file path. Rule IDs are unique, and the GUI
+  assigns the next free ID.
+- The breakpoint master switch lasts for the app session and starts on.
+- Importing and exporting rule files is left for later.
+
+### Interface
+
+- **Toolbar.**
+  - **Rules** opens the Rules window.
+  - The breakpoint switch (⌘B) shows its state.
+  - **Breakpoints** (⌘⇧B) opens the queue and shows a count while anything is
+    held.
+- **Rules window.**
+  - A list of every rule with its kind, enable checkbox, move up and down,
+    and delete.
+  - An editor for the selected rule: name, method, URL pattern, app and the
+    action's fields.
+  - **Save** validates the rule through the proxy crate, then persists it and
+    applies it to the running session.
+- **Row context menu.**
+  - **Breakpoint this URL** creates and saves an enabled request-and-response
+    breakpoint for the row's URL without its query.
+  - **Map Local…**, **Map Remote…** and **Rewrite…** open the Rules window
+    with an unsaved draft prefilled from the flow.
+- **Favorites → Saved.**
+  - Lists rules with enable toggles and the number of retained flows each one
+    touched.
+  - Clicking a rule filters the table to those flows.
+- **Breakpoints window.**
+  - The held list and the editor, with Execute and Abort.
+  - It comes forward whenever a new message is held, even if the Traffic
+    window is closed.
+
+### Security
+
+- Rules are local and written by you. Nothing is fetched or shared.
+- Regexes have size limits and run only on bounded bodies.
+- Bodies are never logged.
+- Map Local reads only regular files you named, at request time, under a size
+  cap.
+- Map Remote and edited URLs go through destination policy and verified TLS.
+- Rules cannot widen decryption.
+- The CLI does not load or run rules.
+
+### Testing
+
+- **Unit:**
+  - wildcard matching;
+  - rule validation and the settings cap;
+  - each rewrite action, including `Content-Length` recomputation and
+    compressed bodies;
+  - Map Local file checks: missing, too large, not a regular file;
+  - Map Remote destination building;
+  - the breakpoint queue: hold, edit and execute, abort, timeout, cap,
+    release;
+  - store marks.
+- **Integration** (`tests/session.rs`), driving real HTTP through the proxy:
+  - a request breakpoint edited and executed;
+  - a response breakpoint aborted;
+  - a timeout;
+  - other connections flowing while one is held;
+  - Map Local;
+  - Map Remote to a second origin, refused without Allow local destinations,
+    and to HTTPS verified with the injected test verifier;
+  - rewrites;
+  - a CONNECT tunnel that matches a rule but stays untouched.
 
 ## Later: system-wide capture
 
