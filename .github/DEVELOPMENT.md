@@ -7,6 +7,7 @@ Use Rust 1.100 or newer. Zentop is a Cargo workspace:
   observe `src/ui/monitor.rs` within this crate.
 - `crates/zentop-tui`: Ratatui terminal monitor; Clap arguments and a background sampler.
 - `crates/zentop-cli`: Clap system/process reports with text and JSON output.
+- `crates/zentop-proxy`: loopback HTTP proxy, blind CONNECT tunnels, process attribution and in-memory capture.
 
 The GUI is the default member, preserving `cargo run` at the repository root.
 Both terminal frontends use `zentop-core` without pulling in desktop dependencies. Core tests can run independently

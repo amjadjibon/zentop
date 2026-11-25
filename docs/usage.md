@@ -145,10 +145,21 @@ Open **View → DiskTree…** in the GUI, press **d** in the terminal monitor, o
 `cargo run -p zentop-tui -- --disk /path/to/folder`. The [DiskTree guide](disktree.md)
 covers navigation, modes, marked review and partial-scan limits.
 
+## Traffic inspector
+
+On macOS, open **View → Traffic…** or choose **Traffic** in the menu-bar overview.
+Start capture, then use the routing lines for the programs you want to inspect.
+[Traffic inspector guide](traffic-inspector.md).
+
 ## Installing and support
 
 See the [installation guide](install.md). Include OS, architecture, app version, package type and reproduction steps in [bug reports](https://github.com/amjadjibon/zentop/issues). Redact private command lines, environment variables and identifiers before sharing diagnostics or screenshots.
 
 ## Privacy
 
-Zentop sends nothing. There are no analytics or launch counts, and no network requests; everything it reads stays on your machine.
+Local monitoring works offline. Zentop sends no analytics or launch counts. SSH
+Hosts connects to the machines you configure to retrieve readings.
+
+When you start Traffic capture, Zentop resolves host names and forwards requests
+for the programs you route through it. Captured data stays in memory and leaves
+Zentop through the copy controls or CLI output. [Traffic inspector privacy](traffic-inspector.md#privacy).

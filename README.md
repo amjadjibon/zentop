@@ -18,6 +18,7 @@
 - **Every process, at a glance.** Sort, search and filter by CPU, GPU, RAM, run time or status. Pin the ones you watch. Switch to **Tree** to group processes into families with combined CPU and RAM.
 - **Resource alerts.** Opt into sustained CPU, memory, temperature and low-disk-space rules, with cooldowns, recent history and optional desktop notifications.
 - **Saved monitoring views.** Save search, filters, sort, columns, List/Tree and pinned commands; load the same presets in the GUI or TUI.
+- **Traffic inspector (macOS).** Inspect manually routed HTTP requests and HTTPS tunnels by process. [Traffic inspector guide](docs/traffic-inspector.md).
 - **SSH Hosts.** Compare Local with configured machines and inspect recent read-only process readings over OpenSSH. [SSH Hosts setup](docs/ssh-hosts.md).
 - **Process connections.** Inspect TCP peers, states and listening addresses, plus bound UDP sockets, with protocol filters and address copying. [Connection inspection](docs/connections.md).
 - **Find what owns a port.** Search `:3000` or `port:443`. Sockets are only scanned while you ask.
@@ -89,6 +90,8 @@ Counters such as temperature, power and clock appear only where the driver expos
 
 Local monitoring stays on your machine. SSH Hosts transfers resource readings and a limited process summary directly from the hosts you configure. "Check for updates" opens the releases page in your browser.
 
+When you start Traffic capture, Zentop resolves host names and forwards requests for the programs you route through it. Captured traffic stays in memory and leaves Zentop through the copy controls or CLI output. [Traffic inspector privacy](docs/traffic-inspector.md#privacy).
+
 ## Development
 
 Zentop is a Cargo workspace. The desktop app uses [GPUI Kit](https://gpui-kit.com) (Zed's GPU-accelerated UI framework plus gpui-component).
@@ -99,6 +102,7 @@ Zentop is a Cargo workspace. The desktop app uses [GPUI Kit](https://gpui-kit.co
 | `crates/zentop-gui` | Existing native app, windows, icons, themes and preferences. |
 | `crates/zentop-tui` | GUI-style resource cards, List/Tree views, search, filters, pins and inspectors. |
 | `crates/zentop-cli` | Clap commands for system and process reports, including JSON. |
+| `crates/zentop-proxy` | Loopback HTTP proxy, CONNECT tunnels and in-memory capture. |
 
 The GUI is the default workspace member, so `cargo run` still opens Zentop. CLI and TUI share the monitoring core and use Clap for argument parsing. Both interfaces use the 24 palettes in `assets/themes.json`.
 
