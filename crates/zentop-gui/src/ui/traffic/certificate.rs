@@ -221,11 +221,10 @@ impl Traffic {
             )
             .child(div().text_xs().child(label))
             .when(!hosts.is_empty(), |row| {
-                row.child(
-                    div()
-                        .text_xs()
-                        .child(format!("{} decrypt hosts", hosts.len())),
-                )
+                row.child(div().text_xs().child(match hosts.len() {
+                    1 => "1 decrypt host".to_string(),
+                    count => format!("{count} decrypt hosts"),
+                }))
             })
             .when(has_error, |row| {
                 row.child(

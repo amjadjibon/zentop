@@ -252,7 +252,30 @@ impl Decryption {
         true
     }
 
+    /// A still-valid cached leaf for `host`, if decryption is currently allowed for it.
+    fn cached_leaf(&self, host: &str) -> Option<Arc<ServerConfig>> {
+        let state = self.state.lock().unwrap();
+        if state.error.is_some()
+            || state.authority.is_none()
+            || !state.hosts.contains(host)
+            || skip_reason(host).is_some()
+        {
+            return None;
+        }
+        let now = OffsetDateTime::now_utc();
+        state
+            .leaves
+            .iter()
+            .find(|entry| entry.host == host && entry.expires > now)
+            .map(|entry| entry.config.clone())
+    }
+
     pub(crate) fn leaf(&self, host: &str) -> io::Result<Option<Arc<ServerConfig>>> {
+        // A cached leaf needs no Keychain signature, so it must not wait behind
+        // another host's signing, which can block on an OS prompt.
+        if let Some(config) = self.cached_leaf(host) {
+            return Ok(Some(config));
+        }
         // Keychain access can block on an OS prompt. Keep the engine and GUI
         // free to read or change policy while this worker waits.
         let _signing = self.signing.lock().unwrap();

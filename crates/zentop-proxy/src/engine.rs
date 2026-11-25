@@ -455,7 +455,11 @@ impl Engine {
                 url: if kind == FlowKind::DecryptedHttps && request.method() != Method::CONNECT {
                     format!(
                         "https://{}{}",
-                        target.authority,
+                        // URLs show the default HTTPS port the way browsers do: not at all.
+                        target
+                            .authority
+                            .strip_suffix(":443")
+                            .unwrap_or(&target.authority),
                         request.uri().path_and_query().map_or("/", |v| v.as_str())
                     )
                 } else {
