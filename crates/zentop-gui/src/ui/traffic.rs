@@ -1,5 +1,9 @@
 //! App-owned capture with a separate virtualized traffic window.
 mod certificate;
+mod navigation;
+mod tools;
+
+use navigation::{Column, Scope, Sidebar, Sort};
 
 use super::{copy_button, monitor, process_view::Identity, theme, Windows};
 use gpui_kit::assets::IconName;
@@ -13,8 +17,8 @@ use gpui_kit::component::{
 use gpui_kit::prelude::FluentBuilder;
 use gpui_kit::{
     div, px, size, uniform_list, AnyElement, App, AppContext, ClipboardItem, Context, Div, Entity,
-    Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
-    StatefulInteractiveElement, Styled, Subscription, Task, Window,
+    FocusHandle, Global, InteractiveElement, IntoElement, ParentElement, Render, SharedString,
+    StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, Window,
 };
 use std::{sync::Arc, time::Duration};
 use zentop_core::process_view::format_bytes;
@@ -129,6 +133,7 @@ enum Tab {
     Request,
     Response,
     Timing,
+    Messages,
 }
 
 impl Tab {
@@ -137,6 +142,7 @@ impl Tab {
             Self::Request => "Request",
             Self::Response => "Response",
             Self::Timing => "Timing",
+            Self::Messages => "Messages",
         }
     }
 }
@@ -199,7 +205,17 @@ pub struct Traffic {
     generation: u64,
     revision: u64,
     rows: Vec<Metadata>,
+    sidebar: Sidebar,
+    show_sidebar: bool,
+    scope: Option<Scope>,
+    sort: Sort,
+    focus: FocusHandle,
+    list_scroll: UniformListScrollHandle,
+    include_bodies: bool,
+    message_row: Option<usize>,
+    operation: Option<Result<String, String>>,
     selected: Option<u64>,
+    detail_open: bool,
     detail: Option<Detail>,
     preview_task: Option<Task<()>>,
     tab: Tab,
@@ -264,7 +280,17 @@ impl Traffic {
             generation: 0,
             revision: 0,
             rows: Vec::new(),
+            sidebar: Sidebar::default(),
+            show_sidebar: true,
+            scope: None,
+            sort: Sort::default(),
+            focus: cx.focus_handle(),
+            list_scroll: UniformListScrollHandle::new(),
+            include_bodies: false,
+            message_row: None,
+            operation: None,
             selected: None,
+            detail_open: false,
             detail: None,
             preview_task: None,
             tab: Tab::Request,
@@ -287,6 +313,7 @@ impl Traffic {
             _subscriptions: subscriptions,
             _tick: tick,
         };
+        this.focus.focus(window, cx);
         this.refresh(cx);
         this
     }
@@ -297,6 +324,9 @@ impl Traffic {
             self.generation = capture.generation;
             self.revision = 0;
             self.rows.clear();
+            self.sidebar = Sidebar::default();
+            self.scope = None;
+            self.operation = None;
             self.icon_task = None;
             self.icons.clear();
             self.select(None);
@@ -309,10 +339,19 @@ impl Traffic {
             let rows = session.rows_since(&mut self.revision);
             if let Some(rows) = rows {
                 match rows {
-                    RowUpdates::Snapshot(rows) => self.rows = rows,
+                    RowUpdates::Snapshot(rows) => {
+                        self.sidebar = Sidebar::default();
+                        for row in &rows {
+                            self.sidebar.update(None, Some(row));
+                        }
+                        self.rows = rows;
+                    }
                     RowUpdates::Changed(updates) => {
                         for (id, row) in updates {
-                            match (self.rows.binary_search_by(|row| id.cmp(&row.id)), row) {
+                            let position = self.rows.binary_search_by(|row| id.cmp(&row.id));
+                            self.sidebar
+                                .update(position.ok().map(|index| &self.rows[index]), row.as_ref());
+                            match (position, row) {
                                 (Ok(index), Some(row)) => self.rows[index] = row,
                                 (Ok(index), None) => {
                                     self.rows.remove(index);
@@ -342,11 +381,13 @@ impl Traffic {
 
     fn select(&mut self, id: Option<u64>) {
         self.selected = id;
+        self.detail_open = id.is_some();
         self.detail = None;
         self.preview_task = None;
         self.reveal = false;
         self.include_secrets = false;
         self.tab = Tab::Request;
+        self.message_row = None;
     }
 
     fn resolve_icons(&mut self, cx: &mut Context<Self>) {
@@ -354,18 +395,19 @@ impl Traffic {
             return;
         }
         if self.icons.len() > 2_000 {
-            let retained: std::collections::HashSet<_> = self
-                .rows
-                .iter()
-                .filter_map(|row| identity(&row.process))
-                .collect();
-            self.icons.retain(|id, _| retained.contains(id));
+            self.icons.retain(|id, _| {
+                self.sidebar
+                    .apps
+                    .keys()
+                    .any(|app| app.identity == Some(*id))
+            });
         }
         let mut ids = std::collections::HashSet::new();
         let batch: Vec<_> = self
-            .rows
-            .iter()
-            .filter_map(|row| identity(&row.process))
+            .sidebar
+            .apps
+            .keys()
+            .filter_map(|app| app.identity)
             .filter(|id| !self.icons.contains_key(id) && ids.insert(*id))
             .take(crate::native_icons::MAX_BATCH)
             .map(|(pid, start_time)| crate::native_icons::IconRequest { pid, start_time })
@@ -394,7 +436,9 @@ impl Traffic {
     }
 
     fn refresh_detail(&mut self, cx: &mut Context<Self>) {
-        let Some(id) = self.selected else { return };
+        let Some(id) = self.selected.filter(|_| self.detail_open) else {
+            return;
+        };
         let reveal = self.reveal;
         let revision = self.detail.as_ref().and_then(|detail| {
             (detail.key.id == id && detail.key.reveal == reveal).then_some(detail.key.revision)
@@ -414,6 +458,18 @@ impl Traffic {
             reveal,
         };
         let flow = Arc::new(flow);
+        if flow.metadata.kind == FlowKind::Upgrade {
+            let previews = Some([
+                Preview::build(&flow.request_body, &flow.request.headers),
+                Preview::build(&flow.response_body, &Vec::new()),
+            ]);
+            self.detail = Some(Detail {
+                key,
+                flow,
+                previews,
+            });
+            return;
+        }
         self.detail = Some(Detail {
             key,
             flow: flow.clone(),
@@ -715,6 +771,33 @@ impl Traffic {
                         cx.notify();
                     }))))
             .child(h_flex().gap_2()
+                .child(Button::new("traffic-har-selected").outline().small().label("Export selected HAR")
+                    .disabled(self.selected.is_none())
+                    .on_click(cx.listener(|this, _, _, cx| this.export_har(true, cx))))
+                .child(Button::new("traffic-har-filtered").outline().small().label("Export filtered HAR")
+                    .disabled(self.rows.is_empty())
+                    .on_click(cx.listener(|this, _, _, cx| this.export_har(false, cx))))
+                .child(Checkbox::new("traffic-har-bodies").checked(self.include_bodies).label("Include bodies")
+                    .on_click(cx.listener(|this, checked: &bool, _, cx| {
+                        this.include_bodies = *checked;
+                        cx.notify();
+                    })))
+                .child(div().text_xs().text_color(cx.theme().muted_foreground)
+                    .child("HAR files contain captured traffic.")))
+            .when_some(self.operation.as_ref(), |bar, result| {
+                bar.child(div().text_xs().truncate().text_color(if result.is_ok() {
+                    cx.theme().muted_foreground
+                } else {
+                    theme::palette(cx).danger
+                }).child(match result { Ok(message) | Err(message) => message.clone() }))
+            })
+            .child(h_flex().gap_2()
+                .child(Button::new("traffic-sidebar-toggle").ghost().small()
+                    .label(if self.show_sidebar { "Hide sidebar" } else { "Show sidebar" })
+                    .on_click(cx.listener(|this, _, _, cx| {
+                        this.show_sidebar = !this.show_sidebar;
+                        cx.notify();
+                    })))
                 .child(Button::new("traffic-pause").outline().small().disabled(!running)
                     .label(if paused { "Resume" } else { "Pause" })
                     .on_click(cx.listener(move |this, _, _, cx| { this.command(|session| session.pause(!paused), cx); })))
@@ -738,12 +821,12 @@ impl Traffic {
                 ))))
     }
 
-    fn table(&self, cx: &Context<Self>) -> Div {
+    fn matching(&self, cx: &App) -> Vec<usize> {
         let [search, process, host, method] = self
             .filters
             .each_ref()
             .map(|input| input.read(cx).value().trim().to_ascii_lowercase());
-        let matches: Vec<_> = self
+        let mut matches: Vec<_> = self
             .rows
             .iter()
             .enumerate()
@@ -753,6 +836,7 @@ impl Traffic {
                 let verb = row.method.to_ascii_lowercase();
                 self.process_scope
                     .is_none_or(|id| identity(&row.process) == Some(id))
+                    && self.scope.as_ref().is_none_or(|scope| scope.matches(row))
                     && process_name.contains(&process)
                     && hostname.contains(&host)
                     && verb.contains(&method)
@@ -771,9 +855,17 @@ impl Traffic {
             })
             .map(|(index, _)| index)
             .collect();
+        matches.sort_unstable_by(|&a, &b| self.sort.order(&self.rows[a], &self.rows[b]));
+        matches
+    }
+
+    fn table(&self, cx: &Context<Self>) -> impl IntoElement {
+        let matches = self.matching(cx);
         let entity = cx.entity();
         let empty = matches.is_empty();
         v_flex()
+            .id("traffic-table")
+            .track_focus(&self.focus)
             .flex_1()
             .min_h(px(105.))
             .overflow_hidden()
@@ -781,14 +873,26 @@ impl Traffic {
                 columns(cx)
                     .bg(cx.theme().table_head)
                     .text_color(cx.theme().table_head_foreground)
-                    .child(cell("Time", 84.))
-                    .child(cell("Process", 150.))
-                    .child(cell("Method", 77.))
-                    .child(cell("Host", 176.))
-                    .child(path_cell("Path"))
-                    .child(cell("Status", 60.))
-                    .child(cell("Size", 80.))
-                    .child(cell("Duration", 90.)),
+                    .children(Column::ALL.map(|column| {
+                        let mut title = column.title().to_owned();
+                        if self.sort.column == column {
+                            title.push_str(if self.sort.descending { " ↓" } else { " ↑" });
+                        }
+                        let heading = if column == Column::Path {
+                            path_cell(title)
+                        } else {
+                            cell(title, column.width())
+                        };
+                        heading
+                            .id(column.title())
+                            .cursor_pointer()
+                            .hover(|el| el.bg(cx.theme().table_hover))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                this.sort.select(column);
+                                this.focus.focus(window, cx);
+                                cx.notify();
+                            }))
+                    })),
             )
             .when(empty, |panel| {
                 panel.child(
@@ -826,6 +930,7 @@ impl Traffic {
                             })
                             .collect::<Vec<_>>()
                     })
+                    .track_scroll(&self.list_scroll)
                     .w_full()
                     .flex_1()
                     .min_h_0(),
@@ -853,6 +958,7 @@ impl Traffic {
 
     fn detail(&self, detail: &Detail, cx: &mut Context<Self>) -> Div {
         let flow = &detail.flow;
+        let detail_id = flow.metadata.id;
         let Metadata { kind, state, .. } = &flow.metadata;
         let reason = state.error_reason().map(str::to_owned);
         let owner_note = match flow.metadata.process {
@@ -880,6 +986,12 @@ impl Traffic {
                     header.child(h_flex().gap_2()
                         .child(Button::new("traffic-copy-curl").outline().small().label("Copy as cURL")
                             .on_click(cx.listener(|this, _, _, cx| this.copy_curl(cx))))
+                        .child(Button::new("traffic-repeat").outline().small().label("Repeat")
+                            .disabled(!flow.replayable || self.counters.paused)
+                            .on_click(cx.listener(move |this, _, _, cx| this.repeat(detail_id, cx))))
+                        .child(Button::new("traffic-edit-replay").outline().small().label("Edit and resend")
+                            .disabled(!flow.replayable || self.counters.paused)
+                            .on_click(cx.listener(move |this, _, _, cx| this.open_editor(detail_id, cx))))
                         .child(Checkbox::new("traffic-copy-secrets").checked(self.include_secrets)
                             .label("Include secrets in cURL")
                             .on_click(cx.listener(|this, checked: &bool, _, cx| {
@@ -891,7 +1003,9 @@ impl Traffic {
                     .child("Bodies and custom headers can contain secrets. Review them before copying."))
                 .when_some(reason, |d, reason| d.child(div().text_sm().text_color(theme::palette(cx).danger).child(reason)))
                 .child(h_flex().gap_1()
-                    .children([Tab::Request, Tab::Response, Tab::Timing].map(|tab| {
+                    .children([Tab::Request, Tab::Response, Tab::Timing, Tab::Messages]
+                        .into_iter().filter(|tab| *tab != Tab::Messages || flow.websocket)
+                        .map(|tab| {
                         Button::new(tab.name()).ghost().small().selected(self.tab == tab).label(tab.name())
                             .on_click(cx.listener(move |this, _, _, cx| {
                                 this.tab = tab;
@@ -902,13 +1016,15 @@ impl Traffic {
                     .when_some(owner_note, |row, reason| row.child(div().text_xs()
                         .text_color(cx.theme().muted_foreground).child(reason)))))
             .child(v_flex().id((self.tab.name(), flow.metadata.id as usize)).flex_1().min_h_0()
-                .overflow_y_scroll().px_3().py_2().gap_2()
+                .when(self.tab != Tab::Messages, |el| el.overflow_y_scroll())
+                .px_3().py_2().gap_2()
                 .child(match self.tab {
                     Tab::Request => message(&flow.request.headers, &flow.request_body, detail.previews.as_ref().map(|previews| &previews[0]), flow.headers_truncated, cx).into_any_element(),
                     Tab::Response => flow.response.as_ref().map(|head| {
                         message(&head.headers, &flow.response_body, detail.previews.as_ref().map(|previews| &previews[1]), flow.headers_truncated, cx).into_any_element()
                     }).unwrap_or_else(|| div().text_sm().child("No response headers").into_any_element()),
                     Tab::Timing => timing(flow, cx).into_any_element(),
+                    Tab::Messages => self.messages(flow, cx).into_any_element(),
                 })
                 .when(*kind == FlowKind::Tunnel && self.tab != Tab::Timing, |d| {
                     d.child(div().text_xs().text_color(cx.theme().muted_foreground)
@@ -921,7 +1037,28 @@ impl Traffic {
 
 impl Render for Traffic {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        use gpui_kit::component::resizable::{resizable_panel, v_resizable};
+        let table = self.table(cx);
+        let panes = if let Some(detail) = &self.detail {
+            v_resizable("traffic-split")
+                .child(
+                    resizable_panel()
+                        .size(px(226.))
+                        .size_range(px(100.)..gpui_kit::Pixels::MAX)
+                        .child(table),
+                )
+                .child(
+                    resizable_panel()
+                        .size_range(px(180.)..gpui_kit::Pixels::MAX)
+                        .child(self.detail(detail, cx)),
+                )
+                .into_any_element()
+        } else {
+            table.into_any_element()
+        };
         v_flex()
+            .id("traffic-window")
+            .capture_key_down(cx.listener(Self::key))
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
@@ -929,10 +1066,15 @@ impl Render for Traffic {
             .child(self.header(cx))
             .child(self.certificate_panel(cx))
             .child(self.toolbar(cx))
-            .child(self.table(cx))
-            .when_some(self.detail.as_ref(), |window, detail| {
-                window.child(self.detail(detail, cx))
-            })
+            .child(
+                h_flex()
+                    .items_stretch()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .when(self.show_sidebar, |row| row.child(self.sidebar(cx)))
+                    .child(v_flex().flex_1().min_w_0().min_h_0().child(panes)),
+            )
     }
 }
 
@@ -1018,7 +1160,7 @@ fn flow_row(
         .and_then(|owner| entity.read(cx).icons.get(&owner))
         .and_then(Clone::clone);
     let process = h_flex()
-        .w(px(150.))
+        .w(px(Column::Process.width()))
         .flex_shrink_0()
         .gap_1()
         .overflow_hidden()
@@ -1066,9 +1208,10 @@ fn flow_row(
         .when(row.kind == FlowKind::Tunnel, |d| {
             d.text_color(cx.theme().muted_foreground)
         })
-        .on_click(move |_, _, cx| {
+        .on_click(move |_, window, cx| {
             entity.update(cx, |this, cx| {
-                if this.selected != Some(id) {
+                this.focus.focus(window, cx);
+                if this.selected != Some(id) || !this.detail_open {
                     this.select(Some(id));
                     this.refresh_detail(cx);
                 }
@@ -1079,20 +1222,29 @@ fn flow_row(
             chrono::DateTime::<chrono::Local>::from(row.started)
                 .format("%H:%M:%S")
                 .to_string(),
-            84.,
+            Column::Time.width(),
         ))
         .child(process)
-        .child(cell(row.method.clone(), 77.))
-        .child(cell(row.host.clone(), 176.))
+        .child(cell(row.method.clone(), Column::Method.width()))
+        .child(cell(row.host.clone(), Column::Host.width()))
         .child(
             h_flex()
                 .flex_1()
                 .min_w_0()
                 .gap_1()
                 .overflow_hidden()
+                .when(row.repeated, |row| {
+                    row.child(
+                        div()
+                            .text_color(cx.theme().muted_foreground)
+                            .child("Repeated"),
+                    )
+                })
                 .child(path_cell(if row.kind == FlowKind::Tunnel {
                     "Not decrypted".into()
-                } else if row.kind == FlowKind::DecryptedHttps {
+                } else if row.kind == FlowKind::DecryptedHttps
+                    || (row.kind == FlowKind::Upgrade && row.timing.tls.is_some())
+                {
                     format!("Decrypted · {}", row.path)
                 } else {
                     row.path.clone()
@@ -1127,14 +1279,17 @@ fn flow_row(
             cell(
                 row.status
                     .map_or_else(|| "—".into(), |status| status.to_string()),
-                60.,
+                Column::Status.width(),
             )
             .text_color(color),
         )
-        .child(cell(format_bytes(row.bytes.0 + row.bytes.1), 80.))
+        .child(cell(
+            format_bytes(row.bytes.0 + row.bytes.1),
+            Column::Size.width(),
+        ))
         .child(cell(
             format!("{:.1} ms", row.timing.total.as_secs_f64() * 1_000.),
-            90.,
+            Column::Duration.width(),
         ))
         .into_any_element()
 }

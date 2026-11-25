@@ -77,8 +77,8 @@ Zentop verifies each upstream HTTPS connection with the macOS trust store and
 hostname checks. It supports HTTP/1.1 and HTTP/2 on both sides of a decrypted
 connection. If an upstream handshake fails, open the row to see the error.
 If a program rejects Zentop's certificate, the failed CONNECT row reports
-the rejection. WebSockets need a blind tunnel. Remove the host from the
-decrypt list and reconnect to use WebSockets there.
+the rejection. WebSocket upgrades over HTTP/1.1 work on decrypted hosts.
+WebSockets also pass through blind tunnels, where their frames stay opaque.
 
 The built-in skip list always tunnels Apple services such as Apple Account,
 software updates, push notifications and iCloud, plus some commonly pinned
@@ -146,23 +146,42 @@ variables you set for the capture.
 Plain HTTP rows show the request, response and timing. Cleartext HTTP/2
 clients can connect using prior knowledge. Zentop forwards plain HTTP over
 HTTP/1.1 to the origin. HTTP/1.1 upgrades such as WebSockets show
-the handshake, timing and byte counts. Frame contents are skipped. A
+the handshake, timing and byte counts. The **Messages** tab shows WebSocket
+frames in both directions, including text, binary hex, ping, pong and close
+codes. A
 **Not decrypted** CONNECT row shows the destination, byte counts and
 timing of a tunnel whose TLS goes directly to the server. Process
 attribution is best effort and may name a helper process.
 Short-lived connections, shared sockets and sockets Zentop cannot inspect may
 show **Unknown process**.
 
-Use search or filter by process, host, method, status class, kind or errors.
-Select a row for Request, Response and Timing. Click a process name to open
-its details, or use **Show traffic** from the process details sheet.
+Use the **Apps** or **Domains** sidebar to narrow the capture. Counts update
+live, and hosts sharing a registrable domain group together. Use search or
+filter by process, host, method, status class, kind or errors. Click a column
+heading to sort, use Up and Down to select a row, and press Enter to open
+Request details. Press ⌘K or Esc to clear filters. Drag the divider between the
+table and details to resize the panes. Click a process name to open its
+details, or use **Show traffic** from the process details sheet.
+
+**Repeat** sends the original retained HTTP or decrypted HTTPS request.
+**Edit and resend** opens a request editor with the method, URL, headers and
+body. Untouched masked values are sent with their original values. Replay
+uses the current destination policy, and HTTPS requires the host to remain
+on the decrypt list. Responses appear in new **Repeated** rows from Zentop.
+Tunnels, upgrades and incomplete captured requests are unavailable for replay.
+
+Use **Export selected HAR** or **Export filtered HAR** to save a HAR 1.2 file.
+Secret headers and query values are masked. **Include bodies** is off by
+default. Review any HAR file before sharing it.
 
 Local, private and link-local destinations are blocked by default.
 **Allow local destinations** enables routes to development servers for the
 current session. The proxy always refuses to connect to itself.
 
 Capture keeps up to 2,000 flows, 64 KB of headers per message and 1 MB per body.
-The shared 64 MB capture budget evicts older bodies first. The decoded preview
+The shared 64 MB capture budget includes WebSocket frames and evicts older
+bodies first. Each WebSocket connection retains up to 1,000 frames and 1 MB
+of payload while counting additional frames. Payloads may contain secrets. The decoded preview
 is limited to 256 KB. The inspector accepts up to 256 simultaneous client
 connections. Unauthenticated clients have 10 seconds to authenticate, and
 authenticated connections close after 60 seconds without an active request.
@@ -198,8 +217,8 @@ Trust, Replace or Remove action.
 The token and flows are kept in memory. GUI settings save the optional
 fixed port and exact-host decrypt list. Zentop keeps the root key in
 Keychain and records public certificate data separately to enable recovery
-after an interrupted certificate change. Captured data leaves Zentop through the copy controls or CLI
-output. Proxy credentials are consumed before capture. Authorization, Cookie,
+after an interrupted certificate change. Captured data leaves Zentop through the copy controls, replay, HAR exports
+or CLI output. Proxy credentials are consumed before capture. Authorization, Cookie,
 Set-Cookie, secret-looking headers such as `X-API-Key`, and secret-looking
 query values are masked by default. Use **Reveal secrets** to show them for the
 selected flow. Copy as cURL omits those values unless you choose **Include
