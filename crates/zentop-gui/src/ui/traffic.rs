@@ -475,9 +475,9 @@ impl Traffic {
         matches
     }
 
-    /// Clears the tabs, filter bar, sidebar scope and process scope.
+    /// Clears the tabs, filter bar, sidebar filter and scope, and process scope.
     fn reset_filters(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for input in &self.filters {
+        for input in self.filters.iter().chain([&self.sidebar_filter]) {
             input.update(cx, |input, cx| input.set_value("", window, cx));
         }
         self.tabs = Tabs::default();
@@ -497,6 +497,7 @@ impl Traffic {
             || self
                 .filters
                 .iter()
+                .chain([&self.sidebar_filter])
                 .any(|input| !input.read(cx).value().trim().is_empty())
     }
 

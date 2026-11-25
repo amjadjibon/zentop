@@ -661,7 +661,11 @@ impl Render for Editor {
                         self.result.as_ref(),
                         |row, result| {
                             match result {
-                                Ok(()) => row.child("Repeated request captured"),
+                                Ok(()) => row.child(if self.id.is_some() {
+                                    "Repeated request captured"
+                                } else {
+                                    "Request sent and captured"
+                                }),
                                 Err(error) => row
                                     .text_color(theme::palette(cx).danger)
                                     .child(error.clone()),
@@ -672,7 +676,11 @@ impl Render for Editor {
                         Button::new("traffic-editor-close")
                             .outline()
                             .label("Close")
-                            .on_click(|_, window, _| window.remove_window()),
+                            .on_click(|_, window, _| {
+                                if !close_natively(window) {
+                                    window.remove_window();
+                                }
+                            }),
                     )
                     .child(
                         Button::new("traffic-editor-send")
@@ -699,4 +707,29 @@ fn cell(text: impl Into<SharedString>, width: f32) -> Div {
 
 fn path_cell(text: impl Into<SharedString>) -> Div {
     div().flex_1().min_w_0().truncate().child(text.into())
+}
+
+/// Closes a window the way its close button does. GPUI's `remove_window`
+/// from a click that also made the window key throws inside AppKit's touch
+/// bar bookkeeping and aborts the app.
+fn close_natively(window: &Window) -> bool {
+    use objc2::runtime::AnyObject;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else {
+        return false;
+    };
+    let RawWindowHandle::AppKit(handle) = handle.as_raw() else {
+        return false;
+    };
+    let view = handle.ns_view.as_ptr().cast::<AnyObject>();
+    // SAFETY: the handle names this window's live NSView on the main thread,
+    // and `window` and `performClose:` are standard NSView/NSWindow messages.
+    unsafe {
+        let ns_window: *mut AnyObject = objc2::msg_send![view, window];
+        if ns_window.is_null() {
+            return false;
+        }
+        let _: () = objc2::msg_send![ns_window, performClose: std::ptr::null::<AnyObject>()];
+    }
+    true
 }

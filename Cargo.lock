@@ -9985,6 +9985,7 @@ dependencies = [
  "objc2 0.6.5",
  "png 0.17.14",
  "psl",
+ "raw-window-handle",
  "serde",
  "serde_json",
  "smol",

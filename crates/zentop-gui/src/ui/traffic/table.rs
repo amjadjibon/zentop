@@ -220,7 +220,7 @@ pub(super) fn time_text(time: std::time::SystemTime) -> String {
 fn cell(column: Column, content: impl IntoElement) -> Div {
     let cell = div().flex_shrink_0().overflow_hidden().whitespace_nowrap();
     let cell = if column == Column::Url {
-        cell.flex_1().min_w_0()
+        cell.flex_1().min_w(px(160.))
     } else {
         cell.w(px(column.width()))
     };
