@@ -33,6 +33,11 @@ pub(crate) enum Secrets {
 }
 
 pub(crate) fn secret_header(name: &str) -> bool {
+    // WebSocket handshake values are per-connection nonces, not credentials,
+    // even though "sec-websocket-key" contains the word "key".
+    if name.starts_with("sec-websocket-") {
+        return false;
+    }
     matches!(name, "authorization" | "cookie" | "set-cookie") || secret_key(name)
 }
 
@@ -354,5 +359,13 @@ mod tests {
         );
         assert!(headers(&raw, Secrets::Omit).is_empty());
         assert_eq!(headers(&raw, Secrets::Show).len(), 1);
+    }
+
+    #[test]
+    fn websocket_handshake_headers_are_not_secrets() {
+        assert!(!secret_header("sec-websocket-key"));
+        assert!(!secret_header("sec-websocket-accept"));
+        assert!(secret_header("x-api-key"));
+        assert!(secret_header("authorization"));
     }
 }

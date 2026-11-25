@@ -22,7 +22,10 @@ impl Traffic {
         let mut item = |scope: Scope, name: &str, count: usize, app, nested| {
             index += 1;
             let icon = if let Scope::App(key) = &scope {
-                key.identity
+                self.sidebar
+                    .apps
+                    .get(key)
+                    .and_then(|group| group.identity)
                     .and_then(|id| self.icons.get(&id))
                     .and_then(Clone::clone)
             } else {
@@ -74,7 +77,7 @@ impl Traffic {
             .sidebar
             .apps
             .iter()
-            .map(|(app, &count)| item(Scope::App(app.clone()), &app.name, count, true, false))
+            .map(|(app, group)| item(Scope::App(app.clone()), &app.name, group.count, true, false))
             .collect();
         let mut domains = Vec::new();
         for (name, group) in &self.sidebar.domains {

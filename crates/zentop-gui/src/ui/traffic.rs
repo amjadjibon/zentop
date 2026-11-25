@@ -398,7 +398,7 @@ impl Traffic {
             self.icons.retain(|id, _| {
                 self.sidebar
                     .apps
-                    .keys()
+                    .values()
                     .any(|app| app.identity == Some(*id))
             });
         }
@@ -406,7 +406,7 @@ impl Traffic {
         let batch: Vec<_> = self
             .sidebar
             .apps
-            .keys()
+            .values()
             .filter_map(|app| app.identity)
             .filter(|id| !self.icons.contains_key(id) && ids.insert(*id))
             .take(crate::native_icons::MAX_BATCH)

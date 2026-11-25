@@ -11,19 +11,28 @@ pub(super) enum Scope {
     Host(String),
 }
 
+/// Apps group by name, as in Proxyman: every `curl` run is one "curl" entry,
+/// not one entry per process. Attributed and unknown flows never share one.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(super) struct AppKey {
     pub(super) name: String,
-    pub(super) identity: Option<Identity>,
+    pub(super) known: bool,
 }
 
 impl AppKey {
     fn from_row(row: &Metadata) -> Self {
         Self {
             name: row.process.name().to_owned(),
-            identity: identity(&row.process),
+            known: identity(&row.process).is_some(),
         }
     }
+}
+
+#[derive(Default)]
+pub(super) struct AppGroup {
+    pub(super) count: usize,
+    /// The most recent process seen for this app, used to resolve its icon.
+    pub(super) identity: Option<Identity>,
 }
 
 fn hostname(authority: &str) -> &str {
@@ -43,7 +52,7 @@ impl Scope {
     pub(super) fn matches(&self, row: &Metadata) -> bool {
         match self {
             Self::App(app) => {
-                app.name == row.process.name() && app.identity == identity(&row.process)
+                app.name == row.process.name() && app.known == identity(&row.process).is_some()
             }
             Self::Domain(group) => domain(hostname(&row.host)) == group,
             Self::Host(host) => hostname(&row.host) == host,
@@ -53,7 +62,7 @@ impl Scope {
 
 #[derive(Default)]
 pub(super) struct Sidebar {
-    pub(super) apps: BTreeMap<AppKey, usize>,
+    pub(super) apps: BTreeMap<AppKey, AppGroup>,
     pub(super) domains: BTreeMap<String, DomainGroup>,
 }
 
@@ -70,10 +79,22 @@ impl Sidebar {
         let next = after.map(app);
         if prior != next {
             if let Some(key) = prior {
-                decrement(&mut self.apps, &key);
+                if let Some(group) = self.apps.get_mut(&key) {
+                    group.count -= 1;
+                    if group.count == 0 {
+                        self.apps.remove(&key);
+                    }
+                }
             }
             if let Some(key) = next {
-                *self.apps.entry(key).or_default() += 1;
+                self.apps.entry(key).or_default().count += 1;
+            }
+        }
+        if let Some(row) = after {
+            if let Some(id) = identity(&row.process) {
+                if let Some(group) = self.apps.get_mut(&AppKey::from_row(row)) {
+                    group.identity = Some(id);
+                }
             }
         }
 
@@ -250,7 +271,7 @@ mod tests {
         assert!(!group.matches(&c));
         assert!(Scope::Host("a.example.co.uk".into()).matches(&a));
         let unknown = AppKey::from_row(&a);
-        assert_eq!(index.apps[&unknown], 3);
+        assert_eq!(index.apps[&unknown].count, 3);
         let mut known = a.clone();
         known.process = Attribution::Known {
             unique_id: 1,
@@ -259,8 +280,23 @@ mod tests {
             name: "curl".into(),
         };
         index.update(Some(&a), Some(&known));
-        assert_eq!(index.apps[&unknown], 2);
+        assert_eq!(index.apps[&unknown].count, 2);
         assert!(Scope::App(AppKey::from_row(&known)).matches(&known));
+        // A second run of the same program is the same app, not a new entry.
+        let mut rerun = b.clone();
+        rerun.process = Attribution::Known {
+            unique_id: 9,
+            pid: 8,
+            start_time: 7,
+            name: "curl".into(),
+        };
+        index.update(Some(&b), Some(&rerun));
+        let curl = AppKey::from_row(&known);
+        assert_eq!(index.apps[&curl].count, 2);
+        assert_eq!(index.apps[&curl].identity, Some((8, 7)));
+        assert!(Scope::App(curl.clone()).matches(&rerun));
+        assert!(!Scope::App(curl).matches(&c));
+        index.update(Some(&rerun), Some(&b));
         index.update(Some(&known), None);
         assert_eq!(index.apps.len(), 1);
         assert_eq!(index.domains["example.co.uk"].count, 1);
