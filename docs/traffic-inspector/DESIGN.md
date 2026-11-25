@@ -44,7 +44,9 @@ listens and no certificate exists.
 2. **HTTPS decryption (GUI only).** Root certificate with a Keychain-held key,
    trust and removal, exact-host decrypt list, decoded text previews.
 3. **Phase 3A:** capture navigation, request replay, HAR export and WebSocket messages.
-4. **Later, each designed separately:** system-wide capture, a Terminal
+4. **Phase 3C:** a dense, professional HTTP-debugger window (see below).
+5. **Phase 3B:** breakpoints, Map Local and rewrite rules.
+6. **Later, each designed separately:** system-wide capture, a Terminal
    launcher, decryption from the CLI and live traffic editing tools.
 
 Each phase is useful without the next. Phase 1 alone answers "which program is
@@ -463,6 +465,138 @@ added later.
   limits cap retained frames and payload bytes, and the shared 64 MB budget
   charges retention. The virtual Messages tab warns that payloads may contain
   secrets. Messages stay in memory and blind tunnels remain opaque.
+
+## Phase 3C: debugger window
+
+The phase 1–3A window works but spends most of its height on setup, shows
+about ten tall rows, and puts request and response behind one set of tabs.
+Phase 3C turns it into a dense, professional HTTP-debugger layout of the kind
+macOS developers expect from a dedicated tool, in Zentop's own name, theme and
+icons. No behaviour, limit or security rule from earlier phases changes.
+
+### Layout
+
+```
+┌ sidebar ─────┬ toolbar: ⏸  ✎  🗑     ● Capturing · 127.0.0.1:54139 ▾      ⌘  ◧  ▭  ◨ ┐
+│ Favorites    │ All HTTP HTTPS WebSocket │ JSON Form XML JS CSS GraphQL Document Media Other  Reset filters │
+│  ▾ Pinned    ├───────────────────────────────────────────────────────────────────────────────────────────┤
+│    api.x.com │ ● ID  URL                               Client    Method Status    Code Time         Duration Req  Res │
+│ All          │ ● 54  https://api.example.com/v1/users  ◉ curl    GET    Completed 200  21:17:50.480 255 ms   0 B  1 KB │
+│  ▸ Apps   22 │ …  dense virtual rows (≈24 px)                                                                       │
+│  ▸ Domains 41├───────────────────────────────────────────────────────────────────────────────────────────┤
+│              │ [GET] [200 OK]  https://api.example.com/v1/users?page=1  (wrapped, monospace)               │
+│              ├ Request  Header Query Body Cookies Auth Raw Summary ┬ Response  Header Body Set-Cookie Raw … JSON ▾ ┤
+│              │  key/value tables, body viewer                     │  line-numbered, foldable JSON viewer        │
+│ ⌕ Filter ⌘⇧F │ Clear  Filter  Auto Select        3/33 rows selected        12 MB · ↑ 3 KB/s ↓ 2 KB/s · Manual │
+└──────────────┴───────────────────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Toolbar and proxy setup
+
+- Left: Pause/Resume capture, **Compose** (opens Edit and resend with an empty
+  request), and Clear.
+- Centre: a status pill showing a coloured dot and "Capturing · <address>",
+  "Paused" or "Stopped".
+  - Clicking it opens a **Proxy setup** popover holding everything that
+    currently fills the header: Start/Stop, address, token, routing lines with
+    copy buttons, fixed port, Allow local destinations, and the Certificate and
+    hosts section. The window header no longer shows these.
+- Right: toggle sidebar; detail pane below or to the right; hide detail pane.
+
+### Content-type tabs
+
+A tab strip filters by kind: **All, HTTP, HTTPS, WebSocket** | **JSON, Form, XML,
+JS, CSS, GraphQL, Document, Media, Other**, with **Reset filters**.
+
+Classification:
+- **Media:** image, audio, video and font types.
+- **Document:** HTML.
+- **GraphQL:** the path ends in `/graphql`, the content type is
+  `application/graphql`, or a JSON body has a top-level `query` string.
+- **Tunnels:** under HTTPS and Other.
+
+Kinds are computed once per flow in the store, not per frame. The existing
+text, process, host, method, status and error filters move into a filter bar
+toggled by **Filter** (⌘F) in the bottom bar.
+
+### Sidebar
+
+- **Favorites.**
+  - **Pinned:** apps and domains you pin, from the context menu or a pin
+    button. Saved in the GUI `settings.json` with no traffic data, just as the
+    decrypt list is.
+  - **Saved:** reserved for phase 3B rules.
+- **All.**
+  - **Apps:** each app expands to the domains it contacted, with counts.
+  - **Domains:** each registrable domain expands to its hosts.
+- A filter field at the bottom (⌘⇧F) narrows the tree.
+- Counts stay incremental, as in 3A.
+
+### Flow table
+
+- Dense rows of about 24 px, with alternating tints.
+- The selection uses the theme's accent.
+- Columns, each sortable and with a visibility menu:
+  - Status dot: green complete, amber active, red failed, grey for tunnels and
+    refused requests.
+  - ID.
+  - **URL**, in full, with masked query values.
+  - Client (icon + app name).
+  - Method.
+  - Status (Active, Completed, Failed, Refused, Tunnel).
+  - Code.
+  - Time (`HH:MM:SS.mmm`).
+  - Duration.
+  - Request size, response size.
+- The context menu offers:
+  - Copy URL, Copy as cURL.
+  - Repeat (⌘R), Edit and resend (⌘E).
+  - Pin app, Pin domain.
+  - Decrypt this host (tunnels).
+  - Export HAR.
+
+### Detail
+
+- A header line with a method badge and a status badge, coloured by status
+  class, then the full URL in monospace, wrapped.
+- **Request and Response side by side** in a resizable split. Each side has
+  its own tabs:
+  - **Request:** Header, Query (decoded key/value table), Body, Cookies
+    (parsed), Auth (scheme, value masked through the shared policy), Raw
+    (HTTP/1.1 text, redacted), Summary (process, connection, timing,
+    attribution wait, sizes).
+  - **Response:** Header, Body, Set-Cookie (parsed attributes), Raw; plus
+    Messages for WebSockets and Timing.
+- **Body viewer.**
+  - A format picker offers Auto, JSON, Text, Form, Hex and Image.
+  - JSON appears as a line-numbered, foldable tree, syntax-coloured from theme
+    roles.
+  - Forms appear as key/value tables.
+  - Images get a bounded preview.
+- All viewers are built off the UI thread from the existing 256 KB preview and
+  rendered virtualized. Raw and copy actions keep using the retained bytes.
+
+### Bottom bar
+
+- **Clear**, **Filter**, and **Auto Select** (keep the newest flow selected).
+- "x/y rows selected".
+- Capture memory against the 64 MB budget, and ↑/↓ throughput over the last
+  second.
+- A routing chip: "Manual" now; "System proxy" once system-wide capture exists.
+
+### Shortcuts
+
+| Shortcut | Action |
+| --- | --- |
+| ⌘K | Clear |
+| ⌘F | Filter bar |
+| ⌘⇧F | Sidebar filter |
+| ⌘R | Repeat |
+| ⌘E | Edit and resend |
+| ⌘⇧C | Copy as cURL |
+| ⌘. | Pause |
+| ↑ / ↓ | Move the selection |
+| Esc | Clear the filters |
 
 ## Later: system-wide capture
 
