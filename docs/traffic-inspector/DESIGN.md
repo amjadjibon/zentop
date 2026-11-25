@@ -30,7 +30,7 @@ listens and no certificate exists.
   privileged, crash-proof restore and a way to authorize browsers; see
   [Later: system-wide capture](#later-system-wide-capture).
 - Editing traffic: breakpoints, rewrite rules, Map Local / Map Remote.
-- WebSocket frames, HAR export, a Terminal launcher, decryption from the CLI.
+- A Terminal launcher and decryption from the CLI.
 - HTTP/3 and QUIC, packet capture, non-HTTP protocols.
 - iOS devices and simulators, Linux and Windows. The proxy is portable code,
   but Keychain and attribution are macOS-first.
@@ -43,8 +43,9 @@ listens and no certificate exists.
    traffic by hand, with a per-session token. Traffic window and CLI.
 2. **HTTPS decryption (GUI only).** Root certificate with a Keychain-held key,
    trust and removal, exact-host decrypt list, decoded text previews.
-3. **Later, each designed separately:** system-wide capture, WebSockets, HAR
-   export, a Terminal launcher, decryption from the CLI, editing tools.
+3. **Phase 3A:** capture navigation, request replay, HAR export and WebSocket messages.
+4. **Later, each designed separately:** system-wide capture, a Terminal
+   launcher, decryption from the CLI and live traffic editing tools.
 
 Each phase is useful without the next. Phase 1 alone answers "which program is
 talking to which host, and how much?"
@@ -120,9 +121,8 @@ protection for well-known sensitive hosts, not a guarantee. The UI says so.
   the row shows the upstream error.
 - HTTP/2 is enabled explicitly and tested on both sides: program to Zentop, and
   Zentop to server.
-- **WebSockets.** In tunnels they work, because tunnels are blind. On a
-  decrypted host, an upgrade request fails with a clear row ("WebSockets on
-  decrypted hosts aren't supported yet; remove the host from the decrypt list").
+- **WebSockets.** Blind tunnels relay opaque bytes. Phase 3A inspects HTTP/1.1
+  upgrades after TLS termination and the inner authority check.
 - If a program rejects Zentop's certificate, the row says "The program rejected
   Zentop's certificate". It doesn't guess why (pinning, untrusted root, or
   something else).
@@ -313,8 +313,7 @@ the detail pane, copy buttons and CLI output.
 - **Copy as cURL** leaves masked values out unless you choose "Include secrets".
 - Bodies and custom headers can still hold secrets. The UI warns about this
   next to the copy controls, rather than claiming they're safe.
-- **Copying and CLI output are the only ways captured data leaves memory.**
-  The docs say so.
+- Data leaves memory through explicit copy, replay, HAR export or CLI output.
 
 ## Interface
 
@@ -404,7 +403,7 @@ added later.
 - TLS toward servers is always verified by macOS. The root key can't be
   exported. Host certificates have their own keys.
 - Captured traffic stays in memory, under a hard budget. It leaves only through
-  copying or CLI output.
+  explicit copy, replay, HAR export or CLI output.
 - **Docs to update.**
   - `docs/usage.md` says Zentop makes no network requests. It needs a "Traffic
     inspector" note: when you start capture, Zentop resolves host names and
@@ -438,6 +437,32 @@ added later.
   - Update from one build to the next and check key access.
   - Route curl, a Node script and Safari (configured by hand) through the
     proxy; check a pinned app is unaffected unless its host is listed.
+
+## Phase 3A
+
+- **Navigation.** A collapsible Apps and Domains sidebar uses live store counts,
+  including unknown processes. Related hosts group by public-suffix-aware
+  registrable domain. A sidebar selection combines with the existing filters.
+  The virtual list supports eight sortable columns and keyboard selection.
+  The list and details share a resizable split.
+- **Repeat and Edit and resend.** The GUI submits a retained HTTP request to
+  the active engine, which records a new flow attributed to Zentop. Replay
+  applies the same destination checks and platform TLS verification. HTTPS
+  requires an exact decrypt-list entry and honors the skip list. The listener
+  still requires its session token. Repeat uses the privately retained
+  originals, while the editor masks secrets through the shared policy and
+  preserves untouched values. Incomplete requests and tunnels cannot replay.
+- **HAR 1.2.** An explicit save action streams the selected flow or matching
+  flows to disk. Shared redaction applies by default, bodies are opt-in with
+  a captured-traffic warning, and tunnels export as CONNECT without content.
+  Unknown timing phases use the HAR unknown value.
+- **WebSocket messages.** Plain HTTP and decrypted HTTP/1.1 upgrades relay the
+  original bytes and inspect copies in both directions. Decrypted upgrades
+  enforce the CONNECT authority and verify TLS upstream. Captured messages
+  handle masking, continuation and negotiated permessage-deflate. Per-connection
+  limits cap retained frames and payload bytes, and the shared 64 MB budget
+  charges retention. The virtual Messages tab warns that payloads may contain
+  secrets. Messages stay in memory and blind tunnels remain opaque.
 
 ## Later: system-wide capture
 
