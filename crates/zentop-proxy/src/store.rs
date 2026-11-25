@@ -271,6 +271,7 @@ impl Store {
                     content,
                     websocket: false,
                     rules: Vec::new(),
+                    launched: None,
                 },
                 request,
                 response: None,
@@ -384,6 +385,16 @@ impl Store {
             .and_then(|record| record.response.as_mut())
         {
             head.version = format!("{version:?}");
+        }
+    }
+
+    pub fn launched(&mut self, id: Option<u64>, app: std::sync::Arc<str>) {
+        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
+            if record.metadata.launched.as_ref() != Some(&app) {
+                record.metadata.launched = Some(app);
+                let id = record.metadata.id;
+                self.changed(id);
+            }
         }
     }
 

@@ -2,7 +2,7 @@ use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdListener};
 use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::task::{Context, Poll};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -32,6 +32,7 @@ use tokio_rustls::{
     LazyConfigAcceptor, TlsConnector,
 };
 
+use crate::access::{Families, Member};
 use crate::presentation::Metadata;
 use crate::store::{Side, Store};
 use crate::{
@@ -66,6 +67,7 @@ enum Command {
 pub struct Session {
     address: SocketAddr,
     token: String,
+    access: Arc<Families>,
     store: SharedStore,
     editing: Arc<Editing>,
     command: mpsc::Sender<Command>,
@@ -111,12 +113,14 @@ impl Session {
         let mut store = Store::default();
         store.counters.allow_local_destinations = options.allow_local_destinations;
         let store = Arc::new(Mutex::new(store));
+        let access = Arc::new(Families::default());
         let editing = Arc::new(Editing::new(
             decryption.as_ref().map(|tls| tls.upstream.clone()),
         ));
         let engine = Arc::new(Engine {
             address,
             auth,
+            access: access.clone(),
             decryption,
             store: store.clone(),
             editing: editing.clone(),
@@ -137,6 +141,7 @@ impl Session {
         Ok(Self {
             address,
             token,
+            access,
             store,
             editing,
             command,
@@ -155,6 +160,12 @@ impl Session {
 
     pub fn proxy_url(&self) -> String {
         format!("http://zentop:{}@{}", self.token, self.address)
+    }
+
+    /// Registers apps Zentop launched, whose process families may use the
+    /// proxy without the token. Families end with the session.
+    pub fn launch_access(&self) -> crate::LaunchAccess {
+        crate::LaunchAccess(self.access.clone())
     }
 
     /// Pausing also releases every held message unmodified.
@@ -307,6 +318,7 @@ impl Drop for Session {
 struct Engine {
     address: SocketAddr,
     auth: String,
+    access: Arc<Families>,
     decryption: Option<Arc<Decryption>>,
     store: SharedStore,
     editing: Arc<Editing>,
@@ -317,6 +329,8 @@ struct Connection {
     owner: watch::Receiver<Attribution>,
     attribution: watch::Sender<Attribution>,
     first_request: AtomicBool,
+    /// The launched family this connection's process belongs to, once known.
+    family: OnceLock<Member>,
     activity: watch::Sender<Activity>,
     // A tunnel or upgrade keeps its slot after Hyper yields the upgraded socket.
     _slot: tokio::sync::OwnedSemaphorePermit,
@@ -475,7 +489,7 @@ impl Engine {
                     ));
                     let connection = Arc::new(Connection {
                         id, owner, attribution: sender, first_request: AtomicBool::new(true),
-                        activity, _slot: slot,
+                        family: OnceLock::new(), activity, _slot: slot,
                     });
                     let engine = self.clone();
                     clients.spawn(async move {
@@ -510,7 +524,16 @@ impl Engine {
             Ok(target) => target,
             Err(reason) => return Ok(reply(StatusCode::BAD_REQUEST, reason)),
         };
-        if !authorized(&self.auth, request.headers_mut()) {
+        let token = authorized(&self.auth, request.headers_mut());
+        // Without the token, only a launched app's family gets in, decided
+        // once attribution has resolved.
+        let mut attribution_wait = None;
+        let mut family = None;
+        if !token && self.access.admits_launched() {
+            attribution_wait = Some(connection.wait_for_attribution(&self.store).await);
+            family = self.launched_family(&connection).await;
+        }
+        if !token && family.is_none() {
             self.store.lock().unwrap().refuse();
             let mut response = reply(
                 StatusCode::PROXY_AUTHENTICATION_REQUIRED,
@@ -555,12 +578,18 @@ impl Engine {
                 kind
             },
         );
-        let attribution_wait = connection.wait_for_attribution(&self.store).await;
+        let attribution_wait = match attribution_wait {
+            Some(wait) => wait,
+            None => connection.wait_for_attribution(&self.store).await,
+        };
         if let Some(elapsed) = attribution_wait {
             self.store
                 .lock()
                 .unwrap()
                 .waited_for_attribution(capture.id, elapsed);
+        }
+        if let Some(member) = family.or_else(|| self.family(&connection)) {
+            self.store.lock().unwrap().launched(capture.id, member.app);
         }
         if decrypt {
             return Ok(self.decrypt_tunnel(request, target, connection, capture, attribution_wait));
@@ -584,14 +613,48 @@ impl Engine {
         kind: FlowKind,
     ) -> Arc<Capture> {
         let activity = ActiveRequest::begin(&connection.activity);
-        self.begin_capture(
+        let capture = self.begin_capture(
             request,
             target,
             connection.id,
             connection.owner.borrow().clone(),
             kind,
             Some(activity),
-        )
+        );
+        if let Some(member) = connection.family.get() {
+            self.store
+                .lock()
+                .unwrap()
+                .launched(capture.id, member.app.clone());
+        }
+        capture
+    }
+
+    /// The launched family of the connection's process, if it is still
+    /// registered. Positive answers are cached for the connection.
+    fn family(&self, connection: &Connection) -> Option<Member> {
+        if let Some(member) = connection.family.get() {
+            return self.access.contains(member.id).then(|| member.clone());
+        }
+        if self.access.is_empty() {
+            return None;
+        }
+        let member = self.access.member(&connection.owner.borrow())?;
+        Some(connection.family.get_or_init(|| member).clone())
+    }
+
+    /// Like `family`, but waits briefly while Zentop is still registering a
+    /// launched app, so the app's first connections aren't refused.
+    async fn launched_family(&self, connection: &Connection) -> Option<Member> {
+        let deadline = TokioInstant::now() + crate::access::LAUNCH_GRACE;
+        loop {
+            if let Some(member) = self.family(connection) {
+                return Some(member);
+            }
+            if !self.access.wait_for_launch(deadline).await {
+                return None;
+            }
+        }
     }
 
     fn begin_capture(
@@ -1824,6 +1887,7 @@ mod tests {
             owner,
             attribution,
             first_request: AtomicBool::new(true),
+            family: OnceLock::new(),
             activity: watch::channel(Activity::Active(1)).0,
             _slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
         });

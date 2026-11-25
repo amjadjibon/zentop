@@ -1,11 +1,14 @@
 //! In-memory traffic sessions with a loopback HTTP proxy, CONNECT tunnels, and optional TLS decryption.
+mod access;
 mod attribution;
 mod breakpoints;
 mod content;
 mod decryption;
 mod engine;
 mod har;
-pub use decryption::{canonical_host, decrypt_host, skip_reason, CertificateAuthority, Decryption};
+pub use decryption::{
+    canonical_host, decrypt_host, skip_reason, spki_sha256, CertificateAuthority, Decryption,
+};
 #[cfg(target_os = "macos")]
 pub mod keychain;
 mod presentation;
@@ -14,6 +17,7 @@ pub mod rules;
 mod store;
 mod websocket;
 
+pub use access::{process_unique_id, LaunchAccess, LaunchGuard, LaunchedApp};
 pub use breakpoints::{HeldEdits, HeldMessage};
 pub use content::ContentKind;
 pub use engine::{Options, Session};

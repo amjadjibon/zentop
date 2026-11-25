@@ -35,6 +35,9 @@ pub struct Metadata {
     /// The rules that touched this flow, in the order they applied.
     #[serde(skip)]
     pub rules: Vec<(u32, crate::RuleKind)>,
+    /// The app Zentop launched whose process family made this request.
+    #[serde(skip)]
+    pub launched: Option<std::sync::Arc<str>>,
 }
 
 #[derive(Clone, Copy)]

@@ -83,18 +83,44 @@ pub fn decrypt_host(raw: &str) -> Result<String, &'static str> {
     Ok(host)
 }
 
+/// Base64 of the SHA-256 of a DER SubjectPublicKeyInfo, the form Chromium's
+/// `--ignore-certificate-errors-spki-list` takes.
+pub fn spki_sha256(spki: &[u8]) -> String {
+    use base64::Engine as _;
+    use sha2::Digest as _;
+    base64::engine::general_purpose::STANDARD.encode(sha2::Sha256::digest(spki))
+}
+
+/// One in-memory key shared by every leaf in a capture session, created
+/// only for apps launched with Chromium's SPKI switch. Chromium accepts any
+/// presented certificate whose key hash is listed, so the listed key must
+/// never appear in a public certificate, such as the exported root.
+struct SessionKey {
+    key: KeyPair,
+    spki: String,
+}
+
 pub(crate) fn server_config(
     issuer: &Issuer<'_, impl SigningKey>,
     host: &str,
     expires: OffsetDateTime,
+    session_key: Option<&KeyPair>,
 ) -> io::Result<ServerConfig> {
-    let key = KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).map_err(io::Error::other)?;
+    let generated;
+    let key = match session_key {
+        Some(key) => key,
+        None => {
+            generated =
+                KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).map_err(io::Error::other)?;
+            &generated
+        }
+    };
     let mut params = CertificateParams::new(vec![host.to_owned()]).map_err(io::Error::other)?;
     params.not_before = OffsetDateTime::now_utc() - Duration::minutes(5);
     params.not_after = expires;
     params.key_usages = vec![KeyUsagePurpose::DigitalSignature];
     params.extended_key_usages = vec![ExtendedKeyUsagePurpose::ServerAuth];
-    let cert = params.signed_by(&key, issuer).map_err(io::Error::other)?;
+    let cert = params.signed_by(key, issuer).map_err(io::Error::other)?;
     let mut config =
         ServerConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
             .with_safe_default_protocol_versions()
@@ -109,7 +135,8 @@ pub(crate) fn server_config(
     Ok(config)
 }
 
-type SignLeaf = dyn Fn(&str, OffsetDateTime) -> io::Result<ServerConfig> + Send + Sync;
+type SignLeaf =
+    dyn Fn(&str, OffsetDateTime, Option<&KeyPair>) -> io::Result<ServerConfig> + Send + Sync;
 type CheckKey = dyn Fn() -> io::Result<()> + Send + Sync;
 
 #[derive(Clone)]
@@ -135,7 +162,7 @@ impl CertificateAuthority {
     ) -> io::Result<Self> {
         let issuer = Issuer::from_ca_cert_der(certificate, key).map_err(io::Error::other)?;
         Ok(Self {
-            sign: Arc::new(move |host, expires| server_config(&issuer, host, expires)),
+            sign: Arc::new(move |host, expires, key| server_config(&issuer, host, expires, key)),
             expires,
             check: Arc::new(|| Ok(())),
         })
@@ -181,6 +208,7 @@ impl State {
 pub struct Decryption {
     state: Mutex<State>,
     signing: Mutex<()>,
+    session_key: Mutex<Option<Arc<SessionKey>>>,
     pub(crate) upstream: Arc<ClientConfig>,
 }
 
@@ -202,8 +230,30 @@ impl Decryption {
         Self {
             state: Mutex::default(),
             signing: Mutex::default(),
+            session_key: Mutex::default(),
             upstream: Arc::new(upstream),
         }
+    }
+
+    /// Switches this session's leaves to one shared in-memory key and returns
+    /// that key's SPKI hash for `--ignore-certificate-errors-spki-list`. Calls
+    /// after the first return the same hash. Cached per-host leaves are
+    /// dropped, so every leaf issued from now on carries the shared key.
+    pub fn session_key_spki(&self) -> io::Result<String> {
+        let mut session_key = self.session_key.lock().unwrap();
+        if let Some(existing) = session_key.as_ref() {
+            return Ok(existing.spki.clone());
+        }
+        let key =
+            KeyPair::generate_for(&rcgen::PKCS_ECDSA_P256_SHA256).map_err(io::Error::other)?;
+        let spki = spki_sha256(&rcgen::PublicKeyData::subject_public_key_info(&key));
+        *session_key = Some(Arc::new(SessionKey {
+            key,
+            spki: spki.clone(),
+        }));
+        drop(session_key);
+        self.state.lock().unwrap().leaves.clear();
+        Ok(spki)
     }
 
     pub fn set_hosts(&self, hosts: impl IntoIterator<Item = String>) {
@@ -284,6 +334,7 @@ impl Decryption {
         };
         let now = OffsetDateTime::now_utc();
         let expires = (now + Duration::days(7)).min(authority.expires);
+        let session_key = self.session_key.lock().unwrap().clone();
         let result = (|| {
             authority.check()?;
             let mut state = self.state.lock().unwrap();
@@ -297,8 +348,20 @@ impl Decryption {
                 return Ok((entry.config, entry.expires));
             }
             drop(state);
-            (authority.sign)(host, expires).map(|config| (Arc::new(config), expires))
+            (authority.sign)(
+                host,
+                expires,
+                session_key.as_ref().map(|shared| &shared.key),
+            )
+            .map(|config| (Arc::new(config), expires))
         })();
+        let key_changed = {
+            let current = self.session_key.lock().unwrap();
+            match (current.as_ref(), session_key.as_ref()) {
+                (Some(current), Some(used)) => !Arc::ptr_eq(current, used),
+                (current, used) => current.is_some() != used.is_some(),
+            }
+        };
         let mut state = self.state.lock().unwrap();
         if state.error.is_some()
             || !state.hosts.contains(host)
@@ -310,6 +373,9 @@ impl Decryption {
             return Ok(None);
         }
         match result {
+            // The session key was switched on while this leaf was signed;
+            // serve it once, but don't cache a leaf with the old key.
+            Ok((config, _)) if key_changed => Ok(Some(config)),
             Ok((config, expires)) => {
                 state.leaves.retain(|entry| entry.host != host);
                 state.leaves.push_front(Leaf {

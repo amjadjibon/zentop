@@ -153,6 +153,7 @@ mod tests {
                 content: zentop_proxy::ContentKind::Other,
                 websocket: true,
                 rules: Vec::new(),
+                launched: None,
             },
             request_headers: None,
             response_headers: None,

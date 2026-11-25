@@ -813,6 +813,7 @@ struct DecryptedTest {
     session: Session,
     port: u16,
     root: rustls::pki_types::CertificateDer<'static>,
+    decryption: Arc<zentop_proxy::Decryption>,
 }
 
 impl DecryptedTest {
@@ -920,13 +921,14 @@ impl DecryptedTest {
                 allow_local_destinations: true,
                 ..Options::default()
             },
-            decryption,
+            decryption.clone(),
         )
         .unwrap();
         Self {
             session,
             port,
             root: certificate.der().clone(),
+            decryption,
         }
     }
 
@@ -2147,4 +2149,118 @@ async fn rewrites_apply_inside_decrypted_connections() {
     let flow = complete(&test.session, 1).await;
     assert_eq!(flow.metadata.kind, FlowKind::DecryptedHttps);
     assert_eq!(flow.metadata.rules, vec![(1, RuleKind::Rewrite)]);
+}
+
+/// The SPKI hash Chromium's `--ignore-certificate-errors-spki-list` compares.
+#[cfg(target_os = "macos")]
+fn presented_spki(tls: &ProxyTlsStream) -> String {
+    let leaf = &tls.get_ref().1.peer_certificates().unwrap()[0];
+    let (_, certificate) = x509_parser::parse_x509_certificate(leaf).unwrap();
+    zentop_proxy::spki_sha256(certificate.public_key().raw)
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn session_leaf_key_matches_the_launch_spki_hash() {
+    let test = DecryptedTest::new(false, true, 1).await;
+    let before = test.connect("localhost", false, true).await.unwrap();
+    let spki = test.decryption.session_key_spki().unwrap();
+    assert_ne!(
+        presented_spki(&before),
+        spki,
+        "per-host keys before the switch"
+    );
+    assert_eq!(
+        test.decryption.session_key_spki().unwrap(),
+        spki,
+        "one key per session"
+    );
+    // The cached per-host leaf was dropped; new leaves carry the shared key and
+    // still chain to the root.
+    let after = test.connect("localhost", false, true).await.unwrap();
+    assert_eq!(presented_spki(&after), spki);
+    assert_eq!(after.get_ref().1.peer_certificates().unwrap().len(), 1);
+}
+
+/// A child process in a registered launched family uses the proxy without
+/// the token; the test process itself, its parent, still gets 407, and so
+/// does the child once the family is dropped.
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn launched_family_gets_in_without_the_token() {
+    use std::process::{Command, Stdio};
+
+    let (origin, server) = fast_origin().await;
+    let session = proxy(true);
+    let proxy_url = format!("http://{}", session.address());
+    let work = tempfile::tempdir().unwrap();
+    let dir = work.path().display().to_string();
+    // The "launched app" is a shell; each request comes from a curl it starts.
+    let curl = |name: &str| {
+        format!(
+            "/usr/bin/curl -q -s -o /dev/null -w '%{{http_code}}' --max-time 10 --noproxy '' \
+             -x {proxy_url} http://{origin}/{name} > '{dir}/{name}.tmp'; \
+             mv '{dir}/{name}.tmp' '{dir}/{name}'"
+        )
+    };
+    let script = format!(
+        "until [ -e '{dir}/go-1' ]; do sleep 0.02; done; {}; \
+         until [ -e '{dir}/go-2' ]; do sleep 0.02; done; {}",
+        curl("first"),
+        curl("second")
+    );
+    let mut app = Command::new("/bin/sh")
+        .args(["-c", &script])
+        .stdin(Stdio::null())
+        .spawn()
+        .unwrap();
+    let access = session.launch_access();
+    let launched = access
+        .register(app.id(), "Test app", std::path::Path::new("/"))
+        .unwrap();
+    assert_eq!(access.launched(), vec![launched.clone()]);
+
+    // The test process isn't in the family.
+    let (mut sender, _driver) = client(session.address()).await;
+    let refused = sender
+        .send_request(
+            Request::get(format!("http://{origin}/unrelated"))
+                .body(Full::default())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), StatusCode::PROXY_AUTHENTICATION_REQUIRED);
+
+    let result = |name: &'static str| {
+        let path = work.path().join(name);
+        async move {
+            wait(|| path.exists()).await;
+            std::fs::read_to_string(path).unwrap()
+        }
+    };
+    std::fs::write(work.path().join("go-1"), "").unwrap();
+    assert_eq!(result("first").await, "200");
+    let mut rows = Vec::new();
+    wait(|| {
+        rows.extend(session.take_finished(false));
+        !rows.is_empty()
+    })
+    .await;
+    let [(row, _)] = rows.as_slice() else {
+        panic!("only the family's request is recorded: {rows:?}");
+    };
+    assert_eq!(row.path, "/first");
+    assert_eq!(row.launched.as_deref(), Some("Test app"));
+    assert!(
+        matches!(&row.process, Attribution::Known { name, .. } if name == "curl"),
+        "{:?}",
+        row.process
+    );
+
+    assert!(access.forget(launched.id));
+    std::fs::write(work.path().join("go-2"), "").unwrap();
+    assert_eq!(result("second").await, "407");
+    let _ = app.wait();
+    server.abort();
 }

@@ -129,3 +129,42 @@ void zentop_socket_owners(uint16_t proxy_port, const struct peer *peers,
     free(fds);
     free(pids);
 }
+
+/* Identity of one process, for the launched-family client-access policy. */
+struct identity {
+    uint64_t unique_id;
+    uint64_t parent_unique_id;
+    uint64_t start_sec;
+    uint64_t start_usec;
+    int32_t pid;
+    int32_t ppid;
+};
+
+int zentop_process_identity(int pid, struct identity *out) {
+    struct bsd_with_unique_id info;
+    if (pid <= 0 ||
+        proc_pidinfo(pid, BSD_INFO_WITH_UNIQUE_ID, 0, &info, sizeof(info)) != sizeof(info)) {
+        return 0;
+    }
+    out->unique_id = info.unique_id;
+    out->parent_unique_id = info.parent_unique_id;
+    out->start_sec = info.bsd.pbi_start_tvsec;
+    out->start_usec = info.bsd.pbi_start_tvusec;
+    out->pid = (int32_t)info.bsd.pbi_pid;
+    out->ppid = (int32_t)info.bsd.pbi_ppid;
+    return 1;
+}
+
+int zentop_process_path(int pid, char *buffer, uint32_t size) {
+    if (pid <= 0) {
+        return 0;
+    }
+    return proc_pidpath(pid, buffer, size);
+}
+
+/* Exported by libSystem since macOS 10.14; not declared in a public header. */
+extern pid_t responsibility_get_pid_responsible_for_pid(pid_t pid);
+
+int zentop_responsible_pid(int pid) {
+    return pid > 0 ? responsibility_get_pid_responsible_for_pid(pid) : -1;
+}
