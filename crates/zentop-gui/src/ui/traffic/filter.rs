@@ -74,7 +74,11 @@ pub(super) struct RowFilter {
 impl RowFilter {
     pub(super) fn matches(&self, row: &Metadata) -> bool {
         let lower = |text: &str| text.to_lowercase();
-        let process = lower(row.process.name());
+        // An app opened with Zentop matches by its own name and its helper's.
+        let process = match &row.launched {
+            Some(app) => lower(&format!("{app} {}", row.process.name())),
+            None => lower(row.process.name()),
+        };
         let host = lower(&row.host);
         let method = lower(&row.method);
         self.tabs.matches(row)

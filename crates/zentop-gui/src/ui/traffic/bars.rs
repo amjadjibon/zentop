@@ -26,6 +26,7 @@ impl Traffic {
         let running = state != CaptureState::Stopped;
         let placement = self.placement;
         let pill = self.status_pill(cx);
+        let open_app = self.open_app_menu(cx);
         let breakpoints = breakpoints_enabled(cx);
         let held = self
             .capture
@@ -77,6 +78,8 @@ impl Traffic {
                             .disabled(!running)
                             .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
                     )
+                    .child(divider(cx))
+                    .child(open_app)
                     .child(divider(cx))
                     .child(
                         icon_button("traffic-rules", IconName::ListChecks, "Rules")

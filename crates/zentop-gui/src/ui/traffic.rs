@@ -8,12 +8,16 @@
 //! - `detail`, `body`, `parse`: side-by-side request and response panes.
 //! - `status`: throughput and Auto Select; `tools`: keys, HAR and replay.
 //! - `rules` and `breakpoints`: the Rules and Breakpoints windows.
+//! - `launcher` and `launched`: Open with Zentop for Chromium browsers and
+//!   Electron apps.
 mod bars;
 mod body;
 mod breakpoints;
 mod certificate;
 mod detail;
 mod filter;
+mod launched;
+mod launcher;
 mod navigation;
 mod parse;
 mod rules;
@@ -62,6 +66,17 @@ pub(super) struct Capture {
     rules: Vec<zentop_proxy::Rule>,
     /// The breakpoint master switch (⌘B), on for each app launch.
     breakpoints: bool,
+    /// Chromium browsers and Electron apps that Open with Zentop lists.
+    apps: Vec<launcher::InstalledApp>,
+    discovering: bool,
+    /// Apps opened with Zentop, until they exit.
+    launched: Vec<launched::Launched>,
+    /// Launch apps with Chromium's SPKI switch for Zentop's session key.
+    launch_spki: bool,
+    /// Icons of apps opened with Zentop, by name, for their rows. A helper
+    /// that just started may not be in the process table yet.
+    launched_icons: std::collections::HashMap<String, crate::native_icons::Icon>,
+    watcher: Option<Task<()>>,
     _quit: Subscription,
 }
 
@@ -91,6 +106,12 @@ pub(super) fn init(cx: &mut App) {
         generation: 0,
         rules,
         breakpoints: true,
+        apps: Vec::new(),
+        discovering: false,
+        launched: Vec::new(),
+        launch_spki: false,
+        launched_icons: Default::default(),
+        watcher: None,
         _quit: cx.on_app_quit(|this, _| {
             this.session.take();
             async {}
@@ -98,6 +119,7 @@ pub(super) fn init(cx: &mut App) {
     });
     cx.set_global(CaptureGlobal(capture));
     breakpoints::watch(cx);
+    launched::clean_stale_profiles(cx);
 }
 
 /// Validates, saves and applies the whole rule list.
@@ -187,6 +209,7 @@ pub(super) fn overview(cx: &App) -> impl IntoElement {
 pub(super) fn open(process: Option<Identity>, cx: &mut App) {
     super::companion::close(cx);
     certificate::load(&global(cx), cx);
+    launched::discover(&global(cx), cx);
     let existing = cx.global::<Windows>().traffic.clone();
     let focused = existing.is_some_and(|(handle, view)| {
         if !super::focus(Some(handle), cx) {
@@ -629,6 +652,7 @@ impl Render for Traffic {
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
             .child(self.title_bar(cx))
+            .children(self.launched_notice(cx))
             .child(
                 h_flex()
                     .items_stretch()

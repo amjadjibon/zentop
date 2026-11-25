@@ -197,6 +197,7 @@ impl Traffic {
             self.allow_local
         };
         let counters = self.counters;
+        let launched = self.launched_panel(cx).map(IntoElement::into_any_element);
         let section = |title: &'static str| {
             div()
                 .pt_1()
@@ -282,6 +283,7 @@ impl Traffic {
                             )),
                     )
             })
+            .children(launched.map(|list| v_flex().gap_1().child(section("Launched")).child(list)))
             .when(!running, |panel| {
                 panel.child(
                     h_flex()

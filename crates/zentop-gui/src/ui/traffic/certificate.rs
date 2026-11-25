@@ -17,6 +17,11 @@ pub(super) struct CertificateSetup {
 }
 
 impl CertificateSetup {
+    /// Whether a root is available to issue leaves this session.
+    pub(super) fn usable(&self) -> bool {
+        self.authority.is_some()
+    }
+
     pub(super) fn bind(&self, hosts: Vec<String>) -> std::io::Result<Arc<Decryption>> {
         let decryption = Arc::new(Decryption::platform()?);
         decryption.set_hosts(hosts);

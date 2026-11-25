@@ -28,7 +28,8 @@ pub(super) struct SavedRule {
 }
 
 /// Apps group by name: every `curl` run is one "curl" entry, not one entry
-/// per process. Attributed and unknown flows never share one.
+/// per process. Attributed and unknown flows never share one. Flows from an
+/// app opened with Zentop group under that app, not the helper that made them.
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub(super) struct AppKey {
     pub(super) name: String,
@@ -38,7 +39,7 @@ pub(super) struct AppKey {
 impl AppKey {
     pub(super) fn from_row(row: &Metadata) -> Self {
         Self {
-            name: row.process.name().to_owned(),
+            name: app_name(row).to_owned(),
             known: identity(&row.process).is_some(),
         }
     }
@@ -51,6 +52,11 @@ pub(super) struct AppGroup {
     pub(super) identity: Option<Identity>,
     /// Registrable domains this app contacted, with flow counts.
     pub(super) domains: BTreeMap<String, usize>,
+}
+
+/// The app a row belongs to: the app opened with Zentop, or the process.
+pub(super) fn app_name(row: &Metadata) -> &str {
+    row.launched.as_deref().unwrap_or(row.process.name())
 }
 
 pub(super) fn hostname(authority: &str) -> &str {
@@ -72,7 +78,7 @@ pub(super) fn domain(host: &str) -> &str {
 impl Scope {
     pub(super) fn matches(&self, row: &Metadata) -> bool {
         let app = |app: &AppKey| {
-            app.name == row.process.name() && app.known == identity(&row.process).is_some()
+            app.name == app_name(row) && app.known == identity(&row.process).is_some()
         };
         match self {
             Self::App(key) => app(key),
@@ -507,6 +513,7 @@ pub(super) mod tests {
             content: Default::default(),
             websocket: false,
             rules: Vec::new(),
+            launched: None,
         }
     }
 
@@ -559,6 +566,23 @@ pub(super) mod tests {
         assert_eq!(index.domains["example.co.uk"].count, 1);
         assert_eq!(hostname("[::1]:8080"), "[::1]");
         assert_eq!(domain("127.0.0.1"), "127.0.0.1");
+    }
+
+    #[test]
+    fn launched_app_helpers_group_under_the_launched_app() {
+        let mut index = Sidebar::default();
+        let mut helper = known(row(1, "example.com:443"), "Google Chrome Helper", 40);
+        helper.launched = Some("Google Chrome".into());
+        let other = known(row(2, "example.com:443"), "Google Chrome Helper", 41);
+        index.update(None, Some(&helper));
+        index.update(None, Some(&other));
+        let chrome = AppKey::from_row(&helper);
+        assert_eq!(chrome.name, "Google Chrome");
+        assert_eq!(index.apps[&chrome].count, 1);
+        assert_eq!(index.apps[&chrome].identity, Some((40, 7)));
+        assert!(Scope::App(chrome.clone()).matches(&helper));
+        assert!(!Scope::App(chrome).matches(&other));
+        assert_eq!(app_name(&other), "Google Chrome Helper");
     }
 
     #[test]

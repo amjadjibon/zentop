@@ -2,6 +2,7 @@
 //! virtual rows and the row context menu.
 use std::cmp::Ordering;
 
+use super::launched::launched_icon;
 use super::navigation::{domain, hostname, AppKey, Scope};
 use super::*;
 use gpui_kit::component::menu::ContextMenuExt;
@@ -402,9 +403,11 @@ fn flow_row(
     let selected = this.selected == Some(id);
     let muted = cx.theme().muted_foreground;
     let tunnel = row.kind == FlowKind::Tunnel;
-    let icon = identity(&row.process)
-        .and_then(|owner| this.icons.get(&owner))
-        .and_then(Clone::clone);
+    let icon = launched_icon(row.launched.as_deref(), this, cx).or_else(|| {
+        identity(&row.process)
+            .and_then(|owner| this.icons.get(&owner))
+            .and_then(Clone::clone)
+    });
     let select = entity.clone();
     let right_select = entity.clone();
     let menu_entity = entity.clone();

@@ -19,6 +19,7 @@ icon_assets!(
     [
         Activity,
         AppWindow,
+        AppWindowMac,
         ArrowDown,
         ArrowRightLeft,
         ArrowUp,

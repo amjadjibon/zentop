@@ -94,6 +94,7 @@ fn tree_row(index: usize, row: &TreeRow, entity: &Entity<Traffic>, cx: &App) -> 
                 .identity
                 .and_then(|id| this.icons.get(&id))
                 .and_then(Clone::clone)
+                .or_else(|| super::launched::launched_icon(Some(&row.label), this, cx))
             {
                 Some(image) => gpui_kit::img(image).size(px(14.)).into_any_element(),
                 None => Icon::new(IconName::AppWindow)
