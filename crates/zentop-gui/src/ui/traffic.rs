@@ -7,13 +7,16 @@
 //! - `filter`, `table`: which rows show, and the virtual flow table.
 //! - `detail`, `body`, `parse`: side-by-side request and response panes.
 //! - `status`: throughput and Auto Select; `tools`: keys, HAR and replay.
+//! - `rules` and `breakpoints`: the Rules and Breakpoints windows.
 mod bars;
 mod body;
+mod breakpoints;
 mod certificate;
 mod detail;
 mod filter;
 mod navigation;
 mod parse;
+mod rules;
 mod setup;
 mod sidebar;
 mod status;
@@ -55,21 +58,87 @@ pub(super) struct Capture {
     decryption: Option<Arc<zentop_proxy::Decryption>>,
     certificates: certificate::CertificateSetup,
     generation: u64,
+    /// Saved live-editing rules, applied to every session.
+    rules: Vec<zentop_proxy::Rule>,
+    /// The breakpoint master switch (⌘B), on for each app launch.
+    breakpoints: bool,
     _quit: Subscription,
 }
 
+impl Capture {
+    fn rule_set(&self) -> zentop_proxy::RuleSet {
+        zentop_proxy::RuleSet::new(self.rules.clone(), self.breakpoints).unwrap_or_default()
+    }
+
+    fn apply_rules(&self) {
+        if let Some(session) = &self.session {
+            session.set_rules(self.rule_set());
+        }
+    }
+}
+
 pub(super) fn init(cx: &mut App) {
+    let rules = zentop_proxy::rules::load_rules(
+        monitor::global(cx)
+            .read(cx)
+            .prefs()
+            .behavior("trafficRules"),
+    );
     let capture = cx.new(|cx: &mut Context<Capture>| Capture {
         session: None,
         decryption: None,
         certificates: Default::default(),
         generation: 0,
+        rules,
+        breakpoints: true,
         _quit: cx.on_app_quit(|this, _| {
             this.session.take();
             async {}
         }),
     });
     cx.set_global(CaptureGlobal(capture));
+    breakpoints::watch(cx);
+}
+
+/// Validates, saves and applies the whole rule list.
+pub(super) fn save_rules(rules: Vec<zentop_proxy::Rule>, cx: &mut App) -> Result<(), String> {
+    if rules.len() > zentop_proxy::rules::RULE_LIMIT {
+        return Err("Zentop keeps at most 200 rules".into());
+    }
+    let rules = rules
+        .into_iter()
+        .map(zentop_proxy::Rule::normalize)
+        .collect::<Result<Vec<_>, _>>()?;
+    zentop_proxy::RuleSet::new(rules.clone(), true)?;
+    let monitor = monitor::global(cx);
+    let patch = serde_json::json!({"behavior": {"trafficRules": rules}});
+    monitor.update(cx, |monitor, cx| monitor.save(patch, cx));
+    if let Some(error) = monitor.read(cx).prefs_error.clone() {
+        return Err(error);
+    }
+    global(cx).update(cx, |capture, cx| {
+        capture.rules = rules;
+        capture.apply_rules();
+        cx.notify();
+    });
+    Ok(())
+}
+
+pub(super) fn rules(cx: &App) -> Vec<zentop_proxy::Rule> {
+    global(cx).read(cx).rules.clone()
+}
+
+pub(super) fn breakpoints_enabled(cx: &App) -> bool {
+    global(cx).read(cx).breakpoints
+}
+
+/// Flips the breakpoint master switch. Turning it off releases every hold.
+pub(super) fn toggle_breakpoints(cx: &mut App) {
+    global(cx).update(cx, |capture, cx| {
+        capture.breakpoints = !capture.breakpoints;
+        capture.apply_rules();
+        cx.notify();
+    });
 }
 
 pub(super) fn global(cx: &App) -> Entity<Capture> {

@@ -132,6 +132,7 @@ impl Traffic {
             Ok(session) => {
                 self.error = error;
                 self.capture.update(cx, |capture, cx| {
+                    session.set_rules(capture.rule_set());
                     capture.session = Some(session);
                     capture.decryption = decryption;
                     cx.notify();

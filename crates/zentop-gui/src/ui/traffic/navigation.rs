@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use super::{identity, Identity};
 use crate::preferences::{pin_name, PIN_LIMIT};
 use serde_json::Value;
-use zentop_proxy::Metadata;
+use zentop_proxy::{Metadata, RuleKind};
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub(super) enum Scope {
@@ -14,6 +14,17 @@ pub(super) enum Scope {
     AppDomain(AppKey, String),
     Domain(String),
     Host(String),
+    /// Flows a saved rule touched.
+    Rule(u32),
+}
+
+/// A saved rule as the sidebar lists it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(super) struct SavedRule {
+    pub(super) id: u32,
+    pub(super) name: String,
+    pub(super) kind: RuleKind,
+    pub(super) enabled: bool,
 }
 
 /// Apps group by name: every `curl` run is one "curl" entry, not one entry
@@ -68,6 +79,7 @@ impl Scope {
             Self::AppDomain(key, group) => app(key) && domain(hostname(&row.host)) == group,
             Self::Domain(group) => domain(hostname(&row.host)) == group,
             Self::Host(host) => hostname(&row.host) == host,
+            Self::Rule(id) => row.rules.iter().any(|(rule, _)| rule == id),
         }
     }
 }
@@ -76,6 +88,8 @@ impl Scope {
 pub(super) struct Sidebar {
     pub(super) apps: BTreeMap<AppKey, AppGroup>,
     pub(super) domains: BTreeMap<String, DomainGroup>,
+    /// Retained flows each rule touched.
+    pub(super) rules: BTreeMap<u32, usize>,
 }
 
 #[derive(Default)]
@@ -97,6 +111,18 @@ impl Sidebar {
             if let Some((app, host)) = next {
                 self.add(app, &host);
             }
+        }
+        let rules = |row: Option<&Metadata>| -> BTreeSet<u32> {
+            row.into_iter()
+                .flat_map(|row| row.rules.iter().map(|(id, _)| *id))
+                .collect()
+        };
+        let (old, new) = (rules(before), rules(after));
+        for id in old.difference(&new) {
+            decrement(&mut self.rules, id);
+        }
+        for id in new.difference(&old) {
+            *self.rules.entry(*id).or_default() += 1;
         }
         if let Some(row) = after {
             if let Some(id) = identity(&row.process) {
@@ -217,10 +243,11 @@ pub(super) enum Node {
     Domains,
     App(AppKey),
     Domain(String),
+    Saved,
 }
 
 pub(super) fn default_expanded() -> HashSet<Node> {
-    HashSet::from([Node::Favorites, Node::Pinned, Node::All])
+    HashSet::from([Node::Favorites, Node::Pinned, Node::Saved, Node::All])
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -230,6 +257,7 @@ pub(super) enum RowIcon {
     Domain,
     Host,
     Pin,
+    Rule(RuleKind),
 }
 
 /// One rendered sidebar row.
@@ -245,6 +273,8 @@ pub(super) struct TreeRow {
     /// The process whose icon represents an app row.
     pub(super) identity: Option<Identity>,
     pub(super) section: bool,
+    /// A saved rule's enable toggle.
+    pub(super) toggle: Option<bool>,
 }
 
 impl TreeRow {
@@ -258,6 +288,7 @@ impl TreeRow {
             icon: RowIcon::None,
             identity: None,
             section: true,
+            toggle: None,
         }
     }
 
@@ -271,6 +302,7 @@ impl TreeRow {
             icon,
             identity: None,
             section: false,
+            toggle: None,
         }
     }
 
@@ -287,6 +319,7 @@ pub(super) fn tree(
     pins: &Pins,
     expanded: &HashSet<Node>,
     filter: &str,
+    saved: &[SavedRule],
 ) -> Vec<TreeRow> {
     let filter = filter.trim().to_lowercase();
     let filtering = !filter.is_empty();
@@ -341,8 +374,26 @@ pub(super) fn tree(
                 ));
             }
         }
-        // Reserved for phase 3B rules.
-        rows.push(TreeRow::section(1, "Saved", None, None));
+        rows.push(TreeRow::section(
+            1,
+            "Saved",
+            collapsible(Node::Saved),
+            Some(saved.len()),
+        ));
+        if open(&Node::Saved) {
+            for rule in saved.iter().filter(|rule| hit(&rule.name)) {
+                rows.push(TreeRow {
+                    toggle: Some(rule.enabled),
+                    ..TreeRow::item(
+                        2,
+                        &rule.name,
+                        index.rules.get(&rule.id).copied().unwrap_or_default(),
+                        Scope::Rule(rule.id),
+                        RowIcon::Rule(rule.kind),
+                    )
+                });
+            }
+        }
     }
 
     rows.push(TreeRow::section(0, "All", collapsible(Node::All), None));
@@ -455,6 +506,7 @@ pub(super) mod tests {
             url: format!("http://{host}/"),
             content: Default::default(),
             websocket: false,
+            rules: Vec::new(),
         }
     }
 
@@ -569,8 +621,20 @@ pub(super) mod tests {
                 .collect::<Vec<_>>()
         };
 
+        let saved = [SavedRule {
+            id: 7,
+            name: "Mock users".into(),
+            kind: RuleKind::MapLocal,
+            enabled: false,
+        }];
+        let mut touched = row(4, "api.example.com:443");
+        touched.rules = vec![(7, RuleKind::MapLocal)];
+        index.update(None, Some(&touched));
+        assert_eq!(index.rules.get(&7), Some(&1));
+        assert!(Scope::Rule(7).matches(&touched));
+        assert!(!Scope::Rule(8).matches(&touched));
         let mut expanded = default_expanded();
-        let rows = tree(&index, &pins, &expanded, "");
+        let rows = tree(&index, &pins, &expanded, "", &saved);
         assert_eq!(
             labels(&rows),
             [
@@ -578,31 +642,45 @@ pub(super) mod tests {
                 " Pinned",
                 "  example.com",
                 " Saved",
+                "  Mock users",
                 "All",
                 " Apps",
                 " Domains"
             ]
         );
-        assert_eq!(rows[2].count, Some(2));
-        assert_eq!(rows[5].count, Some(2));
-        assert!(!rows[5].expanded());
+        assert_eq!(rows[2].count, Some(3));
+        assert_eq!(rows[4].count, Some(1));
+        assert_eq!(rows[4].toggle, Some(false));
+        assert_eq!(rows[4].scope, Some(Scope::Rule(7)));
+        assert_eq!(rows[6].count, Some(3));
+        assert!(!rows[6].expanded());
+        index.update(Some(&touched), None);
+        assert_eq!(index.rules.get(&7), None);
+        index.update(None, Some(&touched));
 
         expanded.insert(Node::Apps);
         expanded.insert(Node::App(AppKey {
             name: "curl".into(),
             known: true,
         }));
-        let rows = tree(&index, &pins, &expanded, "");
+        let rows = tree(&index, &pins, &expanded, "", &saved);
         assert_eq!(
-            labels(&rows)[5..],
-            [" Apps", "  curl", "   example.com", "  node", " Domains"]
+            labels(&rows)[6..],
+            [
+                " Apps",
+                "  Unknown process",
+                "  curl",
+                "   example.com",
+                "  node",
+                " Domains"
+            ]
         );
-        assert_eq!(rows[7].count, Some(2));
-        assert!(matches!(rows[7].scope, Some(Scope::AppDomain(..))));
-        assert!(rows[6].expanded() && !rows[8].expanded());
+        assert_eq!(rows[9].count, Some(2));
+        assert!(matches!(rows[9].scope, Some(Scope::AppDomain(..))));
+        assert!(rows[8].expanded() && !rows[10].expanded());
 
         // Filtering opens every group with a match and hides the rest.
-        let rows = tree(&index, &pins, &default_expanded(), "cdn");
+        let rows = tree(&index, &pins, &default_expanded(), "cdn", &saved);
         assert_eq!(
             labels(&rows),
             [
@@ -616,7 +694,7 @@ pub(super) mod tests {
                 "   cdn.example.com",
             ]
         );
-        let rows = tree(&index, &pins, &default_expanded(), "NODE");
+        let rows = tree(&index, &pins, &default_expanded(), "NODE", &[]);
         assert_eq!(labels(&rows)[4..], [" Apps", "  node", " Domains"]);
     }
 }

@@ -57,6 +57,19 @@ impl Traffic {
                 }
                 true
             }
+            "b" if command && modifiers.shift => {
+                cx.defer(super::breakpoints::open);
+                true
+            }
+            "b" if command => {
+                toggle_breakpoints(cx);
+                self.operation = Some(Ok(if breakpoints_enabled(cx) {
+                    "Breakpoints on".into()
+                } else {
+                    "Breakpoints off; held messages continue".into()
+                }));
+                true
+            }
             "." if command && !modifiers.shift => {
                 self.toggle_pause(cx);
                 true
@@ -385,13 +398,107 @@ fn message_text(message: &Message, limit: usize) -> String {
     text
 }
 
-struct HeaderEditor {
+/// One editable header row. Untouched rows keep their original value, so a
+/// masked secret is sent as captured.
+pub(super) struct HeaderEditor {
+    pub(super) key: usize,
+    pub(super) original: Option<usize>,
+    pub(super) name: Entity<InputState>,
+    pub(super) value: Entity<InputState>,
+    pub(super) dirty: bool,
+    _change: Subscription,
+}
+
+impl HeaderEditor {
+    /// The row as an edit: its original index while untouched.
+    pub(super) fn edit(&self, cx: &App) -> ReplayHeader {
+        ReplayHeader {
+            name: self.name.read(cx).value().to_string(),
+            value: match self.original.filter(|_| !self.dirty) {
+                Some(index) => ReplayValue::Original(index),
+                None => ReplayValue::Edited(self.value.read(cx).value().to_string()),
+            },
+        }
+    }
+}
+
+/// A view that edits a list of header rows.
+pub(super) trait HeaderRows: Sized + 'static {
+    fn header_rows(&mut self) -> &mut Vec<HeaderEditor>;
+}
+
+impl HeaderRows for Editor {
+    fn header_rows(&mut self) -> &mut Vec<HeaderEditor> {
+        &mut self.headers
+    }
+}
+
+pub(super) fn header_editor<T: HeaderRows>(
     key: usize,
     original: Option<usize>,
-    name: Entity<InputState>,
-    value: Entity<InputState>,
-    dirty: bool,
-    _change: Subscription,
+    name: &str,
+    value: &str,
+    window: &mut Window,
+    cx: &mut Context<T>,
+) -> HeaderEditor {
+    let name = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("Header name")
+            .default_value(name.to_owned())
+    });
+    let value = cx.new(|cx| {
+        InputState::new(window, cx)
+            .placeholder("Header value")
+            .default_value(value.to_owned())
+    });
+    let change = cx.subscribe_in(
+        &value,
+        window,
+        move |this: &mut T, _, event: &InputEvent, _, _| {
+            if let InputEvent::Change = event {
+                if let Some(header) = this.header_rows().iter_mut().find(|row| row.key == key) {
+                    header.dirty = true;
+                }
+            }
+        },
+    );
+    HeaderEditor {
+        key,
+        original,
+        name,
+        value,
+        dirty: false,
+        _change: change,
+    }
+}
+
+/// Renders header rows with a Remove button each.
+pub(super) fn header_list<T: HeaderRows>(
+    rows: &[HeaderEditor],
+    id: &'static str,
+    cx: &mut Context<T>,
+) -> Vec<gpui_kit::AnyElement> {
+    rows.iter()
+        .map(|header| {
+            let key = header.key;
+            h_flex()
+                .id((id, key))
+                .gap_2()
+                .child(div().w(px(195.)).child(Input::new(&header.name)))
+                .child(div().flex_1().min_w_0().child(Input::new(&header.value)))
+                .child(
+                    Button::new((id, key + 1_000_000))
+                        .ghost()
+                        .small()
+                        .label("Remove")
+                        .on_click(cx.listener(move |this, _, _, cx| {
+                            this.header_rows().retain(|header| header.key != key);
+                            cx.notify();
+                        })),
+                )
+                .into_any_element()
+        })
+        .collect()
 }
 
 struct Editor {
@@ -462,31 +569,7 @@ impl Editor {
         window: &mut Window,
         cx: &mut Context<Self>,
     ) -> HeaderEditor {
-        let name = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Header name")
-                .default_value(name.to_owned())
-        });
-        let value = cx.new(|cx| {
-            InputState::new(window, cx)
-                .placeholder("Header value")
-                .default_value(value.to_owned())
-        });
-        let change = cx.subscribe_in(&value, window, move |this, _, event: &InputEvent, _, _| {
-            if let InputEvent::Change = event {
-                if let Some(header) = this.headers.iter_mut().find(|row| row.key == key) {
-                    header.dirty = true;
-                }
-            }
-        });
-        HeaderEditor {
-            key,
-            original,
-            name,
-            value,
-            dirty: false,
-            _change: change,
-        }
+        header_editor(key, original, name, value, window, cx)
     }
 
     fn send(&mut self, cx: &mut Context<Self>) {
@@ -514,18 +597,7 @@ impl Editor {
             body: (body.as_ref() != self.draft.body.as_deref().unwrap_or_default())
                 .then(|| body.to_string()),
             preserve_masked_query: self.masked,
-            headers: Some(
-                self.headers
-                    .iter()
-                    .map(|row| ReplayHeader {
-                        name: row.name.read(cx).value().to_string(),
-                        value: match row.original.filter(|_| !row.dirty) {
-                            Some(index) => ReplayValue::Original(index),
-                            None => ReplayValue::Edited(row.value.read(cx).value().to_string()),
-                        },
-                    })
-                    .collect(),
-            ),
+            headers: Some(self.headers.iter().map(|row| row.edit(cx)).collect()),
         };
         let result = self
             .source
@@ -616,24 +688,7 @@ impl Render for Editor {
                                     })),
                             ),
                     )
-                    .children(self.headers.iter().map(|header| {
-                        let key = header.key;
-                        h_flex()
-                            .id(("traffic-editor-header", key))
-                            .gap_2()
-                            .child(div().w(px(195.)).child(Input::new(&header.name)))
-                            .child(div().flex_1().min_w_0().child(Input::new(&header.value)))
-                            .child(
-                                Button::new(("traffic-editor-remove", key))
-                                    .ghost()
-                                    .small()
-                                    .label("Remove")
-                                    .on_click(cx.listener(move |this, _, _, cx| {
-                                        this.headers.retain(|header| header.key != key);
-                                        cx.notify();
-                                    })),
-                            )
-                    }))
+                    .children(header_list(&self.headers, "traffic-editor-header", cx))
                     .child(
                         div()
                             .font_weight(FontWeight::SEMIBOLD)
@@ -712,7 +767,7 @@ fn path_cell(text: impl Into<SharedString>) -> Div {
 /// Closes a window the way its close button does. GPUI's `remove_window`
 /// from a click that also made the window key throws inside AppKit's touch
 /// bar bookkeeping and aborts the app.
-fn close_natively(window: &Window) -> bool {
+pub(super) fn close_natively(window: &Window) -> bool {
     use objc2::runtime::AnyObject;
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
     let Ok(handle) = HasWindowHandle::window_handle(window) else {

@@ -67,6 +67,16 @@ fn merge(config: &mut Value, patch: &Value) {
                 }
                 continue;
             }
+            // Rules are validated by the proxy crate, capped, and hold no traffic.
+            #[cfg(target_os = "macos")]
+            if group == "behavior" && key == "trafficRules" {
+                if value.is_array() {
+                    config[group][key] =
+                        serde_json::to_value(zentop_proxy::rules::load_rules(value))
+                            .unwrap_or_else(|_| Value::Array(Vec::new()));
+                }
+                continue;
+            }
             if group == "behavior"
                 && matches!(key.as_str(), "trafficPinnedApps" | "trafficPinnedDomains")
             {
@@ -339,6 +349,48 @@ mod tests {
             Some("Google Chrome Helper")
         );
         assert_eq!(pin_name(&"x".repeat(256), false), None);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn traffic_rules_are_validated_and_capped() {
+        use zentop_proxy::rules::{Action, Rule, RULE_LIMIT};
+        let mut config = defaults();
+        assert_eq!(config["behavior"]["trafficRules"], json!([]));
+        let rule = |id: u32| Rule {
+            id,
+            name: format!("Rule {id}"),
+            enabled: true,
+            method: None,
+            url: "http://example.com/*".into(),
+            app: None,
+            action: Action::MapLocal {
+                path: "/tmp/mock.json".into(),
+                status: 200,
+                content_type: None,
+                headers: Vec::new(),
+            },
+        };
+        let mut rules: Vec<Value> = (0..300)
+            .map(|id| serde_json::to_value(rule(id)).unwrap())
+            .collect();
+        rules.insert(
+            0,
+            json!({"id": 999, "name": "bad", "enabled": true, "url": ""}),
+        );
+        rules.insert(1, json!({"id": 0, "captured": "never saved"}));
+        merge(&mut config, &json!({"behavior": {"trafficRules": rules}}));
+        let saved = config["behavior"]["trafficRules"].as_array().unwrap();
+        assert_eq!(saved.len(), RULE_LIMIT);
+        assert_eq!(saved[0], serde_json::to_value(rule(0)).unwrap());
+        assert!(!config.to_string().contains("never saved"));
+        merge(&mut config, &json!({"behavior": {"trafficRules": "bad"}}));
+        assert_eq!(
+            config["behavior"]["trafficRules"].as_array().unwrap().len(),
+            RULE_LIMIT
+        );
+        merge(&mut config, &json!({"behavior": {"trafficRules": []}}));
+        assert_eq!(config["behavior"]["trafficRules"], json!([]));
     }
 
     #[test]

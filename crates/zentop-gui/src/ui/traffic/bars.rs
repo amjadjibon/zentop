@@ -26,6 +26,13 @@ impl Traffic {
         let running = state != CaptureState::Stopped;
         let placement = self.placement;
         let pill = self.status_pill(cx);
+        let breakpoints = breakpoints_enabled(cx);
+        let held = self
+            .capture
+            .read(cx)
+            .session
+            .as_ref()
+            .map_or(0, Session::held_count);
         let place = |id, icon, tooltip, target: Placement| {
             icon_button(id, icon, tooltip)
                 .selected(placement == target)
@@ -69,6 +76,39 @@ impl Traffic {
                         icon_button("traffic-clear", IconName::Trash, "Clear (⌘K)")
                             .disabled(!running)
                             .on_click(cx.listener(|this, _, _, cx| this.clear(cx))),
+                    )
+                    .child(divider(cx))
+                    .child(
+                        icon_button("traffic-rules", IconName::ListChecks, "Rules")
+                            .on_click(|_, _, cx| cx.defer(|cx| super::rules::open(None, None, cx))),
+                    )
+                    .child(
+                        icon_button(
+                            "traffic-breakpoint-switch",
+                            IconName::OctagonPause,
+                            if breakpoints {
+                                "Breakpoints on (⌘B)"
+                            } else {
+                                "Breakpoints off (⌘B)"
+                            },
+                        )
+                        .selected(breakpoints)
+                        .on_click(|_, _, cx| toggle_breakpoints(cx)),
+                    )
+                    .child(
+                        Button::new("traffic-breakpoints")
+                            .ghost()
+                            .small()
+                            .label(if held == 0 {
+                                "Breakpoints".to_owned()
+                            } else {
+                                format!("Breakpoints · {held}")
+                            })
+                            .when(held > 0, |button| {
+                                button.text_color(theme::palette(cx).danger)
+                            })
+                            .tooltip("Held messages (⇧⌘B)")
+                            .on_click(|_, _, cx| cx.defer(super::breakpoints::open)),
                     )
                     .child(div().flex_1())
                     .child(pill)
@@ -115,6 +155,13 @@ impl Traffic {
             Scope::App(app) => app.name.clone(),
             Scope::AppDomain(app, domain) => format!("{} · {domain}", app.name),
             Scope::Domain(domain) | Scope::Host(domain) => domain.clone(),
+            Scope::Rule(id) => rules(cx)
+                .into_iter()
+                .find(|rule| rule.id == *id)
+                .map_or_else(
+                    || format!("Rule {id}"),
+                    |rule| format!("Rule: {}", rule.name),
+                ),
         });
         h_flex()
             .id("traffic-tabs")
@@ -316,6 +363,8 @@ impl Traffic {
             ("refused", counters.refused),
             ("dropped", counters.flows_dropped),
             ("bodies evicted", counters.evicted_bodies),
+            ("holds passed over the limit", counters.holds_skipped),
+            ("holds timed out", counters.holds_timed_out),
         ]
         .into_iter()
         .filter(|(_, count)| *count > 0)

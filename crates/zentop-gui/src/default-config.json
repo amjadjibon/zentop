@@ -29,6 +29,7 @@
     "trafficPort": null,
     "trafficDecryptHosts": [],
     "trafficPinnedApps": [],
-    "trafficPinnedDomains": []
+    "trafficPinnedDomains": [],
+    "trafficRules": []
   }
 }

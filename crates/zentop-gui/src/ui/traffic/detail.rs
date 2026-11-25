@@ -857,9 +857,29 @@ fn summary(flow: &Flow, cx: &mut Context<Traffic>) -> impl IntoElement {
                     "Repeated",
                     if metadata.repeated { "Yes" } else { "No" }.into(),
                 ),
+                ("Rules", applied_rules(flow)),
             ],
             cx,
         ))
+}
+
+/// One line per rule that touched the flow, with what it did.
+fn applied_rules(flow: &Flow) -> String {
+    if flow.rules.is_empty() {
+        return "None".into();
+    }
+    flow.rules
+        .iter()
+        .map(|rule| {
+            let mut line = format!("{} “{}”", rule.kind.name(), rule.name);
+            if !rule.note.is_empty() {
+                line.push_str(": ");
+                line.push_str(&rule.note);
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 fn set_cookie_list(cookies: &[SetCookie], cx: &App) -> impl IntoElement {
@@ -969,6 +989,7 @@ mod tests {
             message_count: 0,
             websocket: false,
             auth_scheme: None,
+            rules: Vec::new(),
         };
         let request: Vec<_> = raw_request(&flow).iter().map(ToString::to_string).collect();
         assert_eq!(

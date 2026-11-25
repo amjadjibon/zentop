@@ -1,5 +1,5 @@
 //! Renders the Favorites and All tree with a filter field at the bottom.
-use super::navigation::{tree, RowIcon, TreeRow};
+use super::navigation::{tree, RowIcon, SavedRule, TreeRow};
 use super::*;
 use gpui_kit::component::menu::ContextMenuExt;
 use gpui_kit::{FontWeight, ScrollStrategy};
@@ -9,7 +9,17 @@ const ROW_HEIGHT: f32 = 24.;
 impl Traffic {
     pub(super) fn sidebar(&self, cx: &mut Context<Self>) -> impl IntoElement {
         let filter = self.sidebar_filter.read(cx).value().to_string();
-        let rows: Arc<[TreeRow]> = tree(&self.sidebar, &self.pins, &self.expanded, &filter).into();
+        let saved: Vec<SavedRule> = rules(cx)
+            .into_iter()
+            .map(|rule| SavedRule {
+                id: rule.id,
+                kind: rule.kind(),
+                name: rule.name,
+                enabled: rule.enabled,
+            })
+            .collect();
+        let rows: Arc<[TreeRow]> =
+            tree(&self.sidebar, &self.pins, &self.expanded, &filter, &saved).into();
         let entity = cx.entity();
         v_flex()
             .w(px(214.))
@@ -52,6 +62,17 @@ impl Traffic {
                         ),
                     ),
             )
+    }
+
+    pub(super) fn set_rule_enabled(&mut self, id: u32, enabled: bool, cx: &mut Context<Self>) {
+        let mut all = rules(cx);
+        if let Some(rule) = all.iter_mut().find(|rule| rule.id == id) {
+            rule.enabled = enabled;
+        }
+        if let Err(error) = save_rules(all, cx) {
+            self.operation = Some(Err(error));
+        }
+        cx.notify();
     }
 
     fn toggle_node(&mut self, node: &Node, cx: &mut Context<Self>) {
@@ -99,7 +120,17 @@ fn tree_row(index: usize, row: &TreeRow, entity: &Entity<Traffic>, cx: &App) -> 
                 .text_color(muted)
                 .into_any_element(),
         ),
+        RowIcon::Rule(kind) => Some(
+            Icon::new(super::rules::kind_icon(kind))
+                .size(px(13.))
+                .text_color(super::rules::kind_color(kind, cx))
+                .into_any_element(),
+        ),
     };
+    let toggle = row.toggle.zip(match &row.scope {
+        Some(Scope::Rule(id)) => Some(*id),
+        _ => None,
+    });
     let chevron = row.node.as_ref().map(|(node, open)| {
         let node = node.clone();
         let toggle = entity.clone();
@@ -147,6 +178,24 @@ fn tree_row(index: usize, row: &TreeRow, entity: &Entity<Traffic>, cx: &App) -> 
             || div().w(px(12.)).flex_shrink_0().into_any_element(),
             IntoElement::into_any_element,
         ))
+        .when_some(toggle, |element, (enabled, id)| {
+            let entity = entity.clone();
+            element.child(
+                Checkbox::new(("traffic-rule-toggle", index))
+                    .xsmall()
+                    .checked(enabled)
+                    .tooltip(if enabled {
+                        "Disable rule"
+                    } else {
+                        "Enable rule"
+                    })
+                    .on_click(move |checked: &bool, _, cx| {
+                        cx.stop_propagation();
+                        let checked = *checked;
+                        entity.update(cx, |this, cx| this.set_rule_enabled(id, checked, cx))
+                    }),
+            )
+        })
         .when_some(icon, |row, icon| {
             row.child(div().flex_shrink_0().child(icon))
         })
@@ -194,6 +243,28 @@ fn tree_row(index: usize, row: &TreeRow, entity: &Entity<Traffic>, cx: &App) -> 
                 }
             })
         });
+    if let Some((enabled, id)) = toggle {
+        let menu = entity.clone();
+        return element
+            .context_menu(move |menu_builder, _, _| {
+                let toggle = menu.clone();
+                menu_builder
+                    .item(PopupMenuItem::new("Edit rule…").on_click(move |_, _, cx| {
+                        cx.defer(move |cx| super::rules::open(None, Some(id), cx))
+                    }))
+                    .item(
+                        PopupMenuItem::new(if enabled {
+                            "Disable rule"
+                        } else {
+                            "Enable rule"
+                        })
+                        .on_click(move |_, _, cx| {
+                            toggle.update(cx, |this, cx| this.set_rule_enabled(id, !enabled, cx))
+                        }),
+                    )
+            })
+            .into_any_element();
+    }
     match pinnable.cloned() {
         Some(scope) => {
             let menu = entity.clone();

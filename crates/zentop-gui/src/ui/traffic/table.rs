@@ -455,6 +455,12 @@ fn flow_row(
                                 .text_color(muted),
                         )
                     })
+                    .children(rule_kinds(row).into_iter().map(|kind| {
+                        Icon::new(super::rules::kind_icon(kind))
+                            .size_3()
+                            .flex_shrink_0()
+                            .text_color(super::rules::kind_color(kind, cx))
+                    }))
                     .child(
                         div()
                             .min_w_0()
@@ -515,6 +521,53 @@ fn flow_row(
         .into_any_element()
 }
 
+/// The distinct kinds of rule that touched a row, in a fixed order.
+pub(super) fn rule_kinds(row: &Metadata) -> Vec<zentop_proxy::RuleKind> {
+    let mut kinds: Vec<_> = row.rules.iter().map(|(_, kind)| *kind).collect();
+    kinds.sort_unstable();
+    kinds.dedup();
+    kinds
+}
+
+impl Traffic {
+    /// Starts a rule from a flow. A breakpoint is saved at once; other kinds
+    /// open as unsaved drafts in the Rules window.
+    pub(super) fn rule_from_flow(
+        &mut self,
+        row: &Metadata,
+        kind: zentop_proxy::RuleKind,
+        cx: &mut Context<Self>,
+    ) {
+        let url = zentop_proxy::rules::pattern_from_url(&row.url);
+        let host = hostname(&row.host).trim_matches(['[', ']']).to_owned();
+        let mut draft = super::rules::template(kind, url, Some(&host));
+        if kind != zentop_proxy::RuleKind::Breakpoint {
+            cx.defer(move |cx| super::rules::open(Some(draft), None, cx));
+            return;
+        }
+        let mut all = rules(cx);
+        let id = all
+            .iter()
+            .map(|rule| rule.id)
+            .max()
+            .map_or(1, |max| max + 1);
+        draft.id = id;
+        all.push(draft);
+        match save_rules(all, cx) {
+            Ok(()) => {
+                self.operation = Some(Ok(if breakpoints_enabled(cx) {
+                    "Breakpoint added for this URL".into()
+                } else {
+                    "Breakpoint added; press ⌘B to turn breakpoints on".into()
+                }));
+                cx.defer(move |cx| super::rules::open(None, Some(id), cx));
+            }
+            Err(error) => self.operation = Some(Err(error)),
+        }
+        cx.notify();
+    }
+}
+
 fn row_menu(menu: PopupMenu, entity: &Entity<Traffic>, row: &Metadata, cx: &App) -> PopupMenu {
     let this = entity.read(cx);
     let id = row.id;
@@ -547,6 +600,15 @@ fn row_menu(menu: PopupMenu, entity: &Entity<Traffic>, row: &Metadata, cx: &App)
         move |_: &gpui_kit::ClickEvent, _: &mut Window, cx: &mut App| {
             entity.update(cx, |this, cx| this.toggle_pin(&scope, cx))
         }
+    };
+    let rule_item = |label: &'static str, kind| {
+        let entity = entity.clone();
+        let row = row.clone();
+        PopupMenuItem::new(label)
+            .disabled(!http)
+            .on_click(move |_, _, cx| {
+                entity.update(cx, |this, cx| this.rule_from_flow(&row, kind, cx))
+            })
     };
     let pinned_app = this.pins.is_pinned(&app_scope);
     let pinned_domain = this.pins.is_pinned(&domain_scope);
@@ -599,6 +661,14 @@ fn row_menu(menu: PopupMenu, entity: &Entity<Traffic>, row: &Metadata, cx: &App)
                 }
             }),
     )
+    .separator()
+    .item(rule_item(
+        "Breakpoint this URL",
+        zentop_proxy::RuleKind::Breakpoint,
+    ))
+    .item(rule_item("Map Local…", zentop_proxy::RuleKind::MapLocal))
+    .item(rule_item("Map Remote…", zentop_proxy::RuleKind::MapRemote))
+    .item(rule_item("Rewrite…", zentop_proxy::RuleKind::Rewrite))
     .separator()
     .item(
         PopupMenuItem::new("Export HAR…")
