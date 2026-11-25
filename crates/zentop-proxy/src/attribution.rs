@@ -3,25 +3,43 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use tokio::sync::{mpsc, watch};
+use tokio::time::{self, Instant};
 
-use crate::{store::Store, Attribution};
+use crate::{store::Store, Attribution, PENDING_ATTRIBUTION};
+
+const MIN_INTERVAL: Duration = Duration::from_millis(25);
+const BATCH_LIMIT: usize = 256;
+
+pub(crate) fn resolve(
+    store: &mut Store,
+    id: u64,
+    sender: &watch::Sender<Attribution>,
+    owner: Attribution,
+) {
+    if *sender.borrow() == PENDING_ATTRIBUTION {
+        sender.send_replace(owner.clone());
+        store.attribute(id, owner);
+    }
+}
 
 pub(crate) async fn worker(
     port: u16,
     mut pending: mpsc::Receiver<(u64, SocketAddr, watch::Sender<Attribution>)>,
     store: Arc<Mutex<Store>>,
 ) {
+    let mut last_scan = None;
     while let Some(first) = pending.recv().await {
-        // Wait once to batch arrivals and limit the frequency even on a busy listener.
-        tokio::time::sleep(Duration::from_millis(100)).await;
+        if let Some(started) = last_scan {
+            time::sleep_until(started + MIN_INTERVAL).await;
+        }
         let mut batch = vec![first];
-        while batch.len() < 256 {
+        while batch.len() < BATCH_LIMIT {
             let Ok(next) = pending.try_recv() else { break };
             batch.push(next);
         }
         let live: Vec<_> = batch
             .iter()
-            .map(|(_, _, sender)| !sender.is_closed())
+            .map(|(_, _, sender)| !sender.is_closed() && *sender.borrow() == PENDING_ATTRIBUTION)
             .collect();
         let peers: Vec<_> = batch
             .iter()
@@ -30,24 +48,28 @@ pub(crate) async fn worker(
             .map(|((_, peer, _), _)| *peer)
             .collect();
         let paused = store.lock().unwrap().counters.paused;
-        let mut owners = if peers.is_empty() || paused {
-            Vec::new().into_iter()
-        } else {
-            tokio::task::spawn_blocking(move || scan(port, &peers))
-                .await
-                .unwrap_or_default()
-                .into_iter()
-        };
+        let mut owners = Vec::new().into_iter();
+        if !paused && !peers.is_empty() {
+            let dispatched = Instant::now();
+            last_scan = Some(dispatched);
+            if let Ok((started, scanned)) =
+                tokio::task::spawn_blocking(move || (Instant::now(), scan(port, &peers))).await
+            {
+                last_scan = Some(started);
+                owners = scanned.into_iter();
+            }
+        }
         let mut store = store.lock().unwrap();
         for ((id, _, sender), live) in batch.into_iter().zip(live) {
             let scanned = live.then(|| owners.next()).flatten();
             let owner = if sender.is_closed() {
                 Attribution::unknown("Client disconnected before attribution")
+            } else if paused {
+                Attribution::unknown("Capture was paused before attribution")
             } else {
                 scanned.unwrap_or_else(|| Attribution::unknown("Attribution unavailable"))
             };
-            sender.send_replace(owner.clone());
-            store.attribute(id, owner);
+            resolve(&mut store, id, &sender, owner);
         }
     }
 }

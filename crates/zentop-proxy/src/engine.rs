@@ -1,6 +1,7 @@
 use std::io;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, TcpListener as StdListener};
 use std::pin::Pin;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::thread;
@@ -32,6 +33,7 @@ const CONNECTIONS: usize = 256;
 const DIAL_TIMEOUT: Duration = Duration::from_secs(10);
 const STOP_TIMEOUT: Duration = Duration::from_secs(2);
 const AUTH_TIMEOUT: Duration = Duration::from_secs(10);
+const ATTRIBUTION_TIMEOUT: Duration = Duration::from_millis(250);
 const IDLE_TIMEOUT: Duration = Duration::from_secs(60);
 
 type SharedStore = Arc<Mutex<Store>>;
@@ -183,9 +185,41 @@ struct Engine {
 struct Connection {
     id: u64,
     owner: watch::Receiver<Attribution>,
+    attribution: watch::Sender<Attribution>,
+    first_request: AtomicBool,
     activity: watch::Sender<Activity>,
     // A tunnel or upgrade keeps its slot after Hyper yields the upgraded socket.
     _slot: tokio::sync::OwnedSemaphorePermit,
+}
+
+impl Connection {
+    async fn wait_for_attribution(&self, store: &SharedStore) -> Option<Duration> {
+        if !self.first_request.swap(false, Ordering::Relaxed) {
+            return None;
+        }
+        if *self.owner.borrow() != PENDING_ATTRIBUTION {
+            return Some(Duration::ZERO);
+        }
+
+        let mut owner = self.owner.clone();
+        let started = TokioInstant::now();
+        let timed_out = time::timeout(
+            ATTRIBUTION_TIMEOUT,
+            owner.wait_for(|owner| *owner != PENDING_ATTRIBUTION),
+        )
+        .await
+        .is_err();
+        let elapsed = started.elapsed();
+        if timed_out {
+            crate::attribution::resolve(
+                &mut store.lock().unwrap(),
+                self.id,
+                &self.attribution,
+                Attribution::unknown("Process attribution timed out"),
+            );
+        }
+        Some(elapsed)
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -283,13 +317,16 @@ impl Engine {
                     let (sender, owner) = watch::channel(PENDING_ATTRIBUTION);
                     if self.store.lock().unwrap().counters.paused {
                         sender.send_replace(Attribution::unknown("Accepted while capture was paused"));
-                    } else if let Err(error) = pending.try_send((id, peer, sender)) {
-                        error.into_inner().2.send_replace(Attribution::unknown("Attribution queue was full"));
+                    } else if pending.try_send((id, peer, sender.clone())).is_err() {
+                        sender.send_replace(Attribution::unknown("Attribution queue was full"));
                     }
                     let (activity, deadlines) = watch::channel(Activity::WaitingForAuth(
                         TokioInstant::now() + AUTH_TIMEOUT,
                     ));
-                    let connection = Arc::new(Connection { id, owner, activity, _slot: slot });
+                    let connection = Arc::new(Connection {
+                        id, owner, attribution: sender, first_request: AtomicBool::new(true),
+                        activity, _slot: slot,
+                    });
                     let engine = self.clone();
                     clients.spawn(async move {
                         let mut server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
@@ -375,6 +412,13 @@ impl Engine {
             store: self.store.clone(),
             _activity: activity,
         });
+        // Keep the client socket open for the scan before any upstream response can finish it.
+        if let Some(elapsed) = connection.wait_for_attribution(&self.store).await {
+            self.store
+                .lock()
+                .unwrap()
+                .waited_for_attribution(id, elapsed);
+        }
         let dial_started = Instant::now();
         let upstream = tokio::time::timeout(DIAL_TIMEOUT, self.dial(&target)).await;
         let upstream = match upstream {
@@ -986,6 +1030,37 @@ mod tests {
         );
         assert!(authorized("Basic abc", &mut headers));
         assert!(headers.is_empty());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn unresolved_attribution_times_out_without_blocking_later_requests() {
+        let (attribution, owner) = watch::channel(PENDING_ATTRIBUTION);
+        let connection = Arc::new(Connection {
+            id: 0,
+            owner,
+            attribution,
+            first_request: AtomicBool::new(true),
+            activity: watch::channel(Activity::Active(1)).0,
+            _slot: Arc::new(Semaphore::new(1)).try_acquire_owned().unwrap(),
+        });
+        let store = Arc::new(Mutex::new(Store::default()));
+        // Leave the watch pending, as if the scanner stalled.
+        let first = tokio::spawn({
+            let connection = connection.clone();
+            let store = store.clone();
+            async move { connection.wait_for_attribution(&store).await }
+        });
+        tokio::task::yield_now().await;
+        time::advance(Duration::from_millis(249)).await;
+        assert!(!first.is_finished());
+        let before = TokioInstant::now();
+        assert_eq!(connection.wait_for_attribution(&store).await, None);
+        assert_eq!(before.elapsed(), Duration::ZERO);
+        assert_eq!(first.await.unwrap(), Some(Duration::from_millis(250)));
+        assert_eq!(
+            *connection.owner.borrow(),
+            Attribution::Unknown("Process attribution timed out")
+        );
     }
 
     #[tokio::test(start_paused = true)]

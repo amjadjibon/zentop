@@ -315,6 +315,14 @@ impl Store {
         self.changed(id);
     }
 
+    pub fn waited_for_attribution(&mut self, id: Option<u64>, elapsed: Duration) {
+        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
+            record.metadata.timing.attribution = Some(elapsed);
+            let id = record.metadata.id;
+            self.changed(id);
+        }
+    }
+
     pub fn connected(&mut self, id: Option<u64>, elapsed: Duration) {
         if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
             record.metadata.timing.connect = Some(elapsed);

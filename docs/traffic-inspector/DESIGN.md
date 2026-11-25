@@ -242,8 +242,11 @@ helpers to their app.
 
 **Cost.**
 - A worker runs only while capture is on. It batches pending connections and
-  does at most one socket-table scan per 100 ms, with a bounded queue. Flows
-  over the limit stay unknown.
+  scans immediately when idle, with at least 25 ms between scan starts and a
+  bounded queue. Flows over the limit stay unknown.
+- The first authenticated request on each connection waits for attribution
+  before dialing, up to 250 ms. The flow records that wait. Later requests
+  reuse the connection's attribution without waiting.
 - Before repeated scans ship:
   - Fix the `netstat2` macOS backend: version 0.11.2 treats a zero return from
     `proc_pidfdinfo` as success, but zero means failure. Fix it upstream, or

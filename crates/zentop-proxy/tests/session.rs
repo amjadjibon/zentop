@@ -56,6 +56,122 @@ async fn wait(mut condition: impl FnMut() -> bool) {
     .expect("condition in time");
 }
 
+async fn fast_origin() -> (SocketAddr, JoinHandle<()>) {
+    let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = origin.local_addr().unwrap();
+    let server = tokio::spawn(async move {
+        while let Ok((stream, _)) = origin.accept().await {
+            tokio::spawn(async move {
+                let service = service_fn(|_| async {
+                    Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(b"ok"))))
+                });
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(TokioIo::new(stream), service)
+                    .await;
+            });
+        }
+    });
+    (address, server)
+}
+
+#[cfg(target_os = "macos")]
+async fn curl_flows(count: u64) -> Vec<Duration> {
+    use std::process::{Command, Stdio};
+
+    let (address, origin) = fast_origin().await;
+    let session = proxy(true);
+    let mut waits = Vec::new();
+    for id in 0..count {
+        let url = format!("http://{address}/{id}");
+        let mut child = Command::new("/usr/bin/curl")
+            .args([
+                "-q",
+                "-fsS",
+                "--max-time",
+                "5",
+                "--noproxy",
+                "",
+                "-x",
+                &session.proxy_url(),
+                &url,
+            ])
+            .stdout(Stdio::null())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        assert!(tokio::task::spawn_blocking(move || child.wait().unwrap())
+            .await
+            .unwrap()
+            .success());
+        let mut finished = Vec::new();
+        wait(|| {
+            finished.extend(session.take_finished(false));
+            !finished.is_empty()
+        })
+        .await;
+        let [(row, _)] = finished.as_slice() else {
+            panic!("expected one finished curl request");
+        };
+        assert_eq!(row.id, id);
+        assert!(
+            matches!(&row.process, Attribution::Known { pid: owner_pid, name, .. }
+            if *owner_pid == pid && name == "curl"),
+            "request {id}: expected curl pid {pid}, got {:?}",
+            row.process
+        );
+        waits.push(row.timing.attribution.expect("first request timing"));
+    }
+    origin.abort();
+    waits
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+async fn attributes_twenty_short_lived_curl_clients() {
+    curl_flows(20).await;
+}
+
+#[cfg(target_os = "macos")]
+#[tokio::test]
+#[ignore = "measures first-request attribution wait for 100 sequential curl requests"]
+async fn benchmark_curl_attribution_wait() {
+    let mut waits = curl_flows(100).await;
+    waits.sort_unstable();
+    let median = (waits[49] + waits[50]) / 2;
+    eprintln!(
+        "100 sequential curl requests: median {:.3} ms, p95 {:.3} ms",
+        median.as_secs_f64() * 1_000.,
+        waits[94].as_secs_f64() * 1_000.,
+    );
+}
+
+#[tokio::test]
+async fn only_first_request_on_keep_alive_connection_waits_for_attribution() {
+    let (address, origin) = fast_origin().await;
+    let session = proxy(true);
+    let (mut sender, _) = client(session.address()).await;
+    for id in 0..2 {
+        let response = sender
+            .send_request(
+                Request::builder()
+                    .uri(format!("http://{address}/{id}"))
+                    .header("proxy-authorization", auth(&session))
+                    .body(Full::default())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(response.collect().await.unwrap().to_bytes(), "ok");
+    }
+    let first = session.flow(0, false).unwrap().metadata;
+    let second = session.flow(1, false).unwrap().metadata;
+    assert_eq!(first.connection, second.connection);
+    assert_eq!(first.process, second.process);
+    assert!(first.timing.attribution.is_some());
+    assert_eq!(second.timing.attribution, None);
+    origin.abort();
+}
+
 #[tokio::test]
 async fn auth_origin_policy_forwarding_pause_and_redaction() {
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -360,6 +476,7 @@ async fn forwards_http11_upgrades_and_regular_origin_responses() {
         FlowKind::Http
     );
 
+    let (mut sender, _) = client(session.address()).await;
     let mut response = sender.send_request(request()).await.unwrap();
     assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
     assert_eq!(response.headers()["upgrade"], "websocket");
@@ -375,6 +492,7 @@ async fn forwards_http11_upgrades_and_regular_origin_responses() {
     assert_eq!(flow.metadata.kind, FlowKind::Upgrade);
     assert_eq!(flow.metadata.status, Some(101));
     assert_eq!(flow.metadata.bytes, (5, 5));
+    assert!(flow.metadata.timing.attribution.is_some());
     assert!(flow.metadata.timing.connect.is_some());
     assert!(flow.metadata.timing.total >= flow.metadata.timing.ttfb.unwrap());
     for body in [flow.request_body, flow.response_body] {
@@ -476,6 +594,7 @@ async fn tunnel_carries_verified_tls_without_capturing_plaintext() {
     assert_eq!(flow.metadata.kind, FlowKind::Tunnel);
     assert_eq!(flow.metadata.state, FlowState::Complete);
     assert!(flow.metadata.bytes.0 > 10 && flow.metadata.bytes.1 > 10);
+    assert!(flow.metadata.timing.attribution.is_some());
     assert!(matches!(flow.response_body, Body::Skipped(_)));
     assert!(session.flow(1, false).is_none());
 }

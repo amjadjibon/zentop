@@ -64,6 +64,7 @@ impl FlowState {
 
 #[derive(Clone, Debug, Default)]
 pub struct Timing {
+    pub attribution: Option<Duration>,
     pub connect: Option<Duration>,
     pub tls: Option<Duration>,
     pub ttfb: Option<Duration>,
@@ -74,6 +75,7 @@ impl Serialize for Timing {
     fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
         #[derive(Serialize)]
         struct Milliseconds {
+            attribution_ms: Option<f64>,
             connect_ms: Option<f64>,
             tls_ms: Option<f64>,
             ttfb_ms: Option<f64>,
@@ -82,6 +84,7 @@ impl Serialize for Timing {
 
         let ms = |duration: Duration| duration.as_secs_f64() * 1_000.;
         Milliseconds {
+            attribution_ms: self.attribution.map(ms),
             connect_ms: self.connect.map(ms),
             tls_ms: self.tls.map(ms),
             ttfb_ms: self.ttfb.map(ms),

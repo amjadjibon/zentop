@@ -140,6 +140,7 @@ mod tests {
                 started: SystemTime::UNIX_EPOCH,
                 status: Some(101),
                 timing: Timing {
+                    attribution: Some(Duration::from_micros(1_250)),
                     connect: Some(Duration::from_micros(14_800)),
                     tls: None,
                     ttfb: Some(Duration::from_millis(15)),
@@ -157,7 +158,8 @@ mod tests {
         assert_eq!(
             json["timing"],
             serde_json::json!({
-                "connect_ms": 14.8, "tls_ms": null, "ttfb_ms": 15.0, "total_ms": 40.0
+                "attribution_ms": 1.25, "connect_ms": 14.8, "tls_ms": null,
+                "ttfb_ms": 15.0, "total_ms": 40.0
             })
         );
     }

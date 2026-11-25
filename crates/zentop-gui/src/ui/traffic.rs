@@ -149,7 +149,7 @@ struct Detail {
 enum Preview {
     Note(&'static str),
     Decoded {
-        text: SharedString,
+        lines: Arc<[SharedString]>,
         binary: bool,
         limited: bool,
     },
@@ -166,7 +166,18 @@ impl Preview {
         }
         match zentop_proxy::preview(body, headers) {
             Ok(preview) => Self::Decoded {
-                text: preview.text.into(),
+                lines: preview
+                    .text
+                    .lines()
+                    .map(|line| {
+                        const MAX_LINE_CHARS: usize = 2_000;
+                        if let Some((end, _)) = line.char_indices().nth(MAX_LINE_CHARS) {
+                            format!("{}…", &line[..end]).into()
+                        } else {
+                            line.into()
+                        }
+                    })
+                    .collect(),
                 binary: preview.binary,
                 limited: preview.limited,
             },
@@ -809,7 +820,7 @@ impl Traffic {
                     .child(div().flex_1())
                     .when_some(owner_note, |row, reason| row.child(div().text_xs()
                         .text_color(cx.theme().muted_foreground).child(reason)))))
-            .child(v_flex().id(("traffic-detail", flow.metadata.id as usize)).flex_1().min_h_0()
+            .child(v_flex().id((self.tab.name(), flow.metadata.id as usize)).flex_1().min_h_0()
                 .overflow_y_scroll().px_3().py_2().gap_2()
                 .child(match self.tab {
                     Tab::Request => message(&flow.request.headers, &flow.request_body, detail.previews.as_ref().map(|previews| &previews[0]), flow.headers_truncated, cx).into_any_element(),
@@ -1039,36 +1050,52 @@ fn message(
             .child("Preparing preview…"),
         Some(Preview::Note(note)) => div().text_color(cx.theme().muted_foreground).child(*note),
         Some(Preview::Decoded {
-            text,
+            lines,
             binary,
             limited,
-        }) => v_flex()
-            .gap_1()
-            .child(
-                h_flex()
-                    .gap_2()
-                    .child(if *binary {
-                        "Hex preview"
-                    } else {
-                        "Decoded body"
-                    })
-                    .child(copy())
-                    .when(*limited, |row| {
-                        row.child(
-                            div()
-                                .text_color(theme::palette(cx).warning)
-                                .child("Preview limited"),
-                        )
-                    }),
-            )
-            .child(
-                div()
-                    .p_2()
-                    .bg(cx.theme().muted)
-                    .rounded_md()
-                    .font_family(mono)
-                    .child(text.clone()),
-            ),
+        }) => {
+            const ROW_HEIGHT: f32 = 16.;
+            let lines = lines.clone();
+            let height = px(ROW_HEIGHT * lines.len().min(15) as f32);
+            v_flex()
+                .gap_1()
+                .child(
+                    h_flex()
+                        .gap_2()
+                        .child(if *binary {
+                            "Hex preview"
+                        } else {
+                            "Decoded body"
+                        })
+                        .child(copy())
+                        .when(*limited, |row| {
+                            row.child(
+                                div()
+                                    .text_color(theme::palette(cx).warning)
+                                    .child("Preview limited"),
+                            )
+                        }),
+                )
+                .child(
+                    div().p_2().bg(cx.theme().muted).rounded_md().child(
+                        uniform_list("traffic-preview-lines", lines.len(), move |range, _, _| {
+                            lines[range]
+                                .iter()
+                                .map(|line| {
+                                    div()
+                                        .h(px(ROW_HEIGHT))
+                                        .line_height(px(ROW_HEIGHT))
+                                        .truncate()
+                                        .font_family(mono.clone())
+                                        .child(line.clone())
+                                })
+                                .collect::<Vec<_>>()
+                        })
+                        .w_full()
+                        .h(height),
+                    ),
+                )
+        }
         Some(Preview::Error(error)) => h_flex()
             .gap_2()
             .text_color(theme::palette(cx).warning)
@@ -1106,6 +1133,12 @@ fn timing(flow: &Flow, cx: &App) -> Div {
     v_flex()
         .gap_2()
         .text_sm()
+        .child(copy_line(
+            "timing-attribution",
+            "Attribution wait",
+            duration(timing.attribution),
+            cx,
+        ))
         .child(copy_line(
             "timing-connect",
             "Connect",
