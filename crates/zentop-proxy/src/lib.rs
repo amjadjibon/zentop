@@ -15,7 +15,7 @@ mod websocket;
 pub use content::ContentKind;
 pub use engine::{Options, Session};
 pub use har::{HarExport, HarOptions};
-pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata};
+pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata, MASK};
 pub use replay::{ReplayDraft, ReplayEdits, ReplayHeader, ReplayValue};
 pub use websocket::{Direction, Message, Opcode};
 

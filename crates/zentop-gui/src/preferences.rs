@@ -5,6 +5,29 @@ use std::{
     path::{Path, PathBuf},
 };
 
+/// The most pinned apps, or domains, the Traffic sidebar keeps.
+pub const PIN_LIMIT: usize = 200;
+
+/// Normalizes one pinned app name or domain, rejecting anything that isn't a
+/// short plain name. Pins never hold traffic data.
+pub fn pin_name(value: &str, domain: bool) -> Option<String> {
+    let value = value.trim();
+    let valid = !value.is_empty()
+        && value.len() <= 255
+        && !value.chars().any(char::is_control)
+        && (!domain
+            || value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || b"-._:[]".contains(&byte)));
+    valid.then(|| {
+        if domain {
+            value.to_ascii_lowercase()
+        } else {
+            value.to_owned()
+        }
+    })
+}
+
 fn defaults() -> Value {
     serde_json::from_str(include_str!("default-config.json")).unwrap()
 }
@@ -41,6 +64,21 @@ fn merge(config: &mut Value, patch: &Value) {
                         .filter_map(|host| zentop_proxy::decrypt_host(host).ok())
                         .collect();
                     config[group][key] = serde_json::json!(hosts);
+                }
+                continue;
+            }
+            if group == "behavior"
+                && matches!(key.as_str(), "trafficPinnedApps" | "trafficPinnedDomains")
+            {
+                if let Some(names) = value.as_array() {
+                    let domain = key == "trafficPinnedDomains";
+                    let names: std::collections::BTreeSet<_> = names
+                        .iter()
+                        .filter_map(Value::as_str)
+                        .filter_map(|name| pin_name(name, domain))
+                        .take(PIN_LIMIT)
+                        .collect();
+                    config[group][key] = serde_json::json!(names);
                 }
                 continue;
             }
@@ -133,6 +171,15 @@ impl Preferences {
                 },
                 Some(error),
             ),
+        }
+    }
+
+    /// Preferences saved at `path`, starting from defaults, for tests.
+    #[cfg(test)]
+    pub fn at(path: PathBuf) -> Self {
+        Self {
+            path: Some(path),
+            config: defaults(),
         }
     }
 
@@ -249,6 +296,49 @@ mod tests {
         assert_eq!(config["behavior"]["trafficPort"], 9090);
         merge(&mut config, &json!({"behavior": {"trafficPort": null}}));
         assert!(config["behavior"]["trafficPort"].is_null());
+    }
+
+    #[test]
+    fn traffic_pins_are_bounded_plain_names() {
+        let mut config = defaults();
+        assert_eq!(config["behavior"]["trafficPinnedApps"], json!([]));
+        let many: Vec<_> = (0..300).map(|n| format!("app{n:03}")).collect();
+        merge(
+            &mut config,
+            &json!({"behavior": {
+                "trafficPinnedApps": many,
+                "trafficPinnedDomains": [
+                    "Example.COM", "example.com", "bad domain", "", "x\u{7}", 5, "[::1]"
+                ],
+            }}),
+        );
+        assert_eq!(
+            config["behavior"]["trafficPinnedApps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            PIN_LIMIT
+        );
+        assert_eq!(
+            config["behavior"]["trafficPinnedDomains"],
+            json!(["[::1]", "example.com"])
+        );
+        merge(
+            &mut config,
+            &json!({"behavior": {"trafficPinnedApps": "curl"}}),
+        );
+        assert_eq!(
+            config["behavior"]["trafficPinnedApps"]
+                .as_array()
+                .unwrap()
+                .len(),
+            PIN_LIMIT
+        );
+        assert_eq!(
+            pin_name(" Google Chrome Helper ", false).as_deref(),
+            Some("Google Chrome Helper")
+        );
+        assert_eq!(pin_name(&"x".repeat(256), false), None);
     }
 
     #[test]

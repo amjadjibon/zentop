@@ -239,10 +239,9 @@ impl Traffic {
                 )
             });
         let section = v_flex()
-            .px_3()
-            .py_1()
-            .bg(theme::palette(cx).card)
-            .border_b_1()
+            .p_2()
+            .rounded_md()
+            .border_1()
             .border_color(cx.theme().border)
             .child(controls)
             .when_some(session_error, |panel, error| {

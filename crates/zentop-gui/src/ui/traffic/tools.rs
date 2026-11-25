@@ -9,110 +9,6 @@ use zentop_proxy::{
 use super::*;
 
 impl Traffic {
-    pub(super) fn sidebar(&self, cx: &Context<Self>) -> impl IntoElement {
-        let label = |title| {
-            div()
-                .px_2()
-                .pt_2()
-                .pb_1()
-                .font_weight(FontWeight::SEMIBOLD)
-                .child(title)
-        };
-        let mut index = 0_usize;
-        let mut item = |scope: Scope, name: &str, count: usize, app, nested| {
-            index += 1;
-            let icon = if let Scope::App(key) = &scope {
-                self.sidebar
-                    .apps
-                    .get(key)
-                    .and_then(|group| group.identity)
-                    .and_then(|id| self.icons.get(&id))
-                    .and_then(Clone::clone)
-            } else {
-                None
-            };
-            let selected = self.scope.as_ref() == Some(&scope);
-            h_flex()
-                .id(("traffic-scope", index))
-                .min_w_0()
-                .gap_1()
-                .px_2()
-                .h(px(27.))
-                .rounded_md()
-                .cursor_pointer()
-                .when(nested, |row| row.pl_5())
-                .hover(|row| row.bg(cx.theme().table_hover))
-                .when(selected, |row| row.bg(cx.theme().table_active))
-                .when(app, |row| {
-                    row.child(if let Some(icon) = icon {
-                        gpui_kit::img(icon)
-                            .size_4()
-                            .flex_shrink_0()
-                            .into_any_element()
-                    } else {
-                        Icon::new(IconName::AppWindow)
-                            .size_4()
-                            .flex_shrink_0()
-                            .into_any_element()
-                    })
-                })
-                .child(div().flex_1().min_w_0().truncate().child(name.to_owned()))
-                .child(
-                    div()
-                        .text_color(cx.theme().muted_foreground)
-                        .child(count.to_string()),
-                )
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    this.scope = if this.scope.as_ref() == Some(&scope) {
-                        None
-                    } else {
-                        Some(scope.clone())
-                    };
-                    this.focus.focus(window, cx);
-                    this.list_scroll.scroll_to_item(0, ScrollStrategy::Top);
-                    cx.notify();
-                }))
-        };
-        let apps: Vec<_> = self
-            .sidebar
-            .apps
-            .iter()
-            .map(|(app, group)| item(Scope::App(app.clone()), &app.name, group.count, true, false))
-            .collect();
-        let mut domains = Vec::new();
-        for (name, group) in &self.sidebar.domains {
-            let grouped = group.hosts.len() > 1;
-            if grouped {
-                domains.push(item(
-                    Scope::Domain(name.clone()),
-                    name,
-                    group.count,
-                    false,
-                    false,
-                ));
-            }
-            domains.extend(group.hosts.iter().map(|(host, &count)| {
-                item(Scope::Host(host.clone()), host, count, false, grouped)
-            }));
-        }
-        v_flex()
-            .id("traffic-sidebar")
-            .w(px(175.))
-            .h_full()
-            .min_h_0()
-            .flex_shrink_0()
-            .overflow_y_scroll()
-            .p_1()
-            .text_xs()
-            .bg(theme::palette(cx).card)
-            .border_r_1()
-            .border_color(cx.theme().border)
-            .child(label("Apps"))
-            .children(apps)
-            .child(label("Domains"))
-            .children(domains)
-    }
-
     pub(super) fn key(
         &mut self,
         event: &gpui_kit::KeyDownEvent,
@@ -120,66 +16,124 @@ impl Traffic {
         cx: &mut Context<Self>,
     ) {
         let key = &event.keystroke;
-        if key.key == "escape" || (key.modifiers.platform && key.key == "k") {
+        let modifiers = &key.modifiers;
+        let command = modifiers.platform && !modifiers.control && !modifiers.alt;
+        let selected = self.selected;
+        let handled = match key.key.as_str() {
+            "escape" if !modifiers.modified() => {
+                self.reset_filters(window, cx);
+                self.focus.focus(window, cx);
+                true
+            }
+            "k" if command && !modifiers.shift => {
+                self.clear(cx);
+                true
+            }
+            "f" if command && modifiers.shift => {
+                self.show_sidebar = true;
+                self.sidebar_filter
+                    .update(cx, |input, cx| input.focus(window, cx));
+                true
+            }
+            "f" if command => {
+                self.toggle_filters(window, cx);
+                true
+            }
+            "r" if command && !modifiers.shift => {
+                if let Some(id) = selected {
+                    self.repeat(id, cx);
+                }
+                true
+            }
+            "e" if command && !modifiers.shift => {
+                if let Some(id) = selected {
+                    self.open_editor(Some(id), cx);
+                }
+                true
+            }
+            "c" if command && modifiers.shift => {
+                if let Some(id) = selected {
+                    self.copy_curl(id, cx);
+                }
+                true
+            }
+            "." if command && !modifiers.shift => {
+                self.toggle_pause(cx);
+                true
+            }
+            "up" | "down" if self.focus.is_focused(window) && !modifiers.modified() => {
+                self.move_selection(key.key == "up", cx);
+                true
+            }
+            _ => false,
+        };
+        if handled {
             cx.stop_propagation();
-            for input in &self.filters {
-                input.update(cx, |input, cx| input.set_value("", window, cx));
-            }
-            self.scope = None;
-            self.process_scope = None;
-            self.status = None;
-            self.kind = None;
-            self.errors = false;
             cx.notify();
-        } else if self.focus.is_focused(window) && !key.modifiers.modified() {
-            match key.key.as_str() {
-                "up" | "down" => {
-                    let rows = self.matching(cx);
-                    let Some(last) = rows.len().checked_sub(1) else {
-                        return;
-                    };
-                    let index = rows
-                        .iter()
-                        .position(|&index| Some(self.rows[index].id) == self.selected)
-                        .map_or(if key.key == "up" { last } else { 0 }, |index| {
-                            if key.key == "up" {
-                                index.saturating_sub(1)
-                            } else {
-                                (index + 1).min(last)
-                            }
-                        });
-                    let detail_open = self.detail_open;
-                    self.select(Some(self.rows[rows[index]].id));
-                    self.detail_open = detail_open;
-                    self.refresh_detail(cx);
-                    self.list_scroll
-                        .scroll_to_item(index, ScrollStrategy::Nearest);
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-                "enter" if self.selected.is_some() => {
-                    self.detail_open = true;
-                    self.tab = Tab::Request;
-                    self.refresh_detail(cx);
-                    cx.stop_propagation();
-                    cx.notify();
-                }
-                _ => {}
-            }
         }
     }
 
-    pub(super) fn export_har(&mut self, selected_only: bool, cx: &mut Context<Self>) {
-        let Some(session) = self.capture.read(cx).session.as_ref() else {
+    fn move_selection(&mut self, up: bool, cx: &mut Context<Self>) {
+        let rows = self.matching(cx);
+        let Some(last) = rows.len().checked_sub(1) else {
             return;
         };
-        let ids = if selected_only {
-            self.selected.into_iter().collect()
-        } else {
-            self.matching(cx)
-                .iter()
-                .map(|&index| self.rows[index].id)
-                .collect()
+        let index = rows
+            .iter()
+            .position(|&index| Some(self.rows[index].id) == self.selected)
+            .map_or(if up { last } else { 0 }, |index| {
+                if up {
+                    index.saturating_sub(1)
+                } else {
+                    (index + 1).min(last)
+                }
+            });
+        self.select(Some(self.rows[rows[index]].id));
+        self.refresh_detail(cx);
+        self.list_scroll
+            .scroll_to_item(index, ScrollStrategy::Nearest);
+    }
+
+    /// Copies a flow as cURL. Secrets are included only for the selected flow
+    /// with "Include secrets in cURL" checked.
+    pub(super) fn copy_curl(&mut self, id: u64, cx: &mut Context<Self>) {
+        let secrets = self.include_secrets && self.selected == Some(id);
+        let command = self
+            .capture
+            .read(cx)
+            .session
+            .as_ref()
+            .and_then(|session| session.flow(id, secrets))
+            .and_then(|flow| zentop_proxy::copy_as_curl(&flow, secrets));
+        match command {
+            Some(command) => {
+                cx.write_to_clipboard(ClipboardItem::new_string(command));
+                self.operation = Some(Ok(if secrets {
+                    "Copied as cURL, including secrets".into()
+                } else {
+                    "Copied as cURL with secrets left out".into()
+                }));
+            }
+            None => self.operation = Some(Err("Only HTTP requests can be copied as cURL".into())),
+        }
+        cx.notify();
+    }
+
+    pub(super) fn decrypt_host(&mut self, host: &str, cx: &mut Context<Self>) {
+        self.error = None;
+        self.edit_host(host, true, cx);
+        self.operation = Some(match &self.error {
+            Some(error) => Err(error.clone()),
+            None => Ok(format!(
+                "Added {host} to the decrypt list. Reconnect the program to decrypt it."
+            )),
+        });
+        cx.notify();
+    }
+
+    pub(super) fn export_har(&mut self, ids: Vec<u64>, cx: &mut Context<Self>) {
+        let Some(session) = self.capture.read(cx).session.as_ref() else {
+            return;
         };
         let export = session.har_export(ids);
         let options = HarOptions {
@@ -255,16 +209,9 @@ impl Traffic {
         self.operation = Some(match result {
             Ok(id) => {
                 self.refresh(cx);
-                if let Some(index) = self
-                    .matching(cx)
-                    .iter()
-                    .position(|&index| self.rows[index].id == id)
-                {
-                    self.list_scroll
-                        .scroll_to_item(index, ScrollStrategy::Nearest);
-                }
                 self.select(Some(id));
                 self.refresh_detail(cx);
+                self.scroll_to(id, cx);
                 Ok("Repeated request captured".into())
             }
             Err(error) => Err(error),
@@ -272,14 +219,19 @@ impl Traffic {
         cx.notify();
     }
 
-    pub(super) fn open_editor(&mut self, flow: u64, cx: &mut Context<Self>) {
-        let Some(draft) = self
-            .capture
-            .read(cx)
-            .session
-            .as_ref()
-            .and_then(|session| session.replay_draft(flow, self.reveal))
-        else {
+    /// Opens Edit and resend for a flow, or Compose with an empty request.
+    pub(super) fn open_editor(&mut self, flow: Option<u64>, cx: &mut Context<Self>) {
+        let Some(session) = self.capture.read(cx).session.as_ref() else {
+            self.operation = Some(Err("Start capture to send requests".into()));
+            cx.notify();
+            return;
+        };
+        let reveal = self.reveal && flow == self.selected;
+        let draft = match flow {
+            Some(flow) => session.replay_draft(flow, reveal),
+            None => Some(ReplayDraft::empty()),
+        };
+        let Some(draft) = draft else {
             self.operation = Some(Err("The original request is no longer available".into()));
             cx.notify();
             return;
@@ -291,9 +243,13 @@ impl Traffic {
         );
         let source = cx.entity().downgrade();
         let generation = self.generation;
-        let masked = !self.reveal;
+        let masked = flow.is_some() && !reveal;
         if let Err(error) = gpui_kit::open_window(options, cx, move |window, cx| {
-            window.set_window_title("Edit and resend");
+            window.set_window_title(if flow.is_some() {
+                "Edit and resend"
+            } else {
+                "Compose request"
+            });
             cx.new(|cx| Editor::new(source, generation, flow, masked, draft, window, cx))
         }) {
             self.operation = Some(Err(format!("Could not open request editor: {error}")));
@@ -441,7 +397,8 @@ struct HeaderEditor {
 struct Editor {
     source: WeakEntity<Traffic>,
     generation: u64,
-    id: u64,
+    /// The flow being edited, or `None` for a composed request.
+    id: Option<u64>,
     masked: bool,
     draft: ReplayDraft,
     method: Entity<InputState>,
@@ -457,7 +414,7 @@ impl Editor {
     fn new(
         source: WeakEntity<Traffic>,
         generation: u64,
-        id: u64,
+        id: Option<u64>,
         masked: bool,
         draft: ReplayDraft,
         window: &mut Window,
@@ -536,6 +493,21 @@ impl Editor {
         let method = self.method.read(cx).value();
         let url = self.url.read(cx).value();
         let body = self.body.read(cx).value();
+        let composed = ReplayDraft {
+            method: method.to_string(),
+            url: url.to_string(),
+            headers: self
+                .headers
+                .iter()
+                .map(|row| {
+                    (
+                        row.name.read(cx).value().to_string(),
+                        row.value.read(cx).value().to_string(),
+                    )
+                })
+                .collect(),
+            body: Some(body.to_string()),
+        };
         let edits = ReplayEdits {
             method: (method.as_ref() != self.draft.method).then(|| method.to_string()),
             url: (url.as_ref() != self.draft.url).then(|| url.to_string()),
@@ -565,7 +537,10 @@ impl Editor {
                     .flatten()
             })
             .ok_or("The capture session ended")
-            .and_then(|session| session.replay(self.id, edits));
+            .and_then(|session| match self.id {
+                Some(id) => session.replay(id, edits),
+                None => session.compose(composed),
+            });
         match result {
             Ok(result) => {
                 self.waiting = true;
@@ -598,7 +573,13 @@ impl Render for Editor {
             .size_full()
             .bg(cx.theme().background)
             .text_color(cx.theme().foreground)
-            .child(TitleBar::new().child(div().text_sm().child("Edit and resend")))
+            .child(
+                TitleBar::new().child(div().text_sm().child(if self.id.is_some() {
+                    "Edit and resend"
+                } else {
+                    "Compose request"
+                })),
+            )
             .child(
                 v_flex()
                     .id("traffic-editor-fields")
@@ -706,4 +687,16 @@ impl Render for Editor {
                     ),
             )
     }
+}
+
+fn cell(text: impl Into<SharedString>, width: f32) -> Div {
+    div()
+        .w(px(width))
+        .flex_shrink_0()
+        .truncate()
+        .child(text.into())
+}
+
+fn path_cell(text: impl Into<SharedString>) -> Div {
+    div().flex_1().min_w_0().truncate().child(text.into())
 }

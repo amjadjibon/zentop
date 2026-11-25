@@ -50,7 +50,8 @@ pub(crate) fn secret_header(name: &str) -> bool {
     matches!(name, "authorization" | "cookie" | "set-cookie") || secret_key(name)
 }
 
-pub(crate) const MASK: &str = "[redacted]";
+/// Replaces a secret value wherever the shared redaction policy masks it.
+pub const MASK: &str = "[redacted]";
 
 pub(crate) fn headers(raw: &Headers, secrets: Secrets) -> Headers {
     raw.iter()

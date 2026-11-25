@@ -17,6 +17,7 @@ use std::borrow::Cow;
 icon_assets!(
     ExtraIcons,
     [
+        Activity,
         AppWindow,
         ArrowDown,
         ArrowUp,
@@ -38,20 +39,26 @@ icon_assets!(
         Info,
         List,
         ListTree,
+        LockOpen,
         MemoryStick,
         Monitor,
         Server,
+        MousePointerClick,
         Network,
+        PanelBottomClose,
         Palette,
         Pause,
         Pin,
         PinOff,
         Play,
         Power,
+        Repeat,
         Settings,
         SlidersHorizontal,
+        SquarePen,
         Thermometer,
         Timer,
+        Trash,
         X
     ]
 );

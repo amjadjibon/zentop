@@ -27,6 +27,8 @@
     "keepRunning": false,
     "processView": "flat",
     "trafficPort": null,
-    "trafficDecryptHosts": []
+    "trafficDecryptHosts": [],
+    "trafficPinnedApps": [],
+    "trafficPinnedDomains": []
   }
 }
