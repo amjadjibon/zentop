@@ -47,7 +47,10 @@ listens and no certificate exists.
 3. **Phase 3A:** capture navigation, request replay, HAR export and WebSocket messages.
 4. **Phase 3C:** a dense, professional HTTP-debugger window (see below).
 5. **Phase 3B:** breakpoints, Map Local, Map Remote and rewrite rules (GUI only).
-6. **Later, each designed separately:** system-wide capture, a Terminal
+6. **Phase 3D:** Open with Zentop. Zentop launches Chromium browsers and
+   Electron apps pointed at its proxy and authorizes them by process family,
+   without the token and without changing system proxy settings (GUI only).
+7. **Later, each designed separately:** system-wide capture, a Terminal
    launcher, and decryption or traffic editing from the CLI.
 
 Each phase is useful without the next. Phase 1 alone answers "which program is
@@ -82,6 +85,8 @@ those can't depend on it.
   - The `Proxy-Authorization` header is consumed by the proxy and is never
     forwarded, recorded or shown.
   - This stops other local users, and web pages, from using the proxy.
+  - Phase 3D adds one other way in: the process family of an app Zentop
+    launched (see [Client-access policy](#client-access-policy)).
 - **Only proxy requests.** Requests in origin form (`GET / HTTP/1.1` sent
   straight to the port, as a web page hitting `localhost` would) are rejected
   with `400` and not recorded.
@@ -849,6 +854,239 @@ both HTTP/1.1 and HTTP/2.
   - rewrites;
   - a CONNECT tunnel that matches a rule but stays untouched.
 
+## Phase 3D: Open with Zentop
+
+Desktop apps built on Chromium (Google Chrome and other Chromium browsers,
+and Electron apps such as Claude, Slack, VS Code, Discord, Notion and
+Cursor) ignore `http_proxy` and can't send the session token. Phase 3D lets
+Zentop start such an app pointed at its proxy, and authorizes the app by
+process family instead of by token. The Mac's network and proxy settings
+never change. The GUI only; the CLI is unchanged.
+
+### Launch
+
+Zentop starts the chosen app with Chromium's proxy switch, which Chromium
+browsers and Electron apps honour:
+
+```
+--proxy-server=http://127.0.0.1:<port>   # no credentials in the URL
+--disable-quic                           # QUIC is never proxied
+```
+
+- **Launching.** `NSWorkspace openApplicationAtURL:configuration:` with
+  `arguments` and `createsNewApplicationInstance`. Its completion handler
+  returns the `NSRunningApplication`, whose PID Zentop records. LaunchServices
+  starts the app, so macOS holds the app itself responsible for its helpers,
+  not Zentop.
+- **Chromium browsers** get a fresh temporary profile, so the user's normal
+  browser session and its running instance are untouched:
+  `--user-data-dir=<temp> --no-first-run --no-default-browser-check`.
+  - Profiles live under `$TMPDIR/zentop-launched-profiles/<zentop pid>-<n>`.
+  - A profile is deleted when its browser exits, or when capture stops
+    after the browser has exited.
+  - On the next start, Zentop deletes profiles whose Zentop and browser
+    (from the profile's `SingletonLock`) are both gone. That covers a Zentop
+    crash.
+- **Electron apps** keep their normal data, so they stay signed in. Electron
+  apps are usually single-instance: a second launch hands off to the
+  running instance and exits.
+  - If the app is already running, Zentop asks first. It never quits an app
+    on its own.
+  - Only after explicit confirmation does Zentop quit it, gracefully with
+    `NSRunningApplication terminate` (the app may still ask to save work),
+    never with a signal. Zentop waits up to 10 seconds for it to exit, then
+    launches. If it is still running, Zentop says so and launches nothing.
+- **Arguments** are passed as an argument array, never through a shell.
+
+### App discovery
+
+- Zentop lists `.app` bundles in `/Applications` and `~/Applications`,
+  including one level of subfolders, reading each `Info.plist`.
+- **Chromium browsers** by bundle ID: Google Chrome (stable, beta, dev and
+  Canary), Chromium, Brave, Microsoft Edge, Vivaldi, Opera and Opera GX.
+  - Arc is left out: it isn't installed on the development Mac, so its
+    handling of `--proxy-server` is unverified.
+- **Electron apps** by `Contents/Frameworks/Electron Framework.framework`.
+- The menu shows each app's icon and name, browsers first. Zentop itself is
+  excluded.
+- **Choose app…** accepts any `.app`. An app that is neither kind gets a
+  warning that it may ignore the proxy switch, with Continue and Cancel.
+- Discovery runs off the UI thread when the Traffic window opens.
+
+### Client-access policy
+
+A connection is authorized if either:
+
+1. it sends the session token, unchanged from phase 1; or
+2. attribution resolves it to a process in a **launched family**.
+
+A launched family belongs to one app Zentop launched in this capture session.
+It is keyed by the root process's macOS **unique process ID** (`p_uniqueid`,
+64-bit, never reused while the Mac is up), not by PID. A process is in the
+family if its executable lies inside the launched app's bundle and it is:
+
+- the launched process itself (same unique ID);
+- a descendant: its parent's unique ID, or an ancestor's, is the root's.
+  Each step up compares the recorded parent unique ID
+  (`PROC_PIDT_BSDINFOWITHUNIQID`) with the parent's actual unique ID, so a
+  reused PID breaks the chain instead of joining it; or
+- a helper macOS holds the root responsible for
+  (`responsibility_get_pid_responsible_for_pid`, as in the process list).
+  The responsible PID's current unique ID must be the root's, and the root
+  must have started no later than the helper. A process can't be
+  responsible for one that started before it, so a reused PID can't pass.
+
+The decision happens after the existing first-request attribution wait (up
+to 250 ms).
+- Attribution that is unknown or ambiguous never authorizes.
+- The attributed PID must still have the attributed unique ID when the
+  family is checked.
+- The result is cached per connection, but every request checks that the
+  family is still registered.
+- Unauthorized requests get `407`, as before, and are not recorded.
+- **Launch grace.** While a launch is in progress, an unauthorized request
+  waits up to 5 seconds for the family to be registered, then is checked
+  again. Otherwise Chromium's first connections would race the registration
+  and show a proxy sign-in prompt.
+
+Families are registered only for apps Zentop launched in the current
+capture session. A family is dropped when you choose **Stop capturing** for
+it, when its root exits (its PID no longer has its unique ID), or when
+capture stops. Open tunnels finish on their own; new connections from a
+dropped family get `407`.
+
+Why this keeps others out:
+- **Other local users.** Their processes can't descend from, or be the
+  responsibility of, an app launched in your session. Zentop also can't read
+  their process details, so their connections stay unattributed.
+- **Other apps.** Only the launched app's own processes match, and only
+  executables inside its bundle. That excludes, for example, a shell in an
+  editor's integrated terminal. That shell still needs the token. PID reuse
+  is defeated by unique IDs and start-time order.
+- **Web pages.** A page in another browser reaches the port from that
+  browser's process, which isn't in a family. A page in the launched browser
+  can't make the browser send proxy-form or CONNECT requests. Chromium
+  bypasses the proxy for loopback, so a page fetching the proxy port directly
+  sends an origin-form request, which gets `400`. The destination policy
+  still refuses local and private addresses.
+- **Same-user malware** is out of scope, as it is for the token: such a
+  process can already launch the app itself or read your traffic in other
+  ways.
+
+### HTTPS
+
+Decryption still applies only to exact decrypt-list hosts. Everything else
+stays a blind tunnel, where the app verifies the real server itself. There
+are two explicit ways for a launched app to accept Zentop's certificates:
+
+- **(a) Trust the root** (the existing Trust button). It works for every app,
+  and changes user-domain trust.
+- **(b) Accept in the launched instance only.** For launched Chromium and
+  Electron apps, Zentop can pass
+  `--ignore-certificate-errors-spki-list=<base64 SHA-256 of an SPKI>`. That
+  instance then accepts Zentop's certificates with no trust change.
+  - It's off by default. It's chosen per launch in the menu, and needs a
+    usable certificate.
+  - Chrome shows an "unsupported command-line flag" warning bar.
+
+**What the flag matches.** Tested with Chrome 157, headless, with a temporary
+profile, against a local TLS server and an untrusted test root:
+
+| Hash in the flag | Chain the server sends | Result |
+| --- | --- | --- |
+| none | leaf + root | rejected |
+| root | leaf + root | accepted |
+| root | leaf only | rejected |
+| leaf | leaf only | accepted |
+| leaf | leaf + root | accepted |
+
+Chrome hashes the certificates the server presents, the leaf and any
+intermediates, and accepts the chain if any hash is listed. It doesn't check
+that they chain together.
+
+That's a trade-off. Any server that presents a certificate with the listed
+key passes in that instance, even through a blind tunnel. A certificate is
+public, so the listed key must not be one an attacker could see.
+- The long-lived root is a poor choice. It sits unprotected in the login
+  keychain, and Proxy setup exports it as a PEM.
+- Zentop instead creates one in-memory **session leaf key** when you first
+  launch with this option. From then on, every leaf in that capture session
+  uses that key. The key is never stored, and is replaced every session.
+- The flag lists that key's hash, and leaves are sent without the root, as
+  before.
+- The cost: for the rest of that session, leaves share one key instead of
+  one key per host. The key never leaves memory, and only a local client the
+  proxy has authorized ever sees a certificate carrying it.
+
+**`--user-data-dir`.** Chromium documents that the switch has no effect
+unless `--user-data-dir` is present. Zentop always passes it to browsers, so
+this doesn't matter for them. Testing without it would have used the
+developer's own Chrome profile and running Chrome, so it wasn't run. Electron
+apps keep their own data directory, so whether they honour the flag is
+verified per app. If one doesn't, use option (a).
+
+**Caveats.**
+- Apps that pin certificates reject Zentop's leaf whatever you choose, and
+  the row says the program rejected Zentop's certificate.
+- QUIC (HTTP/3) is UDP and never proxied. Chromium already falls back to TCP
+  when a proxy is set, and `--disable-quic` makes that explicit.
+- Electron apps that make requests from Node.js, in the main process or in
+  extensions, don't use Chromium's proxy switch. Those requests go direct
+  and aren't captured.
+
+### Lifecycle and interface
+
+- **Toolbar.** An **Open App with Zentop** menu lists the discovered apps
+  with icons, then **Choose app…**, and an **Accept Zentop's certificate in
+  launched apps** check item for option (b).
+  - If capture is stopped, launching starts it first with the window's
+    settings.
+- **Proxy setup** gains a **Launched** list. Each row shows the app's icon,
+  name, PID and state (Capturing, Not capturing, Exited), with:
+  - **Stop capturing**, which drops the family; and
+  - **Quit…**, which asks first and then quits that instance gracefully.
+- **Sidebar.** Flows from a launched family carry the launched app's name.
+  The Apps tree groups them under it, for example **Google Chrome** with
+  its icon. The Client column still shows the helper process that owned the
+  socket.
+- **When capture stops** while launched apps still run, a notice says they
+  can't reach the network until relaunched normally, with **Quit launched
+  apps…** (one confirmation for all).
+- Quitting Zentop doesn't quit launched apps. Their profiles are cleaned up
+  on the next start.
+
+### Testing
+
+- **Unit:**
+  - the launch argument builder: Chrome against Electron arguments, the
+    temporary profile, the proxy URL, `--disable-quic`, and the SPKI flag
+    only when chosen;
+  - app discovery against fixture bundles (browsers by bundle ID, Electron
+    by framework, others ignored, Zentop excluded);
+  - stale-profile cleanup;
+  - family authorization against a fake process table:
+    - the launched PID, a child and a responsible helper are authorized;
+    - an unrelated PID, unknown attribution, a reused PID with another
+      unique ID, a helper outside the bundle, and a responsible process that
+      started after the helper are refused;
+    - a family is dropped after Stop capturing or after its root exits;
+  - session leaf key reuse and its SPKI hash.
+- **Integration** (`tests/session.rs`): a child process spawned by the test,
+  in a registered family, gets through without a token. An unrelated client
+  (the test process) gets `407`. After the family is dropped, the same child
+  gets `407`.
+- **Live:** launch Chrome with a temporary profile and browse plain and
+  decrypted HTTPS. Rows must be attributed to Chrome's helpers with no
+  token, and curl without the token must still get `407`.
+
+### Terms of service
+
+Inspecting your own traffic is fine. Replaying or automating requests
+against a service's private API with your session (Repeat, Edit and resend,
+breakpoints, rules) may breach that service's terms. Use official APIs for
+automation, and never capture other people's traffic. The user guide says
+this next to Open with Zentop.
+
 ## Later: system-wide capture
 
 Deferred until designed separately. Requirements the review established:
@@ -871,6 +1109,7 @@ Deferred until designed separately. Requirements the review established:
   Zentop: System Settings, and the equivalent commands.
 - **Browsers and the token.** Browsers can't easily send a proxy token, so
   system routing needs its own client-access policy before it can ship.
+  Phase 3D's launched-family policy covers only apps Zentop starts itself.
 - **Verify browser behaviour.** Check Safari and Chrome on supported macOS
   versions with a working proxy, an unreachable proxy, and bypass rules,
   before claiming what gets captured.
@@ -897,6 +1136,13 @@ Deferred until designed separately. Requirements the review established:
 - **An OS-assigned port by default.** No clash with Proxyman, Charles or dev
   servers; a fixed port is available when you need one.
 - **A separate Traffic window**, following SSH Hosts.
+- **Launching apps with Chromium's proxy switch, over system-wide capture,
+  for browsers and Electron apps (phase 3D).** No system settings change, and
+  the launched family is authorized by unique process ID, so the token
+  still guards everything else.
+- **A session leaf key for the SPKI switch, over the root's key.** Chrome
+  accepts any presented certificate whose key is listed, so the listed key
+  must never appear in a public certificate.
 
 ## Open questions
 
