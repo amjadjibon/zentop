@@ -15,7 +15,10 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::task::JoinHandle;
 use tokio_rustls::{rustls, TlsAcceptor, TlsConnector};
-use zentop_proxy::{Attribution, Body, FlowKind, FlowState, Options, Session};
+use zentop_proxy::{
+    Attribution, Body, Direction, FlowKind, FlowState, HarOptions, Opcode, Options, ReplayEdits,
+    ReplayHeader, ReplayValue, Session,
+};
 
 fn proxy(local: bool) -> Session {
     Session::start(Options {
@@ -402,10 +405,72 @@ async fn translates_http2_to_http11_origin() {
     assert_eq!(response.collect().await.unwrap().to_bytes(), "h2 response");
 }
 
-#[tokio::test]
-async fn forwards_http11_upgrades_and_regular_origin_responses() {
+const CLIENT_FRAME: &[u8] = &[
+    0x81,
+    0x85,
+    1,
+    2,
+    3,
+    4,
+    b'h' ^ 1,
+    b'e' ^ 2,
+    b'l' ^ 3,
+    b'l' ^ 4,
+    b'o' ^ 1,
+];
+const SERVER_FRAME: &[u8] = b"\x81\x05hello";
+
+fn websocket_echo(request: &mut Request<hyper::body::Incoming>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
+    let upgrade = hyper::upgrade::on(request);
+    tokio::spawn(async move {
+        let mut stream = TokioIo::new(upgrade.await.unwrap());
+        let mut bytes = [0; CLIENT_FRAME.len()];
+        stream.read_exact(&mut bytes).await.unwrap();
+        assert_eq!(bytes, CLIENT_FRAME);
+        stream.write_all(SERVER_FRAME).await.unwrap();
+        stream.shutdown().await.unwrap();
+        // Keep the write half available until the peer finishes its TLS shutdown.
+        assert_eq!(stream.read(&mut bytes).await.unwrap(), 0);
+    });
+}
+
+async fn exercise_websocket(session: &Session, id: u64, response: Response<hyper::body::Incoming>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
+    assert_eq!(response.headers()["upgrade"], "websocket");
+    let mut stream = TokioIo::new(hyper::upgrade::on(response).await.unwrap());
+    stream.write_all(CLIENT_FRAME).await.unwrap();
+    let mut bytes = [0; SERVER_FRAME.len()];
+    stream.read_exact(&mut bytes).await.unwrap();
+    assert_eq!(bytes, SERVER_FRAME);
+    stream.shutdown().await.unwrap();
+    assert_eq!(stream.read(&mut bytes).await.unwrap(), 0);
+    drop(stream);
+    wait(|| session.flow(id, false).unwrap().metadata.state == FlowState::Complete).await;
+    let flow = session.flow(id, false).unwrap();
+    assert_eq!(
+        flow.metadata.bytes,
+        (CLIENT_FRAME.len() as u64, SERVER_FRAME.len() as u64)
+    );
+    assert_eq!(flow.metadata.kind, FlowKind::Upgrade);
+    assert_eq!(flow.message_count, 2);
+    for (message, expected) in flow
+        .messages
+        .iter()
+        .zip([Direction::ClientToServer, Direction::ServerToClient])
+    {
+        assert_eq!(message.direction, expected);
+        assert_eq!(message.opcode, Opcode::Text);
+        assert_eq!(message.size, 5);
+        assert_eq!(message.payload, b"hello");
+    }
+}
+
+#[tokio::test]
+async fn forwards_http11_upgrades_and_regular_origin_responses() {
     let origin = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = origin.local_addr().unwrap();
     let server = tokio::spawn(async move {
@@ -423,13 +488,7 @@ async fn forwards_http11_upgrades_and_regular_origin_responses() {
                             assert!(!request.headers().contains_key("proxy-authorization"));
                             let mut response = Response::builder().header("upgrade", "websocket");
                             if switching {
-                                let upgrade = hyper::upgrade::on(&mut request);
-                                tokio::spawn(async move {
-                                    let mut stream = TokioIo::new(upgrade.await.unwrap());
-                                    let mut bytes = [0; 5];
-                                    stream.read_exact(&mut bytes).await.unwrap();
-                                    stream.write_all(&bytes).await.unwrap();
-                                });
+                                websocket_echo(&mut request);
                                 response = response.status(101).header("connection", "upgrade");
                             }
                             let bytes = if switching {
@@ -477,28 +536,18 @@ async fn forwards_http11_upgrades_and_regular_origin_responses() {
     );
 
     let (mut sender, _) = client(session.address()).await;
-    let mut response = sender.send_request(request()).await.unwrap();
-    assert_eq!(response.status(), StatusCode::SWITCHING_PROTOCOLS);
-    assert_eq!(response.headers()["upgrade"], "websocket");
-    assert_eq!(response.headers()["connection"], "upgrade");
-    let mut stream = TokioIo::new(hyper::upgrade::on(&mut response).await.unwrap());
-    stream.write_all(b"hello").await.unwrap();
-    let mut bytes = Vec::new();
-    stream.read_to_end(&mut bytes).await.unwrap();
-    assert_eq!(bytes, b"hello");
-    drop(stream);
-    wait(|| session.flow(2, false).unwrap().metadata.state == FlowState::Complete).await;
+    let response = sender.send_request(request()).await.unwrap();
+    exercise_websocket(&session, 2, response).await;
     let flow = session.flow(2, false).unwrap();
     assert_eq!(flow.metadata.kind, FlowKind::Upgrade);
     assert_eq!(flow.metadata.status, Some(101));
-    assert_eq!(flow.metadata.bytes, (5, 5));
     assert!(flow.metadata.timing.attribution.is_some());
     assert!(flow.metadata.timing.connect.is_some());
     assert!(flow.metadata.timing.total >= flow.metadata.timing.ttfb.unwrap());
     for body in [flow.request_body, flow.response_body] {
         assert!(matches!(
             body,
-            Body::Skipped("Upgraded connection; frames not captured")
+            Body::Skipped("Upgraded connection; see Messages for WebSocket traffic")
         ));
     }
     server.await.unwrap();
@@ -768,6 +817,15 @@ struct DecryptedTest {
 
 impl DecryptedTest {
     async fn new(origin_h2: bool, trust_origin: bool, blocks: usize) -> Self {
+        Self::with_origin(origin_h2, trust_origin, blocks, false).await
+    }
+
+    async fn with_origin(
+        origin_h2: bool,
+        trust_origin: bool,
+        blocks: usize,
+        websocket: bool,
+    ) -> Self {
         let origin_cert = rcgen::generate_simple_self_signed(vec!["localhost".to_owned()]).unwrap();
         let origin_trust = trust_origin.then(|| origin_cert.cert.der().clone());
         let mut tls = rustls::ServerConfig::builder_with_provider(Arc::new(
@@ -782,11 +840,13 @@ impl DecryptedTest {
                 .into(),
         )
         .unwrap();
-        tls.alpn_protocols = vec![if origin_h2 {
-            b"h2".to_vec()
+        tls.alpn_protocols = if websocket {
+            vec![b"h2".to_vec(), b"http/1.1".to_vec()]
+        } else if origin_h2 {
+            vec![b"h2".to_vec()]
         } else {
-            b"http/1.1".to_vec()
-        }];
+            vec![b"http/1.1".to_vec()]
+        };
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let port = listener.local_addr().unwrap().port();
         tokio::spawn(async move {
@@ -795,30 +855,47 @@ impl DecryptedTest {
                 return;
             };
             let server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-            let http = service_fn(move |request: Request<hyper::body::Incoming>| async move {
-                assert_eq!(
-                    request.version(),
-                    if origin_h2 {
-                        http::Version::HTTP_2
-                    } else {
-                        http::Version::HTTP_11
+            let http = service_fn(
+                move |mut request: Request<hyper::body::Incoming>| async move {
+                    if websocket {
+                        assert_eq!(request.version(), http::Version::HTTP_11);
+                        assert_eq!(request.uri().path(), "/echo");
+                        websocket_echo(&mut request);
+                        return Ok::<_, Infallible>(
+                            Response::builder()
+                                .status(101)
+                                .header("connection", "upgrade")
+                                .header("upgrade", "websocket")
+                                .body(Stream(0))
+                                .unwrap(),
+                        );
                     }
-                );
-                assert_eq!(request.uri().path(), "/capture");
-                assert!(request.headers().get("proxy-authorization").is_none());
-                assert_eq!(
-                    request.into_body().collect().await.unwrap().to_bytes(),
-                    "request body"
-                );
-                Ok::<_, Infallible>(
-                    Response::builder()
-                        .header("set-cookie", "session=secret")
-                        .header("x-origin", "local TLS origin")
-                        .body(Stream(blocks))
-                        .unwrap(),
-                )
-            });
-            let _ = server.serve_connection(TokioIo::new(tls), http).await;
+                    assert_eq!(
+                        request.version(),
+                        if origin_h2 {
+                            http::Version::HTTP_2
+                        } else {
+                            http::Version::HTTP_11
+                        }
+                    );
+                    assert_eq!(request.uri().path(), "/capture");
+                    assert!(request.headers().get("proxy-authorization").is_none());
+                    assert_eq!(
+                        request.into_body().collect().await.unwrap().to_bytes(),
+                        "request body"
+                    );
+                    Ok::<_, Infallible>(
+                        Response::builder()
+                            .header("set-cookie", "session=secret")
+                            .header("x-origin", "local TLS origin")
+                            .body(Stream(blocks))
+                            .unwrap(),
+                    )
+                },
+            );
+            let _ = server
+                .serve_connection_with_upgrades(TokioIo::new(tls), http)
+                .await;
         });
 
         let mut ca = rcgen::CertificateParams::default();
@@ -988,7 +1065,7 @@ async fn decrypted_stream_larger_than_the_capture_budget_still_forwards() {
 }
 
 #[tokio::test]
-async fn decrypted_connection_enforces_names_and_refuses_upgrades() {
+async fn decrypted_connection_enforces_names_on_requests_and_upgrades() {
     let test = DecryptedTest::new(false, true, 1).await;
     assert!(test.connect("other.example", false, true).await.is_err());
     let mismatched = test.session.flow(0, false).unwrap();
@@ -1023,10 +1100,10 @@ async fn decrypted_connection_enforces_names_and_refuses_upgrades() {
         ),
         (
             Request::get("/")
-                .header("host", format!("localhost:{}", test.port))
+                .header("host", "other.example")
                 .header("connection", "upgrade")
                 .header("upgrade", "websocket"),
-            501,
+            421,
         ),
     ] {
         let response = sender
@@ -1034,12 +1111,7 @@ async fn decrypted_connection_enforces_names_and_refuses_upgrades() {
             .await
             .unwrap();
         assert_eq!(response.status(), status);
-        let body = response.collect().await.unwrap().to_bytes();
-        if status == 501 {
-            assert!(
-                String::from_utf8_lossy(&body).contains("remove the host from the decrypt list")
-            );
-        }
+        response.collect().await.unwrap();
     }
     let tls = test.connect("localhost", true, true).await.unwrap();
     let (mut sender, driver) =
@@ -1082,4 +1154,222 @@ async fn upstream_tls_failure_and_client_certificate_rejection_are_visible() {
         matches!(test.session.flow(2, false).unwrap().metadata.state,
         FlowState::UpstreamTls(reason) if reason.contains("UnknownIssuer"))
     );
+}
+
+#[tokio::test]
+async fn relays_and_records_websocket_after_tls_termination() {
+    let test = DecryptedTest::with_origin(false, true, 0, true).await;
+    let tls = test.connect("localhost", false, true).await.unwrap();
+    let (mut sender, driver) = hyper::client::conn::http1::handshake(TokioIo::new(tls))
+        .await
+        .unwrap();
+    tokio::spawn(driver.with_upgrades());
+    let response = sender
+        .send_request(
+            Request::get("/echo")
+                .header("host", format!("localhost:{}", test.port))
+                .header("connection", "upgrade")
+                .header("upgrade", "websocket")
+                .body(Full::<Bytes>::default())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    exercise_websocket(&test.session, 1, response).await;
+    assert!(test
+        .session
+        .flow(1, false)
+        .unwrap()
+        .metadata
+        .timing
+        .tls
+        .is_some());
+}
+
+#[tokio::test]
+async fn repeats_and_edits_captured_requests_and_enforces_policy() {
+    let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let address = listener.local_addr().unwrap();
+    let (sent, mut received) = tokio::sync::mpsc::channel(4);
+    tokio::spawn(async move {
+        for _ in 0..3 {
+            let (stream, _) = listener.accept().await.unwrap();
+            let sent = sent.clone();
+            tokio::spawn(async move {
+                let _ = hyper::server::conn::http1::Builder::new()
+                    .serve_connection(
+                        TokioIo::new(stream),
+                        service_fn(move |request: Request<hyper::body::Incoming>| {
+                            let sent = sent.clone();
+                            async move {
+                                let (head, body) = request.into_parts();
+                                let body = body.collect().await.unwrap().to_bytes();
+                                sent.send((head, body)).await.unwrap();
+                                Ok::<_, Infallible>(Response::new(Full::new(Bytes::from_static(
+                                    b"origin reply",
+                                ))))
+                            }
+                        }),
+                    )
+                    .await;
+            });
+        }
+    });
+    let session = proxy(true);
+    let (mut sender, _) = client(session.address()).await;
+    let original = sender
+        .send_request(
+            Request::post(format!(
+                "http://{address}/capture?token=original&api_key=keep"
+            ))
+            .header("proxy-authorization", auth(&session))
+            .header("authorization", "Bearer actual")
+            .header("cookie", "hello=world")
+            .header("x-opaque", http::HeaderValue::from_bytes(&[0xff]).unwrap())
+            .body(Full::new(Bytes::from_static(b"original body")))
+            .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(original.collect().await.unwrap().to_bytes(), "origin reply");
+    let (head, _) = received.recv().await.unwrap();
+    wait(|| session.flow(0, false).unwrap().replayable).await;
+    let draft = session.replay_draft(0, false).unwrap();
+    assert!(!draft.url.contains("original"));
+    assert_eq!(
+        draft
+            .headers
+            .iter()
+            .find(|(name, _)| name == "authorization")
+            .unwrap()
+            .1,
+        "[redacted]"
+    );
+    assert!(session
+        .replay_draft(0, true)
+        .unwrap()
+        .url
+        .contains("original"));
+
+    let repeated = session
+        .replay(0, ReplayEdits::default())
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap();
+    let (same, body) = received.recv().await.unwrap();
+    assert_eq!(same.method, head.method);
+    assert_eq!(same.uri, head.uri);
+    assert_eq!(same.headers["authorization"], "Bearer actual");
+    assert_eq!(same.headers["x-opaque"].as_bytes(), &[0xff]);
+    assert!(!same.headers.contains_key("proxy-authorization"));
+    assert_eq!(body, "original body");
+    let flow = session.flow(repeated, false).unwrap();
+    assert!(flow.metadata.repeated);
+    assert_eq!(flow.metadata.process.name(), "Zentop");
+    assert_eq!(flow.response_body.kept(), b"origin reply");
+
+    let edited = session
+        .replay(
+            0,
+            ReplayEdits {
+                method: Some("PATCH".into()),
+                url: Some(format!(
+                    "http://{address}/edited?token=new&api_key=[redacted]"
+                )),
+                preserve_masked_query: true,
+                body: Some("updated body".into()),
+                headers: Some(
+                    draft
+                        .headers
+                        .iter()
+                        .enumerate()
+                        .map(|(i, (name, _))| ReplayHeader {
+                            name: name.clone(),
+                            value: if name == "authorization" {
+                                ReplayValue::Edited("[redacted]".into())
+                            } else {
+                                ReplayValue::Original(i)
+                            },
+                        })
+                        .collect(),
+                ),
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap();
+    let (head, body) = received.recv().await.unwrap();
+    assert_eq!(head.method, "PATCH");
+    assert_eq!(head.uri, "/edited?token=new&api_key=keep");
+    assert_eq!(head.headers["authorization"], "[redacted]");
+    assert_eq!(head.headers["cookie"], "hello=world");
+    assert_eq!(head.headers["content-length"], "12");
+    assert_eq!(body, "updated body");
+    assert!(session.flow(edited, false).unwrap().metadata.repeated);
+
+    assert!(session.allow_local_destinations(false));
+    let blocked = session
+        .replay(0, ReplayEdits::default())
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(blocked.contains("local address policy"));
+    assert!(matches!(
+        session.flow(3, false).unwrap().metadata.state,
+        FlowState::Refused(_)
+    ));
+    let unlisted = session
+        .replay(
+            0,
+            ReplayEdits {
+                url: Some("https://example.com/".into()),
+                ..ReplayEdits::default()
+            },
+        )
+        .unwrap()
+        .await
+        .unwrap()
+        .unwrap_err();
+    assert!(unlisted.contains("decrypt list"));
+
+    for include_bodies in [false, true] {
+        let mut output = Vec::new();
+        assert_eq!(
+            session
+                .har_export(vec![0, repeated, edited])
+                .write(&mut output, HarOptions { include_bodies })
+                .unwrap(),
+            3
+        );
+        let parsed: serde_json::Value = serde_json::from_slice(&output).unwrap();
+        assert_eq!(parsed["log"]["version"], "1.2");
+        assert_eq!(parsed["log"]["creator"]["name"], "Zentop");
+        let entries = parsed["log"]["entries"].as_array().unwrap();
+        let first = &entries[0];
+        assert_eq!(first["request"]["method"], "POST");
+        assert_eq!(first["response"]["status"], 200);
+        assert_eq!(first["request"]["queryString"][0]["value"], "[redacted]");
+        assert_eq!(first["request"]["queryString"][1]["value"], "[redacted]");
+        let notes = String::from_utf8(output).unwrap();
+        assert!(!notes.contains("Bearer actual"));
+        assert!(!notes.contains("hello=world"));
+        assert!(!notes.contains("api_key=keep"));
+        assert!(!notes.contains("token=original"));
+        assert!(!notes.contains(session.token()));
+        assert_eq!(
+            first["request"]["postData"]["text"].as_str(),
+            include_bodies.then_some("original body")
+        );
+        assert_eq!(
+            first["response"]["content"]["text"].as_str(),
+            include_bodies.then_some("origin reply")
+        );
+        assert!(first["startedDateTime"].as_str().unwrap().ends_with('Z'));
+        for field in ["send", "wait", "receive"] {
+            assert!(first["timings"][field].as_f64().unwrap() >= 0.);
+        }
+    }
 }

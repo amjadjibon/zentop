@@ -14,6 +14,7 @@ pub struct Metadata {
     pub started: SystemTime,
     pub process: Attribution,
     pub kind: FlowKind,
+    pub repeated: bool,
     pub method: String,
     pub host: String,
     /// Paths here exclude queries, including when used by the CLI.
@@ -55,7 +56,7 @@ pub(crate) fn headers(raw: &Headers, secrets: Secrets) -> Headers {
         .collect()
 }
 
-fn secret_key(name: &str) -> bool {
+pub(crate) fn secret_key(name: &str) -> bool {
     let name = name.as_bytes();
     let mut decoded = Vec::with_capacity(name.len());
     let mut i = 0;

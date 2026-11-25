@@ -15,6 +15,8 @@ const FLOW_LIMIT: usize = 2_000;
 const BODY_LIMIT: usize = 1024 * 1024;
 const HEAD_LIMIT: usize = 64 * 1024;
 const EVENT_LIMIT: usize = 1_024;
+const MESSAGE_OVERHEAD: usize =
+    std::mem::size_of::<crate::Message>() + 3 * std::mem::size_of::<usize>();
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Side {
@@ -30,7 +32,17 @@ struct Record {
     private_headers: [Vec<(usize, String)>; 2],
     bodies: [Body; 2],
     headers_truncated: bool,
+    request_headers_truncated: bool,
+    request_complete: bool,
+    request_has_trailers: bool,
+    opaque_request_headers: Vec<(usize, http::HeaderValue)>,
     head_bytes: usize,
+    messages: Vec<Arc<crate::Message>>,
+    message_count: u64,
+    message_payload: usize,
+    message_work: usize,
+    messages_cleared: bool,
+    websocket: bool,
     reported: bool,
     revision: u64,
 }
@@ -41,6 +53,7 @@ struct CapturedHeaders {
     private: Vec<(usize, String)>,
     bytes: usize,
     truncated: bool,
+    opaque: Vec<(usize, http::HeaderValue)>,
 }
 
 pub(crate) struct Store {
@@ -134,6 +147,8 @@ impl Store {
     fn remove(&mut self, id: u64) {
         if let Some(record) = self.records.remove(&id) {
             self.counters.memory -= record.head_bytes
+                + record.message_payload
+                + record.messages.len() * MESSAGE_OVERHEAD
                 + record
                     .bodies
                     .iter()
@@ -160,6 +175,12 @@ impl Store {
             if self.records[&id].metadata.state == FlowState::Active {
                 self.skip_body(id, Side::Request, "Cleared during capture");
                 self.skip_body(id, Side::Response, "Cleared during capture");
+                let record = self.records.get_mut(&id).unwrap();
+                self.counters.memory -=
+                    record.message_payload + record.messages.len() * MESSAGE_OVERHEAD;
+                record.message_payload = 0;
+                record.messages = Vec::new();
+                record.messages_cleared = true;
             } else {
                 self.remove(id);
             }
@@ -211,7 +232,7 @@ impl Store {
             self.remove(oldest);
             self.counters.flows_dropped += 1;
         }
-        let headers = self.capture_headers(raw_headers, fixed);
+        let headers = self.capture_headers(raw_headers, fixed, true);
         request.headers = headers.display;
         self.counters.memory += fixed;
         if process != PENDING_ATTRIBUTION && matches!(process, Attribution::Unknown(_)) {
@@ -227,6 +248,7 @@ impl Store {
                     started: SystemTime::now(),
                     process,
                     kind,
+                    repeated: false,
                     method,
                     host,
                     path,
@@ -248,6 +270,16 @@ impl Store {
                     Default::default()
                 },
                 headers_truncated: headers.truncated,
+                request_headers_truncated: headers.truncated,
+                request_complete: false,
+                request_has_trailers: false,
+                opaque_request_headers: headers.opaque,
+                messages: Vec::new(),
+                message_count: 0,
+                message_payload: 0,
+                message_work: 0,
+                messages_cleared: false,
+                websocket: false,
                 reported: false,
                 revision: 0,
             },
@@ -256,7 +288,12 @@ impl Store {
         Some(id)
     }
 
-    fn capture_headers(&mut self, headers: &HeaderMap, reserved: usize) -> CapturedHeaders {
+    fn capture_headers(
+        &mut self,
+        headers: &HeaderMap,
+        reserved: usize,
+        retain_opaque: bool,
+    ) -> CapturedHeaders {
         let mut captured = CapturedHeaders::default();
         let mut wire_bytes = 0;
         for (name, value) in headers {
@@ -264,15 +301,21 @@ impl Store {
                 continue;
             }
             let len = name.as_str().len() + value.as_bytes().len() + 4;
-            let value = String::from_utf8_lossy(value.as_bytes());
+            let raw = value;
+            let value = String::from_utf8_lossy(raw.as_bytes());
+            let opaque = retain_opaque && matches!(value, std::borrow::Cow::Owned(_));
             let secret = presentation::secret_header(name.as_str());
             let memory = name.as_str().len()
                 + value.len()
                 + 4
-                + if secret { presentation::MASK.len() } else { 0 };
+                + if secret { presentation::MASK.len() } else { 0 }
+                + if opaque { raw.as_bytes().len() } else { 0 };
             if wire_bytes + len > HEAD_LIMIT || !self.make_room(reserved + memory) {
                 captured.truncated = true;
                 break;
+            }
+            if opaque {
+                captured.opaque.push((captured.display.len(), raw.clone()));
             }
             let name = name.to_string();
             if secret {
@@ -300,7 +343,7 @@ impl Store {
                 ..CapturedHeaders::default()
             }
         } else {
-            self.capture_headers(headers, 0)
+            self.capture_headers(headers, 0, false)
         };
         let record = self.records.get_mut(&id).unwrap();
         record.head_bytes += headers.bytes;
@@ -310,9 +353,19 @@ impl Store {
         record.metadata.timing.ttfb = Some(ttfb);
         record.response = Some(ResponseHead {
             status,
+            version: "HTTP/1.1".into(),
             headers: headers.display,
         });
         self.changed(id);
+    }
+
+    pub fn response_version(&mut self, id: Option<u64>, version: http::Version) {
+        if let Some(head) = id
+            .and_then(|id| self.records.get_mut(&id))
+            .and_then(|record| record.response.as_mut())
+        {
+            head.version = format!("{version:?}");
+        }
     }
 
     pub fn waited_for_attribution(&mut self, id: Option<u64>, elapsed: Duration) {
@@ -531,15 +584,178 @@ impl Store {
         Some((current, self.flow(id, reveal)?))
     }
 
-    pub fn upgraded(&mut self, id: Option<u64>) {
+    pub fn upgraded(&mut self, id: Option<u64>, websocket: bool) {
         let Some(id) = id.filter(|id| self.records.contains_key(id)) else {
             return;
         };
-        self.records.get_mut(&id).unwrap().metadata.kind = FlowKind::Upgrade;
+        let record = self.records.get_mut(&id).unwrap();
+        record.metadata.kind = FlowKind::Upgrade;
+        record.websocket = websocket;
         self.bodies.retain(|(owner, _)| *owner != id);
         for side in [Side::Request, Side::Response] {
-            self.skip_body(id, side, "Upgraded connection; frames not captured");
+            let reason = if websocket {
+                "Upgraded connection; see Messages for WebSocket traffic"
+            } else {
+                "Upgraded connection"
+            };
+            self.skip_body(id, side, reason);
         }
+    }
+
+    pub fn reserve_message_payload(&mut self, id: u64, bytes: usize) -> bool {
+        let available = !self.counters.paused
+            && self.records.get(&id).is_some_and(|record| {
+                !record.messages_cleared
+                    && record.messages.len() < crate::websocket::FRAME_LIMIT
+                    && record.message_payload + record.message_work + bytes
+                        <= crate::websocket::PAYLOAD_LIMIT
+            });
+        if !available || !self.make_room(bytes) {
+            return false;
+        }
+        self.records.get_mut(&id).unwrap().message_work += bytes;
+        self.counters.memory += bytes;
+        true
+    }
+
+    pub fn release_message_payload(&mut self, id: u64, bytes: usize) {
+        self.counters.memory -= bytes;
+        if let Some(record) = self.records.get_mut(&id) {
+            record.message_work -= bytes;
+        }
+    }
+
+    pub fn message(&mut self, id: u64, message: crate::Message) {
+        self.release_message_payload(id, message.payload.len());
+        if self.counters.paused {
+            return;
+        }
+        let Some(record) = self.records.get_mut(&id) else {
+            return;
+        };
+        record.message_count += 1;
+        let needed = message.payload.len() + MESSAGE_OVERHEAD;
+        if !record.messages_cleared
+            && record.messages.len() < crate::websocket::FRAME_LIMIT
+            && self.make_room(needed)
+        {
+            let record = self.records.get_mut(&id).unwrap();
+            record.message_payload += message.payload.len();
+            record.messages.push(Arc::new(message));
+            self.counters.memory += needed;
+        }
+        self.changed(id);
+    }
+
+    pub fn request_progress(&mut self, id: Option<u64>, complete: bool, trailers: bool) {
+        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
+            record.request_complete |= complete;
+            record.request_has_trailers |= trailers;
+        }
+    }
+
+    pub fn repeated(&mut self, id: Option<u64>) {
+        if let Some(record) = id.and_then(|id| self.records.get_mut(&id)) {
+            record.metadata.repeated = true;
+        }
+    }
+
+    fn replayable(record: &Record) -> bool {
+        crate::replay::supported(record.metadata.kind)
+            && record.metadata.state != FlowState::Active
+            && record.request_complete
+            && !record.request_has_trailers
+            && !record.request_headers_truncated
+            && matches!(record.bodies[0], Body::Captured(_))
+    }
+
+    pub fn replay_draft(&self, id: u64, reveal: bool) -> Option<crate::ReplayDraft> {
+        let flow = self.flow(id, reveal)?;
+        flow.replayable
+            .then(|| crate::ReplayDraft::from_flow(flow, reveal))
+    }
+
+    pub fn replay_request(
+        &self,
+        id: u64,
+        edits: crate::ReplayEdits,
+    ) -> Result<http::Request<bytes::Bytes>, &'static str> {
+        use crate::ReplayValue;
+        let record = self
+            .records
+            .get(&id)
+            .ok_or("The original flow is no longer available")?;
+        if !Self::replayable(record) {
+            return Err("Replay requires a complete captured HTTP request");
+        }
+
+        let original_url = record.private_url.as_ref().unwrap_or(&record.request.url);
+        let url = edits.url.map_or_else(
+            || original_url.clone(),
+            |url| {
+                if edits.preserve_masked_query {
+                    crate::replay::restore_query(original_url, url)
+                } else {
+                    url
+                }
+            },
+        );
+        let mut request = http::Request::builder()
+            .method(edits.method.as_deref().unwrap_or(&record.request.method))
+            .uri(url)
+            .body(match edits.body {
+                Some(body) => bytes::Bytes::from(body),
+                None => match &record.bodies[0] {
+                    Body::Captured(body) => bytes::Bytes::copy_from_slice(body),
+                    _ => unreachable!("replayable checked above"),
+                },
+            })
+            .map_err(|_| "Enter a valid HTTP method and absolute URL")?;
+        let original = |index: usize| {
+            if let Ok(position) = record
+                .opaque_request_headers
+                .binary_search_by_key(&index, |(index, _)| *index)
+            {
+                return Ok(record.opaque_request_headers[position].1.clone());
+            }
+            let headers = &record.private_headers[0];
+            let value = headers
+                .binary_search_by_key(&index, |(index, _)| *index)
+                .ok()
+                .map(|position| &headers[position].1)
+                .or_else(|| record.request.headers.get(index).map(|(_, value)| value))
+                .ok_or("An original header is no longer available")?;
+            http::HeaderValue::from_str(value).map_err(|_| "Invalid captured header value")
+        };
+        let headers = edits.headers.unwrap_or_else(|| {
+            record
+                .request
+                .headers
+                .iter()
+                .enumerate()
+                .map(|(index, (name, _))| crate::ReplayHeader {
+                    name: name.clone(),
+                    value: ReplayValue::Original(index),
+                })
+                .collect()
+        });
+        for header in headers {
+            let name =
+                http::HeaderName::try_from(header.name).map_err(|_| "Enter a valid header name")?;
+            if name == http::header::PROXY_AUTHORIZATION {
+                continue;
+            }
+            let value = match header.value {
+                ReplayValue::Original(index) => original(index)?,
+                ReplayValue::Edited(value) => {
+                    http::HeaderValue::from_str(&value).map_err(|_| "Enter a valid header value")?
+                }
+            };
+            request.headers_mut().append(name, value);
+        }
+        // Hyper determines the framing from the retained or edited body.
+        request.headers_mut().remove(http::header::CONTENT_LENGTH);
+        Ok(request)
     }
 
     pub fn flow(&self, id: u64, reveal: bool) -> Option<Flow> {
@@ -566,6 +782,10 @@ impl Store {
             request_body: record.bodies[0].clone(),
             response_body: record.bodies[1].clone(),
             headers_truncated: record.headers_truncated,
+            replayable: Self::replayable(record),
+            messages: record.messages.clone(),
+            message_count: record.message_count,
+            websocket: record.websocket,
         })
     }
 }

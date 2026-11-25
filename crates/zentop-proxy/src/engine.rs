@@ -56,6 +56,11 @@ enum Command {
     Pause(bool),
     Clear,
     AllowLocal(bool),
+    Replay(
+        u64,
+        crate::ReplayEdits,
+        oneshot::Sender<Result<u64, String>>,
+    ),
 }
 
 /// Owns the dedicated runtime thread. Dropping this handle closes the session.
@@ -157,6 +162,32 @@ impl Session {
 
     pub fn allow_local_destinations(&self, allow: bool) -> bool {
         self.command.try_send(Command::AllowLocal(allow)).is_ok()
+    }
+
+    pub fn har_export(&self, ids: Vec<u64>) -> crate::HarExport {
+        crate::HarExport {
+            store: Arc::downgrade(&self.store),
+            ids,
+        }
+    }
+
+    pub fn replay_draft(&self, id: u64, reveal: bool) -> Option<crate::ReplayDraft> {
+        self.store.lock().unwrap().replay_draft(id, reveal)
+    }
+
+    pub fn replay(
+        &self,
+        id: u64,
+        edits: crate::ReplayEdits,
+    ) -> Result<oneshot::Receiver<Result<u64, String>>, &'static str> {
+        if edits.size() > 1024 * 1024 + 80 * 1024 {
+            return Err("Edited request exceeds the capture limits");
+        }
+        let (reply, result) = oneshot::channel();
+        self.command
+            .try_send(Command::Replay(id, edits, reply))
+            .map_err(|_| "Proxy command queue is busy")?;
+        Ok(result)
     }
 
     pub fn counters(&self) -> Counters {
@@ -306,6 +337,7 @@ impl Engine {
             self.store.clone(),
         ));
         let slots = Arc::new(Semaphore::new(CONNECTIONS));
+        let replay_slots = Arc::new(Semaphore::new(4));
         let mut clients = JoinSet::new();
         let mut next_id = 0;
         loop {
@@ -316,6 +348,25 @@ impl Engine {
                     Command::Pause(paused) => self.store.lock().unwrap().pause(paused),
                     Command::Clear => self.store.lock().unwrap().clear(),
                     Command::AllowLocal(allow) => self.store.lock().unwrap().counters.allow_local_destinations = allow,
+                    Command::Replay(id, edits, reply) => {
+                        let Ok(replay_slot) = replay_slots.clone().try_acquire_owned() else {
+                            let _ = reply.send(Err("Too many requests are being replayed".into()));
+                            continue;
+                        };
+                        let Ok(slot) = slots.clone().try_acquire_owned() else {
+                            let _ = reply.send(Err("Proxy connection limit reached".into()));
+                            continue;
+                        };
+                        let connection_id = next_id;
+                        next_id += 1;
+                        let engine = self.clone();
+                        clients.spawn(async move {
+                            let (_slot, _replay_slot) = (slot, replay_slot);
+                            let result = time::timeout(IDLE_TIMEOUT, engine.repeat(id, edits, connection_id)).await
+                                .unwrap_or_else(|_| Err("Repeated request timed out".into()));
+                            let _ = reply.send(result);
+                        });
+                    },
                 },
                 Some(_) = clients.join_next(), if !clients.is_empty() => {}
                 accepted = listener.accept() => {
@@ -434,25 +485,56 @@ impl Engine {
         if decrypt {
             return Ok(self.decrypt_tunnel(request, target, connection, capture, attribution_wait));
         }
-        Ok(self.route(request, target, connection, capture, None).await)
+        Ok(self
+            .route(
+                request.map(BodyExt::boxed_unsync),
+                target,
+                Some(connection),
+                capture,
+                None,
+            )
+            .await)
     }
 
     fn capture(
         &self,
-        request: &Request<Incoming>,
+        request: &Request<impl HttpBody>,
         target: &Target,
         connection: &Connection,
         kind: FlowKind,
     ) -> Arc<Capture> {
         let activity = ActiveRequest::begin(&connection.activity);
-        let started = Instant::now();
-        let id = self.store.lock().unwrap().start(
+        self.begin_capture(
+            request,
+            target,
             connection.id,
             connection.owner.borrow().clone(),
             kind,
+            Some(activity),
+        )
+    }
+
+    fn begin_capture(
+        &self,
+        request: &Request<impl HttpBody>,
+        target: &Target,
+        connection_id: u64,
+        owner: Attribution,
+        kind: FlowKind,
+        activity: Option<ActiveRequest>,
+    ) -> Arc<Capture> {
+        let mut store = self.store.lock().unwrap();
+        let started = Instant::now();
+        let id = store.start(
+            connection_id,
+            owner,
+            kind,
             RequestHead {
                 method: request.method().to_string(),
-                url: if kind == FlowKind::DecryptedHttps && request.method() != Method::CONNECT {
+                url: if kind == FlowKind::DecryptedHttps
+                    && request.method() != Method::CONNECT
+                    && request.uri().scheme().is_none()
+                {
                     format!(
                         "https://{}{}",
                         // URLs show the default HTTPS port the way browsers do: not at all.
@@ -476,12 +558,75 @@ impl Engine {
             },
             request.headers(),
         );
+        store.request_progress(id, request.body().is_end_stream(), false);
+        if activity.is_none() {
+            store.repeated(id);
+        }
         Arc::new(Capture {
             id,
             started,
             store: self.store.clone(),
             _activity: activity,
         })
+    }
+
+    async fn repeat(
+        &self,
+        id: u64,
+        edits: crate::ReplayEdits,
+        connection_id: u64,
+    ) -> Result<u64, String> {
+        let request = self.store.lock().unwrap().replay_request(id, edits)?;
+        let https = request.uri().scheme_str() == Some("https");
+        if request.method() == Method::CONNECT || has_upgrade(request.headers()) {
+            return Err("Replay supports HTTP requests without CONNECT or upgrades".into());
+        }
+        let target = Target::parse(&request, https)?;
+        let tls = if https {
+            let decryption = self
+                .decryption
+                .as_ref()
+                .filter(|tls| tls.selected(&target.host))
+                .ok_or("HTTPS replay requires a host currently on the decrypt list")?;
+            Some(decryption.upstream.clone())
+        } else {
+            None
+        };
+        let request = request.map(|body| {
+            Full::new(body)
+                .map_err(|never| match never {})
+                .boxed_unsync()
+        });
+        let capture = self.begin_capture(
+            &request,
+            &target,
+            connection_id,
+            Attribution::Known {
+                unique_id: 0,
+                pid: std::process::id(),
+                start_time: 0,
+                name: "Zentop".into(),
+            },
+            if https {
+                FlowKind::DecryptedHttps
+            } else {
+                FlowKind::Http
+            },
+            None,
+        );
+        let id = capture
+            .id
+            .ok_or("Resume capture before replaying a request")?;
+        let mut response = self.route(request, target, None, capture, tls).await;
+        while let Some(frame) = response.body_mut().frame().await {
+            frame.map_err(|error| error.to_string())?;
+        }
+        if let Some(flow) = self.store.lock().unwrap().flow(id, false) {
+            if let Some(reason) = flow.metadata.state.error_reason() {
+                return Err(reason.into());
+            }
+        }
+        Ok(id)
     }
 
     fn decrypt_tunnel(
@@ -562,41 +707,42 @@ impl Engine {
             // Successful handshakes have per-request rows; retain CONNECT rows for failures.
             self.store.lock().unwrap().discard_active(capture.id);
             drop(capture);
-            let mut server = hyper_util::server::conn::auto::Builder::new(TokioExecutor::new());
-            server
-                .http1()
-                .timer(TokioTimer::new())
-                .max_buf_size(128 * 1024)
-                .header_read_timeout(None);
-            server
-                .http2()
-                .timer(TokioTimer::new())
-                .enable_connect_protocol()
-                .max_header_list_size(128 * 1024)
-                .max_concurrent_streams(32);
-            let server = if client.get_ref().1.alpn_protocol() == Some(b"h2") {
-                server.http2_only()
-            } else {
-                server.http1_only()
-            };
+            let h2 = client.get_ref().1.alpn_protocol() == Some(b"h2");
             let deadlines = connection.activity.subscribe();
             let target = Arc::new(target);
             let attribution_wait = Mutex::new(attribution_wait);
-            let http = server.serve_connection(
-                TokioIo::new(client),
-                service_fn(move |request| {
-                    let attribution_wait = attribution_wait.lock().unwrap().take();
-                    self.clone().handle_inner(
-                        request,
-                        target.clone(),
-                        connection.clone(),
-                        attribution_wait,
-                    )
-                }),
-            );
-            tokio::select! {
-                () = expire_client(deadlines) => {},
-                _ = http => {},
+            let service = service_fn(move |request| {
+                let attribution_wait = attribution_wait.lock().unwrap().take();
+                self.clone().handle_inner(
+                    request,
+                    target.clone(),
+                    connection.clone(),
+                    attribution_wait,
+                )
+            });
+            let client = TokioIo::new(client);
+            if h2 {
+                let http = hyper::server::conn::http2::Builder::new(TokioExecutor::new())
+                    .timer(TokioTimer::new())
+                    .enable_connect_protocol()
+                    .max_header_list_size(128 * 1024)
+                    .max_concurrent_streams(32)
+                    .serve_connection(client, service);
+                tokio::select! {
+                    () = expire_client(deadlines) => {},
+                    _ = http => {},
+                }
+            } else {
+                let http = hyper::server::conn::http1::Builder::new()
+                    .timer(TokioTimer::new())
+                    .max_buf_size(128 * 1024)
+                    .header_read_timeout(None)
+                    .serve_connection(client, service)
+                    .with_upgrades();
+                tokio::select! {
+                    () = expire_client(deadlines) => {},
+                    _ = http => {},
+                }
             }
         });
         reply(StatusCode::OK, "")
@@ -628,9 +774,11 @@ impl Engine {
                 StatusCode::MISDIRECTED_REQUEST,
                 "Request authority does not match CONNECT",
             ))
-        } else if request.headers().contains_key(header::UPGRADE) || extended_connect {
-            Some((StatusCode::NOT_IMPLEMENTED,
-                "WebSockets on decrypted hosts aren't supported yet; remove the host from the decrypt list"))
+        } else if extended_connect {
+            Some((
+                StatusCode::NOT_IMPLEMENTED,
+                "HTTP/2 extended CONNECT is not supported",
+            ))
         } else if self
             .decryption
             .as_ref()
@@ -650,15 +798,21 @@ impl Engine {
         }
         let tls = self.decryption.as_ref().map(|tls| tls.upstream.clone());
         Ok(self
-            .route(request, target.as_ref().clone(), connection, capture, tls)
+            .route(
+                request.map(BodyExt::boxed_unsync),
+                target.as_ref().clone(),
+                Some(connection),
+                capture,
+                tls,
+            )
             .await)
     }
 
     async fn route(
         &self,
-        request: Request<Incoming>,
+        request: Request<MessageBody>,
         target: Target,
-        connection: Arc<Connection>,
+        connection: Option<Arc<Connection>>,
         capture: Arc<Capture>,
         tls: Option<Arc<rustls::ClientConfig>>,
     ) -> Response<MessageBody> {
@@ -669,7 +823,10 @@ impl Engine {
                     .lock()
                     .unwrap()
                     .connected(capture.id, dial_started.elapsed());
-                if let Some(tls) = tls {
+                if let Some(mut tls) = tls {
+                    if request.version() == Version::HTTP_11 && has_upgrade(request.headers()) {
+                        Arc::make_mut(&mut tls).alpn_protocols = vec![b"http/1.1".to_vec()];
+                    }
                     let tls_started = Instant::now();
                     match connect_tls(tls, &target.host, upstream).await {
                         Ok(stream) => {
@@ -853,14 +1010,19 @@ struct Target {
 
 impl Target {
     fn from_request<B>(request: &Request<B>) -> Result<Self, &'static str> {
+        Self::parse(request, false)
+    }
+
+    fn parse<B>(request: &Request<B>, https: bool) -> Result<Self, &'static str> {
         let uri = request.uri();
         let tunnel = request.method() == Method::CONNECT;
         if tunnel {
             if uri.scheme().is_some() || uri.path_and_query().is_some() {
                 return Err("CONNECT requires a host and port");
             }
-        } else if uri.scheme_str() != Some("http")
-            && !(uri.scheme_str() == Some("ws")
+        } else if uri.scheme_str() != Some(if https { "https" } else { "http" })
+            && !(!https
+                && uri.scheme_str() == Some("ws")
                 && request.version() == Version::HTTP_11
                 && has_upgrade(request.headers()))
         {
@@ -879,7 +1041,7 @@ impl Target {
         {
             return Err("Request target is too long");
         }
-        let (host, port) = canonical(authority, 80)?;
+        let (host, port) = canonical(authority, if https { 443 } else { 80 })?;
         let authority = if host.contains(':') {
             format!("[{host}]:{port}")
         } else {
@@ -1018,7 +1180,7 @@ struct Capture {
     id: Option<u64>,
     started: Instant,
     store: SharedStore,
-    _activity: ActiveRequest,
+    _activity: Option<ActiveRequest>,
 }
 
 impl Capture {
@@ -1053,7 +1215,7 @@ impl Drop for UpstreamDriver {
 }
 
 struct StreamingBody {
-    incoming: Incoming,
+    incoming: MessageBody,
     side: Side,
     capture: Arc<Capture>,
     _driver: Option<UpstreamDriver>,
@@ -1076,6 +1238,13 @@ impl HttpBody for StreamingBody {
                         .unwrap()
                         .body(self.capture.id, self.side, bytes);
                 }
+                if self.side == Side::Request {
+                    self.capture.store.lock().unwrap().request_progress(
+                        self.capture.id,
+                        self.incoming.is_end_stream(),
+                        frame.is_trailers(),
+                    );
+                }
                 if self.side == Side::Response && self.incoming.is_end_stream() {
                     self.capture.finish(FlowState::Complete);
                 }
@@ -1085,6 +1254,13 @@ impl HttpBody for StreamingBody {
                 .finish(FlowState::Failed("HTTP body transfer failed")),
             Poll::Ready(None) if self.side == Side::Response => {
                 self.capture.finish(FlowState::Complete)
+            }
+            Poll::Ready(None) => {
+                self.capture
+                    .store
+                    .lock()
+                    .unwrap()
+                    .request_progress(self.capture.id, true, false)
             }
             _ => {}
         }
@@ -1122,11 +1298,11 @@ async fn connect_tls(
 }
 
 async fn forward_or_fail(
-    request: Request<Incoming>,
+    request: Request<MessageBody>,
     target: Target,
     upstream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     tls_h2: Option<bool>,
-    connection: Arc<Connection>,
+    connection: Option<Arc<Connection>>,
     capture: Arc<Capture>,
 ) -> Response<MessageBody> {
     match forward(
@@ -1149,15 +1325,18 @@ async fn forward_or_fail(
 }
 
 async fn forward(
-    mut request: Request<Incoming>,
+    mut request: Request<MessageBody>,
     target: Target,
     upstream: impl AsyncRead + AsyncWrite + Unpin + Send + 'static,
     tls_h2: Option<bool>,
-    connection: Arc<Connection>,
+    connection: Option<Arc<Connection>>,
     capture: Arc<Capture>,
 ) -> Result<Response<MessageBody>, Box<dyn std::error::Error + Send + Sync>> {
     let version = request.version();
-    let upgrade = tls_h2.is_none() && version == Version::HTTP_11 && has_upgrade(request.headers());
+    let upgrade = connection.is_some()
+        && tls_h2 != Some(true)
+        && version == Version::HTTP_11
+        && has_upgrade(request.headers());
     let client_upgrade = upgrade.then(|| hyper::upgrade::on(&mut request));
     let protocols = if upgrade {
         header_tokens(request.headers(), header::UPGRADE)
@@ -1188,6 +1367,15 @@ async fn forward(
             _driver: None,
         },
     );
+    let offers_websocket = protocols
+        .iter()
+        .any(|protocol| protocol.eq_ignore_ascii_case("websocket"));
+    let mut extensions = HeaderMap::new();
+    if offers_websocket {
+        for value in request.headers().get_all("sec-websocket-extensions") {
+            extensions.append("sec-websocket-extensions", value.clone());
+        }
+    }
     let (mut response, driver) = if tls_h2 == Some(true) {
         let (mut sender, upstream) =
             hyper::client::conn::http2::handshake(TokioExecutor::new(), TokioIo::new(upstream))
@@ -1203,6 +1391,9 @@ async fn forward(
     let upgraded = response.status() == StatusCode::SWITCHING_PROTOCOLS;
     if upgraded
         && (!has_upgrade(response.headers())
+            || header_tokens(response.headers(), header::UPGRADE)
+                .next()
+                .is_none()
             || !header_tokens(response.headers(), header::UPGRADE).all(|selected| {
                 protocols
                     .iter()
@@ -1211,21 +1402,39 @@ async fn forward(
     {
         return Err(io::Error::other("Origin selected an unsolicited upgrade").into());
     }
-    capture.store.lock().unwrap().response(
-        capture.id,
-        response.status().as_u16(),
-        response.headers(),
-        capture.started.elapsed(),
-    );
+    {
+        let mut store = capture.store.lock().unwrap();
+        store.response(
+            capture.id,
+            response.status().as_u16(),
+            response.headers(),
+            capture.started.elapsed(),
+        );
+        store.response_version(capture.id, response.version());
+    }
     if let Some(client) = client_upgrade.filter(|_| upgraded) {
+        let compression = (offers_websocket
+            && header_tokens(response.headers(), header::UPGRADE)
+                .any(|value| value.eq_ignore_ascii_case("websocket")))
+        .then(|| crate::websocket::Compression::negotiated(&extensions, response.headers()));
         let server = hyper::upgrade::on(&mut response);
-        capture.store.lock().unwrap().upgraded(capture.id);
+        capture
+            .store
+            .lock()
+            .unwrap()
+            .upgraded(capture.id, compression.is_some());
         tokio::spawn(async move {
             let _connection = connection;
             let _driver = driver;
             match tokio::try_join!(client, server) {
                 Ok((client, server)) => {
-                    relay_pair(TokioIo::new(client), TokioIo::new(server), &capture).await
+                    relay_pair(
+                        TokioIo::new(client),
+                        TokioIo::new(server),
+                        &capture,
+                        compression,
+                    )
+                    .await
                 }
                 Err(_) => capture.finish(FlowState::Failed("Could not establish HTTP upgrade")),
             }
@@ -1246,7 +1455,7 @@ async fn forward(
     Ok(Response::from_parts(
         head,
         StreamingBody {
-            incoming,
+            incoming: incoming.boxed_unsync(),
             side: Side::Response,
             capture,
             _driver: Some(driver),
@@ -1256,9 +1465,9 @@ async fn forward(
 }
 
 fn tunnel(
-    mut request: Request<Incoming>,
+    mut request: Request<MessageBody>,
     upstream: TcpStream,
-    connection: Arc<Connection>,
+    connection: Option<Arc<Connection>>,
     capture: Arc<Capture>,
 ) -> Response<MessageBody> {
     let upgraded = hyper::upgrade::on(&mut request);
@@ -1276,7 +1485,7 @@ fn tunnel(
             ));
             return;
         };
-        relay_pair(TokioIo::new(client), upstream, &capture).await;
+        relay_pair(TokioIo::new(client), upstream, &capture, None).await;
     });
     reply(StatusCode::OK, "")
 }
@@ -1285,12 +1494,33 @@ async fn relay_pair(
     client: impl AsyncRead + AsyncWrite + Unpin,
     server: impl AsyncRead + AsyncWrite + Unpin,
     capture: &Capture,
+    compression: Option<crate::websocket::Compression>,
 ) {
+    let inspectors = |direction| {
+        Some(crate::websocket::Inspector::new(
+            capture.store.clone(),
+            capture.id?,
+            direction,
+            compression?,
+        ))
+    };
     let (client_read, client_write) = tokio::io::split(client);
     let (server_read, server_write) = tokio::io::split(server);
     let result = tokio::try_join!(
-        relay(client_read, server_write, capture, Side::Request),
-        relay(server_read, client_write, capture, Side::Response),
+        relay(
+            client_read,
+            server_write,
+            capture,
+            Side::Request,
+            inspectors(crate::Direction::ClientToServer)
+        ),
+        relay(
+            server_read,
+            client_write,
+            capture,
+            Side::Response,
+            inspectors(crate::Direction::ServerToClient)
+        ),
     );
     capture.finish(if result.is_ok() {
         FlowState::Complete
@@ -1304,6 +1534,7 @@ async fn relay(
     mut target: impl AsyncWrite + Unpin,
     capture: &Capture,
     side: Side,
+    mut inspector: Option<crate::websocket::Inspector>,
 ) -> io::Result<()> {
     let mut buffer = [0u8; 8192];
     loop {
@@ -1316,6 +1547,9 @@ async fn relay(
             let written = target.write(&buffer[offset..read]).await?;
             if written == 0 {
                 return Err(io::ErrorKind::WriteZero.into());
+            }
+            if let Some(inspector) = &mut inspector {
+                inspector.feed(&buffer[offset..offset + written]);
             }
             offset += written;
             capture

@@ -134,6 +134,7 @@ mod tests {
                 connection: 0,
                 process: Attribution::Unknown("test"),
                 kind: FlowKind::Upgrade,
+                repeated: false,
                 method: "GET".into(),
                 host: "localhost:8000".into(),
                 path: "/socket".into(),

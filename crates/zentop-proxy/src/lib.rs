@@ -2,14 +2,20 @@
 mod attribution;
 mod decryption;
 mod engine;
+mod har;
 pub use decryption::{canonical_host, decrypt_host, skip_reason, CertificateAuthority, Decryption};
 #[cfg(target_os = "macos")]
 pub mod keychain;
 mod presentation;
+mod replay;
 mod store;
+mod websocket;
 
 pub use engine::{Options, Session};
+pub use har::{HarExport, HarOptions};
 pub use presentation::{copy_as_curl, copy_body, preview, BodyPreview, Metadata};
+pub use replay::{ReplayDraft, ReplayEdits, ReplayHeader, ReplayValue};
+pub use websocket::{Direction, Message, Opcode};
 
 use serde::Serialize;
 use std::sync::Arc;
@@ -128,6 +134,7 @@ pub struct RequestHead {
 #[derive(Clone, Debug)]
 pub struct ResponseHead {
     pub status: u16,
+    pub version: String,
     pub headers: Headers,
 }
 
@@ -163,6 +170,10 @@ pub struct Flow {
     pub request_body: Body,
     pub response_body: Body,
     pub headers_truncated: bool,
+    pub replayable: bool,
+    pub messages: Vec<Arc<Message>>,
+    pub message_count: u64,
+    pub websocket: bool,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
