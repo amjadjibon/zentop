@@ -5,6 +5,8 @@ Zentop is a fork of [NeoHtop](https://github.com/Abdenasser/neohtop) 1.3.0, rebu
 ## Unreleased
 
 - Add a macOS Traffic inspector and CLI command for manually routed HTTP requests and blind HTTPS tunnels, with process attribution and memory-only capture.
+- Decrypt listed HTTPS hosts in the macOS Traffic window with HTTP/1.1 and HTTP/2, a Keychain-backed certificate authority, optional user trust and public certificate export.
+- Keep the proxy routing command copyable at narrower widths and show native app icons in the Traffic process column.
 
 - Unify GUI and TUI DiskTree colors with Zentop theme tokens, shared age bands and contrast-aware tile fills.
 - Add a read-only DiskTree explorer to the GUI and TUI, inspired by tobi/disktree: shared background scanning, nested treemaps, category/age colors, filters, hidden/apparent-size controls, depth, marked review and explicit partial-scan reporting.

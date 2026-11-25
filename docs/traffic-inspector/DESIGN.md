@@ -114,9 +114,8 @@ protection for well-known sensitive hosts, not a guarantee. The UI says so.
 ### Upstream TLS
 
 - Zentop verifies servers with `rustls-platform-verifier`, which uses the macOS
-  trust store and its policies, not a bundled root list. It's wired in through
-  `hudsucker`'s `with_http_connector`. Hostname and certificate checks are
-  never relaxed.
+  trust store and its policies. The verifier configures the upstream
+  `tokio-rustls` connector. Hostname and certificate checks are always enabled.
 - An upstream certificate failure fails the request toward the program, and
   the row shows the upstream error.
 - HTTP/2 is enabled explicitly and tested on both sides: program to Zentop, and
@@ -138,19 +137,20 @@ default GUI build on macOS. `zentop-core` and the TUI don't use it.
 | Piece | Implementation |
 | --- | --- |
 | Front end | Zentop's own, on `hyper` 1 + `tokio` |
-| MITM engine (phase 2) | `hudsucker` 0.25 with `http2`, a custom certificate authority and the platform verifier; engine fit is an acceptance criterion (see below) |
+| TLS termination (phase 2) | `tokio-rustls` for both TLS legs, with `hyper` for HTTP/1.1 and HTTP/2 |
 | Certificates | `rcgen` 0.14; one fresh ECDSA P-256 key per host certificate |
 | Root key | `security-framework`: a non-exportable Keychain `SecKey` that signs via rcgen's `SigningKey` trait |
 | Upstream TLS | `rustls` + `rustls-platform-verifier` |
 | Attribution | Socket table via `netstat2`, after fixing its macOS backend (see Attribution) |
 | Runtime | One tokio runtime on a dedicated thread; GUI and CLI talk to it over bounded channels |
 
-**Engine acceptance criterion.** Before phase 2 starts, a spike must show that
-`hudsucker` can take an already-accepted, already-authorized stream from
-Zentop's front end, use Zentop's certificate authority and the platform
-verifier, and report handshake errors. If it can't, Zentop either vendors a
-patched copy or terminates TLS itself with `tokio-rustls` and serves requests
-through `hyper`. The rest of this design doesn't change either way.
+**Engine choice.** Zentop terminates TLS at the authorized CONNECT upgrade
+using `tokio-rustls` and serves the stream with `hyper`. The existing front
+end continues to own attribution, capture, destination policy, errors and
+tunnels. `LazyConfigAcceptor` exposes the ClientHello, so Zentop enforces SNI
+before asking Keychain to sign a leaf. The stock hudsucker CONNECT path would
+require adapting its handoff, handshake error reporting and capture ownership
+to provide the same controls.
 
 **Toolchain.** At the time of review, every named crate declared a minimum
 Rust version at or below the workspace's floor. The workspace floor tracks
@@ -313,8 +313,6 @@ the detail pane, copy buttons and CLI output.
 - **Copy as cURL** leaves masked values out unless you choose "Include secrets".
 - Bodies and custom headers can still hold secrets. The UI warns about this
   next to the copy controls, rather than claiming they're safe.
-- `hudsucker`'s request tracing, which logs full URLs, is filtered out of
-  Zentop's logging.
 - **Copying and CLI output are the only ways captured data leaves memory.**
   The docs say so.
 
@@ -327,7 +325,10 @@ the detail pane, copy buttons and CLI output.
   "Capturing · <address>" with a Stop button. Quitting Zentop stops capture.
 - **What's saved.** The decrypt list and an optional fixed port live in the
   GUI's `settings.json`, in the config directory (`ZENTOP_CONFIG_DIR` if set).
-- **What's never saved:** tokens, flows and the certificate's key.
+- **What's never saved in app settings:** tokens, flows and private keys.
+  A separate recovery record saves the public certificate and Keychain item
+  identifier. The file lets Zentop check trust and finish removal even if one
+  Keychain item is missing.
 
 ### GUI: Traffic window
 
@@ -357,8 +358,8 @@ following the SSH Hosts window pattern.
   `copy_button` helper and the redaction policy.
 - **Process link.** The process name opens its details sheet. The details sheet
   gains "Show traffic", which opens Traffic filtered to that process.
-- **Certificate section (phase 2).** Shows the states table above, with its
-  actions.
+- **Certificate and hosts.** Shows the certificate state and actions,
+  including public PEM export and exact-host list management.
 
 ### CLI
 
@@ -395,7 +396,8 @@ added later.
 
 ## Privacy and security summary
 
-- Off by default. No system settings change in phases 1 and 2.
+- Off by default. The proxy does not change network settings. Certificate
+  trust changes require explicit approval in the user domain.
 - Loopback listener with a per-session token, plus a destination policy, so
   neither other users nor web pages can use the proxy, or reach your local
   network through it.
@@ -488,12 +490,20 @@ Deferred until designed separately. Requirements the review established:
 
 ## Open questions
 
-- **Keychain access across updates.** Does a non-exportable key stay usable
-  across updates of the signed release, and of ad-hoc signed builds? Test
-  before phase 2. If ad-hoc builds always lose access, the UI must explain the
-  replace step clearly.
-- **`hudsucker` fit.** Can it take streams from Zentop's front end (the engine
-  acceptance criterion)? Decide between a vendored patch and a
-  `tokio-rustls` + `hyper` engine after the spike.
+- **Keychain access across updates.** Phase 2 uses the file-based macOS
+  Keychain. `SecKeyCreateRandomKey` needs the extractability flag in the
+  top-level dictionary for this backend. The temporary-keychain test checks
+  that private-key export fails and verifies a leaf using its public root.
+  On this Mac, rebuilding the ad-hoc executable changed its code-directory
+  hash. After the isolated keychain was unlocked, macOS still prompted the
+  rebuilt app for signing access. Denying the prompt left the key unavailable.
+  Authorizing the rebuilt app restored signing and the existing PEM still
+  verified the connection. Continuity for Developer ID-signed updates
+  remains unverified. **Unlock and retry** checks the current key and
+  **Replace** rotates the root if access cannot be restored.
+- **Development isolation.** Development builds accept `ZENTOP_KEYCHAIN`
+  to select an isolated file keychain. User-domain trust changes are disabled
+  in this mode because they would apply beyond the file. Tests use a mock
+  trust runner with real items in a temporary keychain.
 - **`netstat2` fix.** Fix it upstream, vendor it, or call `libproc` directly
   for this one lookup?
